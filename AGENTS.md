@@ -23,6 +23,48 @@ Read these files before changing implementation:
 
 Then inspect the files in the area being changed. Do not infer Twitch behavior from UI labels alone.
 
+## Git workflow
+
+The repository root is the authoritative Git worktree on branch `main`. The Android reference is a
+separate Git repository recorded by the root repository as the `TwitchDropsMinerAndroid` submodule.
+Use Git throughout every task so changes remain attributable and recoverable.
+
+At the start of every task that may change files:
+
+1. Run `git status --short` and inspect the recent root history with `git log -5 --oneline`.
+2. Record the Android submodule status and commit before root work. If normal submodule commands are
+   unavailable, use `git -C TwitchDropsMinerAndroid status --short` and `git -C
+   TwitchDropsMinerAndroid rev-parse HEAD`.
+3. Treat all pre-existing modifications and untracked files as user work. Do not discard, overwrite,
+   stage, or commit them unless the task explicitly includes them.
+
+While working:
+
+- Use `git diff` to review the root changes at meaningful checkpoints and before verification.
+- Keep generated output, `.env`, `/data`, credentials, tokens, keys, sessions, logs, and Twitch
+  response captures untracked. Update `.gitignore` when a new local/generated artifact class appears.
+- Never use `git reset --hard`, force checkout, clean commands, history rewriting, or destructive
+  recovery unless the user explicitly requests it and the exact targets have been verified.
+- Never modify Git configuration, remotes, branches, tags, or submodule pointers unless the task
+  requires it. Never push, fetch, pull, publish, or open a pull request without explicit user
+  authorization.
+- Do not use Git commands in the root that recurse into, update, initialize, absorb, or rewrite the
+  Android submodule during ordinary root work.
+
+At the end of a completed change task:
+
+1. Review `git diff --check`, the complete relevant diff, and the verification results.
+2. Confirm `TwitchDropsMinerAndroid` is still clean and remains at its starting commit unless Android
+   work was explicitly requested.
+3. Stage only files belonging to the task and create one focused local commit with an imperative,
+   descriptive message. If unrelated user changes prevent a safe commit, leave the task changes
+   uncommitted and explain why instead of mixing them.
+4. Run `git status --short` after the commit and report the commit ID plus any remaining changes.
+
+If the user explicitly asks to leave changes uncommitted, to split commits differently, or to avoid a
+commit, follow that request. Do not amend or replace an existing commit unless the user explicitly
+asks for history editing.
+
 ## Repository map
 
 - `build.gradle`, `settings.gradle` — root JVM application build
@@ -141,6 +183,7 @@ Do not claim live Twitch verification unless a real account flow was actually ex
 ## Change discipline
 
 - Preserve unrelated user changes and the nested Android Git history.
+- Keep each completed task in a focused local Git commit unless the user requests otherwise.
 - Prefer small, reviewable files and explicit serializers over reflection or magic routing.
 - Update `PROJECT_STATUS.md` checkboxes and known limitations as work lands.
 - Update `README.md` whenever operator commands, ports, environment variables, or persistence behavior

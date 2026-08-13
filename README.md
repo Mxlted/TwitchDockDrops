@@ -140,6 +140,27 @@ docker compose ps
 
 No command for the root service should invoke a wrapper under `TwitchDropsMinerAndroid/`.
 
+## Development and version control
+
+The repository root uses Git on the `main` branch. `TwitchDropsMinerAndroid/` retains its independent
+history and is tracked by the root repository as a submodule. Clone the complete project with:
+
+```bash
+git clone --recurse-submodules <repository-url>
+```
+
+For an existing clone whose Android reference has not been populated, run:
+
+```bash
+git submodule update --init
+```
+
+Before making changes, inspect `git status --short` and preserve any existing work. Keep root-host
+changes in focused local commits after tests pass, and verify that the Android submodule remains clean
+and at the same commit unless Android work was explicitly intended. Build output, local data,
+credentials, sessions, keys, logs, and `.env` must remain untracked. Pushing, changing remotes, and
+rewriting history are separate actions and should be performed only when explicitly intended.
+
 ## Security boundary
 
 The web UI intentionally has no application-level password because the default Compose port is

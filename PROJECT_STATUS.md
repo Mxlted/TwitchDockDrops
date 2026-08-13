@@ -6,6 +6,8 @@ changes.
 ## Implementation checklist
 
 - [x] Root Gradle JVM application compiles its own platform-neutral miner core
+- [x] Root Git history is initialized; the Android reference is tracked as an independent submodule
+- [x] Future-agent instructions require status/diff checks, focused commits, and submodule isolation
 - [x] JVM settings, encrypted session, log, and network adapters are durable and tested
 - [x] Redacted JSON state API and server-sent event updates are available
 - [x] Login, start/stop, refresh, priority, exclusion, channel, settings, log, and reset controls are wired
@@ -40,6 +42,11 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Verification record — 2026-08-13
+
+- Root Git baseline is on `main`; future change tasks are documented to finish in focused local
+  commits while preserving unrelated work and keeping the Android reference at its recorded gitlink
 
 ## Verification record — 2026-08-12
 
