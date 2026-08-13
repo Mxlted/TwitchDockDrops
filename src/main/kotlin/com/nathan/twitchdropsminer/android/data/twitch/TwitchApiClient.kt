@@ -532,7 +532,7 @@ class TwitchApiClient(
     }
 
     private fun postWatchEvent(
-        @Suppress("UNUSED_PARAMETER") session: StoredTwitchSession,
+        session: StoredTwitchSession,
         spadeUrl: String,
         encodedPayload: String,
     ): Boolean {
@@ -544,7 +544,7 @@ class TwitchApiClient(
         }
         val request = Request.Builder()
             .url(spadeUrl)
-            .headers(watchEventHeaders())
+            .headers(sessionHeaders(session))
             .post(FormBody.Builder().add("data", encodedPayload).build())
             .build()
         val response = try {
@@ -733,14 +733,6 @@ class TwitchApiClient(
     private fun publicWebHeaders(): okhttp3.Headers =
         okhttp3.Headers.Builder()
             .add("Accept", "text/html,application/javascript;q=0.9,*/*;q=0.8")
-            .add("Origin", TwitchClientUrl)
-            .add("Referer", TwitchClientUrl)
-            .add("User-Agent", TwitchUserAgent)
-            .build()
-
-    private fun watchEventHeaders(): okhttp3.Headers =
-        okhttp3.Headers.Builder()
-            .add("Accept", "*/*")
             .add("Origin", TwitchClientUrl)
             .add("Referer", TwitchClientUrl)
             .add("User-Agent", TwitchUserAgent)

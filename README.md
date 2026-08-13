@@ -56,6 +56,8 @@ The unattended scheduler wakes for known campaign/drop starts, active-drop ends,
 channel controls, inventory deadlines, and claim-retry deadlines. Unlinked progress remains supervised
 after its first increase: a sustained confirmed stall renews watch configuration, then tries another
 channel, campaign, or fallback group without treating progress-endpoint failures as no-progress proof.
+Minute-watched events carry the authenticated Twitch attribution headers used by the Android reference
+and are sent only to the allowlisted Twitch Spade endpoint discovered from public watch configuration.
 
 Stop it without deleting the saved session:
 

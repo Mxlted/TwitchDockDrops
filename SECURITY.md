@@ -41,12 +41,13 @@ on `127.0.0.1` by default.
 
 ## Outbound token boundary
 
-OAuth credentials are sent only to fixed, trusted Twitch OAuth and GraphQL hosts. Channel HTML,
-Twitch static configuration, and Spade watch-event requests use endpoint-specific minimal headers and
-do not include the OAuth Authorization header. Upstream-derived configuration URLs are accepted only
-for the expected Twitch hosts (`static.twitchcdn.net` and `spade.twitch.tv`) over HTTPS. Loopback URL
-injection exists only through constructor parameters used by local MockWebServer tests; an arbitrary
-HTTPS URL is not accepted.
+OAuth credentials are sent only to fixed, trusted Twitch OAuth, GraphQL, and Spade hosts. Channel HTML
+and Twitch static configuration requests use endpoint-specific minimal headers without OAuth. Spade
+watch-event requests carry the authenticated Twitch session headers required to attribute progress,
+but a derived event URL is accepted only when it is HTTPS on `spade.twitch.tv`. Static configuration
+is likewise limited to the expected `static.twitchcdn.net` path. Loopback URL injection exists only
+through constructor parameters used by local MockWebServer tests; an arbitrary HTTPS URL is not
+accepted.
 
 ## Browser protections
 

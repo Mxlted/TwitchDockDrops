@@ -22,7 +22,7 @@ changes.
 - [x] Continuous confirmed-progress watchdogs drive unlinked and linked channel/campaign recovery
 - [x] Every route enforces configured trusted Hosts; mutations enforce configured Origins and strict schemas
 - [x] Direct JVM listening defaults to loopback and Compose separates internal listen from host publication
-- [x] OAuth credentials are restricted to trusted Twitch endpoints and omitted from derived watch URLs
+- [x] OAuth credentials are restricted to trusted Twitch endpoints; Spade watch events retain session attribution
 - [x] Watch/configuration rejection is separate from authoritative invalid-token expiry
 - [x] Device authorization handles pending, slow-down, denial, expiry, malformed fields, and bounded bodies
 - [x] Campaign/drop windows are evaluated dynamically and active waits include campaign expiry
@@ -48,6 +48,12 @@ changes.
 
 ## Verification record — 2026-08-13
 
+- Restored Android parity for watch reporting: the root client now posts minute-watched events with
+  authenticated Twitch session headers after pinning the derived destination to HTTPS
+  `spade.twitch.tv`. Public channel/config discovery remains unauthenticated, and regression coverage
+  verifies both sides of that credential boundary.
+- Post-fix packaged smoke on isolated `127.0.0.1:18791`: health, a persisted settings mutation, and
+  state returned HTTP 200; the verification JVM was stopped and its disposable data was removed.
 - Root release audit covered bootstrap/configuration, persistence and encryption, HTTP routing and
   mutation validation, state redaction, OAuth, inventory mapping, selection/failover, watch/progress,
   claims, command scheduling, packaged runtime behavior, and every browser view/state. The Android
@@ -56,7 +62,8 @@ changes.
 - Root Gradle suite: 82 tests passed, 0 failures, 0 errors, 0 skipped across 15 suites. New regression
   coverage exercises terminal device-login denial without retry, safe partial-drop retention, current
   settings in serialized selection state, quoted JSON secret redaction, bounded persisted settings,
-  and valid manual channel selection.
+  valid manual channel selection, and authenticated Spade attribution with anonymous configuration
+  discovery.
 - A root `.gitignore` scope error that hid every nested `data/` package was corrected to ignore only
   the runtime `/data/` directory; all root-owned miner and persistence sources/tests are now visible to
   Git. The Docker build context was separately verified against current Docker ignore semantics and
@@ -72,7 +79,9 @@ changes.
   targets, the narrow campaign filters scrolled within their card, keyboard focus used a visible 3px
   ring, navigation exposed `aria-current`, and filters exposed `aria-pressed`.
 - JavaScript syntax checks passed for `app.js` and `theme-init.js`.
-- Docker validation/build could not run because the Docker CLI is not installed on this host.
+- Docker Compose configuration validation and image rebuild passed. The image builder reran the full
+  Gradle test/install distribution, and an isolated non-root, read-only container with tmpfs-only data
+  returned HTTP 200 for health, a settings mutation, and state before it was removed.
 - Android reference audit: nested Git worktree remained clean at
   `dfd7d8c5316ff896c838301bd3c769c84aef8d15` after all root implementation and verification.
 - The isolated verification JVM was stopped. Live Twitch authorization, campaign discovery, earning

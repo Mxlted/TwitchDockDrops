@@ -35,7 +35,7 @@ class TwitchApiClientSecurityTest {
     }
 
     @Test
-    fun `watch configuration and spade rejection do not classify the token as invalid`() {
+    fun `trusted spade event is authenticated without classifying rejection as an invalid token`() {
         val server = MockWebServer()
         server.start()
         try {
@@ -50,8 +50,13 @@ class TwitchApiClientSecurityTest {
             server.enqueue(html("""{"beacon_url":"${server.url("/spade")}"}"""))
             server.enqueue(MockResponse().setResponseCode(403))
             assertFalse(runBlocking { client.sendWatchMinute(session(), channel().copy(id = 2)) })
-            assertNull(server.takeRequest().getHeader("Authorization"))
-            assertNull(server.takeRequest().getHeader("Authorization"))
+            val configurationRequest = server.takeRequest()
+            val spadeRequest = server.takeRequest()
+            assertNull(configurationRequest.getHeader("Authorization"))
+            assertEquals("OAuth access-token-secret", spadeRequest.getHeader("Authorization"))
+            assertEquals("kd1unb4b3q4t58fwlpcbzcbnm76a8fp", spadeRequest.getHeader("Client-Id"))
+            assertEquals("device-secret", spadeRequest.getHeader("Client-Session-Id"))
+            assertEquals("device-secret", spadeRequest.getHeader("X-Device-Id"))
         } finally {
             server.shutdown()
         }

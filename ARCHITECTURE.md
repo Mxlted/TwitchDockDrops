@@ -159,10 +159,11 @@ identified safe partial results merge without pruning omitted campaigns, missing
 partially returned campaign, or saved priorities. Empty
 GraphQL error arrays are accepted, while partial data with errors is retained with diagnostics.
 
-OAuth Authorization is restricted to fixed Twitch OAuth/GraphQL destinations. Upstream-derived static
-configuration and Spade URLs are accepted only for their expected Twitch-owned HTTPS hosts and use
-minimal headers without OAuth credentials. Same-origin loopback endpoint injection is constructor-only
-for MockWebServer tests.
+OAuth Authorization is restricted to fixed Twitch OAuth, GraphQL, and Spade destinations. Public
+channel HTML and upstream-derived static configuration use minimal unauthenticated headers. Spade
+watch events use the authenticated Twitch session headers required to attribute progress, but only
+after the derived destination is verified as `https://spade.twitch.tv`. Same-origin loopback endpoint
+injection is constructor-only for MockWebServer tests.
 
 ## Web client
 
