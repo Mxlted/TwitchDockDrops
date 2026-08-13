@@ -6,8 +6,8 @@ changes.
 ## Implementation checklist
 
 - [x] Root Gradle JVM application compiles its own platform-neutral miner core
-- [x] Root Git history is initialized; the Android reference is tracked as an independent submodule
-- [x] Future-agent instructions require status/diff checks, focused commits, and submodule isolation
+- [x] Root Git history is initialized; the Android reference remains a separate, untracked repository
+- [x] Future-agent instructions require status/diff checks, focused commits, and Android-tree isolation
 - [x] JVM settings, encrypted session, log, and network adapters are durable and tested
 - [x] Redacted JSON state API and server-sent event updates are available
 - [x] Login, start/stop, refresh, priority, exclusion, channel, settings, log, and reset controls are wired
@@ -49,6 +49,13 @@ changes.
 
 ## Verification record — 2026-08-13
 
+- Prepared the root project for independent GitHub publication: removed Android submodule metadata,
+  ignored optional local Android checkouts and broader local secret/build artifacts, added a root MIT
+  license, and replaced repository-relative Android documentation links with the upstream repository.
+- Publication checks confirmed `.env` and the optional Android checkout are excluded, tracked/history
+  scans contain no real credentials, Compose configuration resolves, and both browser scripts pass
+  syntax validation. A fresh image rebuild could not start because Docker Desktop's Linux engine was
+  stopped; the same-source 87-test and image-build results below remain the latest full verification.
 - Audited the merged direct-Spade fix in
   `rangermix/TwitchDropsMiner#70`, its upstream working implementation in DevilXD commit `4148c71`,
   and current public Twitch developer documentation. Twitch documents entitlement management but not

@@ -113,10 +113,11 @@ The legacy Kotlin package names are intentionally retained to keep behavior and 
 with the Android reference. Android-only DataStore, encrypted preferences, connectivity, service,
 and Compose UI code are replaced by JVM adapters in the root project.
 
-`TwitchDropsMinerAndroid/` is reference material only. `.dockerignore` excludes the entire directory,
-the root Gradle build has no path dependency on it, and Docker copies only root build files and
-`src/`. Parity changes must be applied deliberately to each project; root builds must never sync,
-generate, or write Android sources.
+The Android project is maintained separately and is not part of this repository. `.gitignore` and
+`.dockerignore` defensively exclude an optional local `TwitchDropsMinerAndroid/` checkout, the root
+Gradle build has no path dependency on it, and Docker copies only root build files and `src/`. Parity
+changes must be applied deliberately to each project; root builds must never sync, generate, or write
+Android sources.
 
 ## State and commands
 

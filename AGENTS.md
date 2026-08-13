@@ -2,14 +2,14 @@
 
 ## Mission
 
-This repository contains two delivery surfaces for the same unofficial Twitch Drops miner:
+This repository contains an independent headless JVM host, web UI, and Docker Compose deployment for
+an unofficial Twitch Drops miner. `TwitchDropsMinerAndroid` is maintained in a separate repository as
+the behavioral reference. An optional local checkout at `TwitchDropsMinerAndroid/` is ignored by Git
+and Docker.
 
-1. `TwitchDropsMinerAndroid/` is an untouched Android reference project.
-2. The repository root is an independent headless JVM host, web UI, and Docker Compose deployment.
-
-Preserve behavioral parity deliberately while keeping the two build trees isolated. Do not run an
-Android emulator inside Docker, invoke Android Gradle wrappers from root commands, or modify any file
-under `TwitchDropsMinerAndroid/` unless the user explicitly requests Android work.
+Preserve behavioral parity deliberately while keeping the projects isolated. Do not run an Android
+emulator inside Docker, invoke Android Gradle wrappers from root commands, add the optional Android
+checkout to this repository, or modify it unless the user explicitly requests Android work.
 
 ## Required reading before edits
 
@@ -19,22 +19,21 @@ Read these files before changing implementation:
 - `ARCHITECTURE.md`
 - `PROJECT_STATUS.md`
 - `SECURITY.md` for API, storage, networking, container, or auth work
-- `TwitchDropsMinerAndroid/README.md` for miner behavior
+- `TwitchDropsMinerAndroid/README.md` for miner behavior when the optional local reference is present
 
 Then inspect the files in the area being changed. Do not infer Twitch behavior from UI labels alone.
 
 ## Git workflow
 
-The repository root is the authoritative Git worktree on branch `main`. The Android reference is a
-separate Git repository recorded by the root repository as the `TwitchDropsMinerAndroid` submodule.
+The repository root is the authoritative Git worktree on branch `main`. The optional Android reference
+is a separate, ignored Git repository and must never be added as a submodule or ordinary tracked tree.
 Use Git throughout every task so changes remain attributable and recoverable.
 
 At the start of every task that may change files:
 
 1. Run `git status --short` and inspect the recent root history with `git log -5 --oneline`.
-2. Record the Android submodule status and commit before root work. If normal submodule commands are
-   unavailable, use `git -C TwitchDropsMinerAndroid status --short` and `git -C
-   TwitchDropsMinerAndroid rev-parse HEAD`.
+2. If `TwitchDropsMinerAndroid/` exists locally, record its status and commit before root work with
+   `git -C TwitchDropsMinerAndroid status --short` and `git -C TwitchDropsMinerAndroid rev-parse HEAD`.
 3. Treat all pre-existing modifications and untracked files as user work. Do not discard, overwrite,
    stage, or commit them unless the task explicitly includes them.
 
@@ -48,14 +47,14 @@ While working:
 - Never modify Git configuration, remotes, branches, tags, or submodule pointers unless the task
   requires it. Never push, fetch, pull, publish, or open a pull request without explicit user
   authorization.
-- Do not use Git commands in the root that recurse into, update, initialize, absorb, or rewrite the
-  Android submodule during ordinary root work.
+- Do not use Git commands in the root that recurse into, initialize, add, absorb, or rewrite the
+  optional Android checkout during ordinary root work.
 
 At the end of a completed change task:
 
 1. Review `git diff --check`, the complete relevant diff, and the verification results.
-2. Confirm `TwitchDropsMinerAndroid` is still clean and remains at its starting commit unless Android
-   work was explicitly requested.
+2. If the optional `TwitchDropsMinerAndroid/` checkout exists, confirm it is still clean and remains
+   at its starting commit unless Android work was explicitly requested.
 3. Stage only files belonging to the task and create one focused local commit with an imperative,
    descriptive message. If unrelated user changes prevent a safe commit, leave the task changes
    uncommitted and explain why instead of mixing them.
@@ -72,7 +71,7 @@ asks for history editing.
 - `src/main/kotlin/com/nathan/.../data/` — JVM replacements for Android-only repositories/providers
 - `src/main/resources/web/` — framework-free web UI
 - `src/test/` — root host tests
-- `TwitchDropsMinerAndroid/` — read-only Android reference, excluded from Docker builds
+- `TwitchDropsMinerAndroid/` — optional ignored local Android reference, never published or built
 - `Dockerfile`, `compose.yaml`, `.dockerignore` — container delivery
 - root Markdown files — operator and agent handoff documentation
 

@@ -1,12 +1,13 @@
 # Twitch Dock Drops
 
 Twitch Dock Drops is a Docker Compose-hosted web edition based on the behavior of
-[`TwitchDropsMinerAndroid`](./TwitchDropsMinerAndroid/). The root project owns its Kotlin Twitch
-device-login, campaign selection, channel discovery, watch heartbeat, progress refresh, and
-drop-claim runtime, then exposes it through a responsive local web interface.
+[`TwitchDropsMinerAndroid`](https://github.com/Mxlted/TwitchDropsMinerAndroid). This project owns its
+Kotlin Twitch device-login, campaign selection, channel discovery, watch heartbeat, progress refresh,
+and drop-claim runtime, then exposes it through a responsive local web interface.
 
-The Docker build is fully isolated from `TwitchDropsMinerAndroid/`: the directory is excluded from
-the build context, no Android wrapper is executed, and no Android file is read or modified.
+The Android project is not included in this repository. The Docker build is fully isolated from it:
+an optional local `TwitchDropsMinerAndroid/` checkout is excluded from both Git and the build context,
+no Android wrapper is executed, and no Android file is read or modified.
 
 The web client is deliberately not a clone of the Android screens. Its visual direction is a soft
 "drop greenhouse": dark-first translucent panes, quiet mint/lilac/peach color fields, rounded
@@ -148,26 +149,14 @@ docker compose up --build -d
 docker compose ps
 ```
 
-No command for the root service should invoke a wrapper under `TwitchDropsMinerAndroid/`.
+No command for this service needs or invokes an Android Gradle wrapper.
 
 ## Development and version control
 
-The repository root uses Git on the `main` branch. `TwitchDropsMinerAndroid/` retains its independent
-history and is tracked by the root repository as a submodule. Clone the complete project with:
-
-```bash
-git clone --recurse-submodules <repository-url>
-```
-
-For an existing clone whose Android reference has not been populated, run:
-
-```bash
-git submodule update --init
-```
-
-Before making changes, inspect `git status --short` and preserve any existing work. Keep root-host
-changes in focused local commits after tests pass, and verify that the Android submodule remains clean
-and at the same commit unless Android work was explicitly intended. Build output, local data,
+The repository uses Git on the `main` branch and is self-contained. The Android reference remains a
+separate repository and is neither cloned nor tracked here; an optional local checkout named
+`TwitchDropsMinerAndroid/` is ignored. Before making changes, inspect `git status --short` and preserve
+any existing work. Keep changes in focused local commits after tests pass. Build output, local data,
 credentials, sessions, keys, logs, and `.env` must remain untracked. Pushing, changing remotes, and
 rewriting history are separate actions and should be performed only when explicitly intended.
 
@@ -185,10 +174,8 @@ deployment guidance.
 - [PROJECT_STATUS.md](./PROJECT_STATUS.md) — implementation checklist and known limitations
 - [SECURITY.md](./SECURITY.md) — token storage and safe network exposure
 - [AGENTS.md](./AGENTS.md) — required context and working rules for future coding agents
-- [TwitchDropsMinerAndroid/README.md](./TwitchDropsMinerAndroid/README.md) — upstream Android behavior
+- [TwitchDropsMinerAndroid](https://github.com/Mxlted/TwitchDropsMinerAndroid) — upstream Android behavior
 
 ## License
 
-The Android source is provided under its existing license in
-[`TwitchDropsMinerAndroid/LICENSE`](./TwitchDropsMinerAndroid/LICENSE). New root-host code follows the
-same project licensing context.
+This project is available under the [MIT License](./LICENSE).
