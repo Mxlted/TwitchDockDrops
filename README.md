@@ -1,192 +1,116 @@
-# Twitch Dock Drops
+<div align="center">
+  <img src="src/main/resources/web/favicon.svg" width="96" alt="Twitch Dock Drops icon">
+  <h1>Twitch Dock Drops</h1>
+  <p><strong>Set it once. Let your Drops grow.</strong></p>
+  <p>
+    A self-hosted Twitch Drops farmer with campaign tracking, channel failover, progress supervision,
+    and claiming—all from a calm web dashboard.
+  </p>
+  <p>
+    <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-JVM-8b7cf6?style=flat-square">
+    <img alt="Docker Compose" src="https://img.shields.io/badge/Docker-Compose-78b9e8?style=flat-square">
+    <img alt="Responsive web UI" src="https://img.shields.io/badge/Web_UI-Desktop_%26_Mobile-82c9ab?style=flat-square">
+    <img alt="MIT License" src="https://img.shields.io/badge/License-MIT-f0b891?style=flat-square">
+  </p>
+</div>
 
-Twitch Dock Drops is a Docker Compose-hosted web edition based on the behavior of
-[`TwitchDropsMinerAndroid`](https://github.com/Mxlted/TwitchDropsMinerAndroid). This project owns its
-Kotlin Twitch device-login, campaign selection, channel discovery, watch heartbeat, progress refresh,
-and drop-claim runtime, then exposes it through a responsive local web interface.
+![Twitch Dock Drops overview showing an active campaign and drop progress](docs/twitch-dock-drops-overview.png)
 
-The Android project is not included in this repository. The Docker build is fully isolated from it:
-an optional local `TwitchDropsMinerAndroid/` checkout is excluded from both Git and the build context,
-no Android wrapper is executed, and no Android file is read or modified.
+Twitch Dock Drops quietly farms timed Twitch Drops without playing or downloading the stream. Run it
+in Docker, connect your Twitch account through the official device-activation page, choose the games
+you care about, and leave the miner to handle the rest.
 
-The web client is deliberately not a clone of the Android screens. Its visual direction is a soft
-"drop greenhouse": dark-first translucent panes, quiet mint/lilac/peach color fields, rounded
-controls, and clear status hierarchy without the usual Twitch-purple streaming dashboard treatment.
-The header theme control switches to the light greenhouse palette and remembers that choice in the
-browser; dark mode is the default for new browser profiles. The active-watch card links its current
-drop campaign and channel to Twitch, exposes a **Find another channel** chooser for compatible live
-streams, and keeps clear loading and empty results. Campaigns can be filtered by linked or unlinked
-status.
+> [!IMPORTANT]
+> Twitch Dock Drops is unofficial and is not affiliated with Twitch. Twitch can change its private
+> Drops endpoints at any time.
 
-> This is an unofficial project and is not affiliated with Twitch. Twitch's private endpoints and
-> persisted GraphQL operations can change without notice.
+## Why Twitch Dock Drops?
+
+- **No stream playback** — earns timed progress without downloading video or audio.
+- **Always aware of active Drops** — refreshes campaigns and keeps the inventory current.
+- **Channel hunting and recovery** — finds compatible live channels and moves on when progress stalls.
+- **Game priorities and fallbacks** — farm the games you want first, then let Auto Mode find useful work.
+- **Automatic claiming** — attempts to claim completed Drops and retries temporary failures.
+- **Pick up after restarts** — encrypted login, preferences, priorities, and activity remain available.
+- **A real dashboard** — watch progress, browse campaigns, switch channels, and review activity from
+  one UI.
+- **Desktop and mobile friendly** — use the responsive dark or light greenhouse theme from any
+  trusted LAN device.
+- **Built for Docker** — one hardened, non-root container with a read-only root filesystem and durable
+  data volume.
 
 ## Quick start
 
-Requirements:
-
-- Docker Engine with Docker Compose v2
-- A Twitch account eligible for Drops campaigns
-
-Start the service:
+You need [Docker](https://docs.docker.com/get-docker/) with Docker Compose and a Twitch account that
+can participate in Drops campaigns.
 
 ```bash
+git clone https://github.com/Mxlted/TwitchDockDrops.git
+cd TwitchDockDrops
 cp .env.example .env
 docker compose up --build -d
 ```
 
-Docker Compose loads `.env` automatically. With the supplied example copied into place, open
-`http://<docker-host-lan-ip>:8080` from any device on the same trusted LAN, or open
-[http://127.0.0.1:8080](http://127.0.0.1:8080) on the Docker host. Choose **Connect Twitch**, then
-approve the device code at the Twitch activation page. The app never asks for a Twitch password. A
-successful login loads the Drops inventory automatically; there is no need to issue a separate
-refresh.
+On PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
 
-Repeated **Connect Twitch** actions do not replace a device code that is still being prepared or
-polled. Use **Request a new code** only when you explicitly want to cancel the displayed attempt and
-obtain a replacement.
+Then open:
 
-On later container launches, a saved Twitch session triggers an inventory refresh in the background
-as soon as the local service starts. Twitch or network delays do not block the health endpoint or web
-UI from becoming available.
+- **This computer:** [http://127.0.0.1:8080](http://127.0.0.1:8080)
+- **Another device on your LAN:** `http://<docker-host-lan-ip>:8080`
 
-The default automatic fallback order exhausts linked work before trying unlinked work: linked
-campaigns with claimed-drop progress, linked campaigns with viewing progress, linked campaigns with
-no progress, then those same three groups for unlinked campaigns. The order remains configurable in
-the web UI. Saved custom orders and game priorities are preserved even when a Twitch inventory
-response is partial or temporarily omits a game. While a lower-ranked prioritized game is active, the
-miner keeps checking earlier games in the saved order and promotes when one becomes live.
+The supplied `.env.example` enables trusted-LAN access. Anyone on that LAN who can reach the port can
+control the miner, so use it only on a private network and never port-forward it to the internet. See
+the [Operator Guide](./OPERATIONS.md#network-access) for loopback-only and reverse-proxy setups.
 
-The unattended scheduler wakes for known campaign/drop starts, active-drop ends, settings changes,
-channel controls, inventory deadlines, and claim-retry deadlines. Unlinked progress remains supervised
-after its first increase: a sustained confirmed stall renews watch configuration, then tries another
-channel, campaign, or fallback group without treating progress-endpoint failures as no-progress proof.
-Each heartbeat directly form-POSTs a fresh, uncompressed Base64 `minute-watched` event to the
-allowlisted Twitch Spade-compatible collector discovered from authenticated watch configuration.
-Current configuration is accepted only from Twitch's hashed settings assets, and the current
-`https://beacon.twitch.tv/track` destination remains narrowly allowlisted. The event uses the canonical
-channel login, numeric Twitch user ID, current stream/game IDs, current UTC timestamp, and the complete
-live/player attribution fields; it does not route earning telemetry through a GraphQL mutation.
+## Start farming in three steps
 
-Stop it without deleting the saved session:
+1. Select **Connect Twitch** in the dashboard.
+2. Approve the displayed code on Twitch's device-activation page. The app never asks for your Twitch
+   password.
+3. Choose game priorities—or leave Auto Mode in charge—then start the miner.
 
-```bash
-docker compose down
-```
+Twitch Dock Drops refreshes your campaigns, chooses an eligible live channel, reports watch progress,
+recovers from stalled channels, and claims completed Drops. Your saved session is restored after a
+container restart, so normal day-to-day use is simply opening the dashboard when you want to check in.
 
-Follow service logs:
+## The drop greenhouse
 
-```bash
-docker compose logs -f app
-```
+The interface keeps the important parts close without feeling like a generic server control panel:
 
-Without `.env`, host publication safely defaults to `127.0.0.1:8080`. Copying `.env.example` to
-`.env` opts into LAN access by publishing on `0.0.0.0:8080` and accepting literal RFC 1918,
-link-local, and IPv6 unique-local server addresses. LAN mutation requests must remain same-origin:
-their browser Origin must match the requested server IP and port. Direct JVM execution continues to
-listen on `127.0.0.1` by default; Compose listens on `0.0.0.0` inside the container.
+- **Overview** shows the active campaign, current Drop, progress, channel, and recent activity.
+- **Campaigns** lets you search, prioritize games, inspect rewards, and exclude campaigns.
+- **Activity** explains what the miner selected, refreshed, watched, or claimed.
+- **Settings** controls Auto Mode order, fallback behavior, refresh timing, and diagnostics.
+- **Find another channel** lets you replace the current stream with another compatible live channel.
 
-Every request validates its `Host` header, including health, state, events, and static assets.
-Mutations additionally require a configured browser `Origin`, strict `application/json`, an exact
-field schema, and a body no larger than 64 KiB. Reverse-proxy deployments must explicitly set both
-`TWITCH_DROPS_TRUSTED_HOSTS` and `TWITCH_DROPS_TRUSTED_ORIGINS`; forwarded headers are ignored.
+The miner keeps lifecycle work on the server. Closing the browser does not stop farming.
 
-Operator-visible environment variables:
+## Good to know
 
-- `TWITCH_DROPS_BIND` — Compose host-publication interface; defaults to `127.0.0.1`.
-- `TWITCH_DROPS_PORT` — host port in Compose and listener port for direct JVM execution; a nonnumeric
-  nonblank value is a startup error.
-- `TWITCH_DROPS_LISTEN_HOST` — direct JVM listener; defaults to `127.0.0.1`. Compose sets it to
-  `0.0.0.0` inside the container.
-- `TWITCH_DROPS_ALLOW_LAN` — accepts literal private/link-local Host addresses and matching same-origin
-  HTTP mutations; defaults to `false`, while `.env.example` enables it for LAN use.
-- `TWITCH_DROPS_TRUSTED_HOSTS` — comma-separated accepted Host names or authorities. Bare names accept
-  any port; entries with a port are exact. LAN DNS/mDNS names still require explicit entries. Keep
-  `127.0.0.1` for the Compose health check.
-- `TWITCH_DROPS_TRUSTED_ORIGINS` — comma-separated `http://` or `https://` browser origins. Exact
-  origins are recommended; the explicit `:*` port form is intended for loopback Compose publication.
-- `TWITCH_DROPS_SESSION_KEY` — optional base64-encoded 32-byte AES key supplied through a secret
-  manager.
-- `TWITCH_DROPS_JAVA_OPTS` — complete Compose JVM-profile override.
+- Your Twitch account must be eligible for the campaign, and some rewards require linking the related
+  game account.
+- Avoid manually watching Twitch on the same account while mining; simultaneous viewing can confuse
+  progress reporting.
+- Unlinked-campaign farming is optional and treated as speculative until Twitch confirms real progress.
+- Private Twitch behavior can change, so review the [Project Status](./PROJECT_STATUS.md) when troubleshooting.
+- Local activity logs can contain campaign and channel names; review them before sharing.
 
-## Runtime footprint
+## Documentation
 
-The container defaults to a small-service JVM profile: Serial GC, a 16 MiB initial heap, a 256 MiB
-maximum heap, and bounded metaspace, code cache, and direct memory. This keeps an idle always-on
-instance compact while retaining headroom for campaign inventories and Twitch responses. Set
-`TWITCH_DROPS_JAVA_OPTS` in `.env` only when an unusually large account needs different limits; an
-override replaces the complete default JVM option string.
+- [Operator Guide](./OPERATIONS.md) — deployment, networking, environment variables, data, and commands
+- [Security](./SECURITY.md) — session storage, browser protections, and safe exposure
+- [Architecture](./ARCHITECTURE.md) — runtime, API, scheduling, and Twitch integration details
+- [Project Status](./PROJECT_STATUS.md) — completed work, verification history, and known limitations
+- [Android companion project](https://github.com/Mxlted/TwitchDropsMinerAndroid) — the separate mobile edition
 
-## What is persisted
+## Credits
 
-The `twitch-dock-drops-data` named volume is mounted at `/data` and stores:
-
-- encrypted Twitch session material and its local encryption key;
-- runtime settings, game priorities, and campaign exclusions;
-- the bounded local activity log.
-
-Settings and sessions are written atomically with owner-only permissions where POSIX permissions are
-available. Corrupt settings and locally encrypted sessions are quarantined instead of being silently
-overwritten. A session encrypted under a different configured key is preserved so the correct key can
-be restored. Saved priorities and exclusions are normalized, deduplicated, length-checked, and capped
-before every write so a malformed imported settings file cannot grow the durable state without bound.
-Safe diagnostics appear in the local log without file paths or secret contents.
-
-**Verbose local logs** adds bounded debug entries for campaign/channel selection, watch-heartbeat
-results, progress observations, and claim-retry scheduling. Log messages have normalized line breaks,
-redacted credential labels, per-entry limits, and a bounded physical file size.
-
-`docker compose down` preserves that volume. `docker compose down -v` deletes it and signs the app
-out irreversibly unless the volume was backed up.
-
-## Useful commands
-
-```bash
-# Build and test the JVM host with a local Gradle 9.5.1 installation
-gradle clean test installDist
-
-# Or run the complete container build, which includes tests
-docker compose build
-
-# Validate the resolved Compose configuration
-docker compose config
-
-# Rebuild after source changes
-docker compose up --build -d
-
-# Check container health
-docker compose ps
-```
-
-No command for this service needs or invokes an Android Gradle wrapper.
-
-## Development and version control
-
-The repository uses Git on the `main` branch and is self-contained. The Android reference remains a
-separate repository and is neither cloned nor tracked here; an optional local checkout named
-`TwitchDropsMinerAndroid/` is ignored. Before making changes, inspect `git status --short` and preserve
-any existing work. Keep changes in focused local commits after tests pass. Build output, local data,
-credentials, sessions, keys, logs, and `.env` must remain untracked. Pushing, changing remotes, and
-rewriting history are separate actions and should be performed only when explicitly intended.
-
-## Security boundary
-
-The web UI has no application-level password. The base Compose defaults are loopback-only;
-`.env.example` deliberately opts into access from a trusted private LAN, where every device that can
-reach the port can control the miner and its Twitch session. Do not use LAN mode on guest or untrusted
-networks, expose it through router port forwarding, or publish it on the internet. Broader exposure
-requires an authenticated TLS reverse proxy, explicit trusted hosts/origins, and firewall rules. The
-application never trusts `Forwarded`/`X-Forwarded-*` headers. See [SECURITY.md](./SECURITY.md) for the
-complete threat model and deployment guidance.
-
-## Project documentation
-
-- [ARCHITECTURE.md](./ARCHITECTURE.md) — process boundaries, root-owned core, persistence, and API flow
-- [PROJECT_STATUS.md](./PROJECT_STATUS.md) — implementation checklist and known limitations
-- [SECURITY.md](./SECURITY.md) — token storage and safe network exposure
-- [AGENTS.md](./AGENTS.md) — required context and working rules for future coding agents
-- [TwitchDropsMinerAndroid](https://github.com/Mxlted/TwitchDropsMinerAndroid) — upstream Android behavior
+Twitch Dock Drops is an independent project inspired by the Twitch Drops mining community, including
+[rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) and the original
+[DevilXD/TwitchDropsMiner](https://github.com/DevilXD/TwitchDropsMiner). The separate
+[TwitchDropsMinerAndroid](https://github.com/Mxlted/TwitchDropsMinerAndroid) project serves as a
+behavioral reference for this JVM/web edition.
 
 ## License
 
-This project is available under the [MIT License](./LICENSE).
+Twitch Dock Drops is available under the [MIT License](./LICENSE).

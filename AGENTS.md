@@ -16,6 +16,7 @@ checkout to this repository, or modify it unless the user explicitly requests An
 Read these files before changing implementation:
 
 - `README.md`
+- `OPERATIONS.md` for installation, networking, persistence, or environment-variable work
 - `ARCHITECTURE.md`
 - `PROJECT_STATUS.md`
 - `SECURITY.md` for API, storage, networking, container, or auth work
@@ -73,6 +74,8 @@ asks for history editing.
 - `src/test/` — root host tests
 - `TwitchDropsMinerAndroid/` — optional ignored local Android reference, never published or built
 - `Dockerfile`, `compose.yaml`, `.dockerignore` — container delivery
+- `OPERATIONS.md` — operator setup, networking, persistence, and maintenance guide
+- `docs/` — README showcase assets that must not contain real account data
 - root Markdown files — operator and agent handoff documentation
 
 ## Build-isolation invariant

@@ -38,6 +38,7 @@ changes.
 - [x] OAuth/GraphQL/HTML bodies, SSE clients, command queues, logs, and diagnostics are resource-bounded
 - [x] Mutable web assets revalidate and invalid nonnumeric port configuration fails startup
 - [x] Responsive soft-color glassmorphism UI covers overview, campaigns, activity, and settings
+- [x] General-user README showcases the app and routes operational detail to a dedicated guide
 - [x] Dark mode is the default, with a persisted light-mode toggle and flash-free theme initialization
 - [x] Active drop/channel Twitch links and linked/unlinked campaign filters are available
 - [x] Compatible-channel loading, empty, refresh, and manual-selection states are available
@@ -50,6 +51,12 @@ changes.
 
 ## Verification record — 2026-08-13
 
+- Reworked the root README into a user-facing app showcase with a safe built-in-preview screenshot,
+  concise benefits, feature highlights, a three-step farming flow, and a focused quick start. Moved
+  networking, environment, persistence, runtime, and maintenance detail into `OPERATIONS.md`.
+- GitHub-flavored Markdown rendering resolved the icon, badges, 1265×712 preview image, and local
+  documentation links. Every relative target exists, the new files contain no credential signatures,
+  Compose configuration still validates, and the optional Android reference remains unchanged.
 - Added opt-in private-network request trust and made `.env.example` LAN-ready. LAN mode accepts only
   literal private/link-local destination addresses, requires mutation Origin to match the request Host
   and port, and leaves the no-`.env` Compose default loopback-only.
