@@ -68,6 +68,17 @@ fixed batch and large inventories cannot create one suspended coroutine per cand
 requests are skipped when summary/inventory fields are already sufficient. The shared HTTP client also
 bounds each complete upstream call, including redirects and response-body reads, to two minutes.
 
+Watch earning telemetry uses the direct Spade transport restored by the current TwitchDropsMiner
+implementations. Every heartbeat builds a new uncompressed Base64 JSON array containing one
+`minute-watched` event, then form-POSTs it as `data` to the discovered Spade URL. The payload includes
+the canonical channel login, numeric user ID, broadcast/channel/game IDs, a millisecond UTC timestamp,
+and Twitch's live, logged-in, location, player, mute, hidden, and minutes fields. No
+`sendSpadeEvents` GraphQL mutation or gzip wrapper participates in the watch path.
+The channel page and hashed settings bundle are fetched with the saved Twitch session. Production
+configuration bundles are accepted only from `assets.twitch.tv` or the legacy
+`static.twitchcdn.net` settings path; event delivery is restricted to the current
+`https://beacon.twitch.tv/track` collector or the legacy `https://spade.twitch.tv` host.
+
 Automatic selection exhausts linked work before unlinked work by default: linked claimed-progress,
 linked viewing-progress, linked fresh, unlinked claimed-progress, unlinked viewing-progress, then
 unlinked fresh. User-saved ordering remains authoritative. Both campaign and drop start/end windows
@@ -159,10 +170,11 @@ identified safe partial results merge without pruning omitted campaigns, missing
 partially returned campaign, or saved priorities. Empty
 GraphQL error arrays are accepted, while partial data with errors is retained with diagnostics.
 
-OAuth Authorization is restricted to fixed Twitch OAuth, GraphQL, and Spade destinations. Public
-channel HTML and upstream-derived static configuration use minimal unauthenticated headers. Spade
-watch events use the authenticated Twitch session headers required to attribute progress, but only
-after the derived destination is verified as `https://spade.twitch.tv`. Same-origin loopback endpoint
+OAuth Authorization is restricted to fixed Twitch OAuth and GraphQL destinations plus narrow Twitch
+watch-configuration and collector allowlists. Channel HTML, hashed static configuration, and Spade
+watch events use the authenticated Twitch session headers required to attribute progress. Derived
+configuration is limited to `assets.twitch.tv` or `static.twitchcdn.net`, and event delivery is limited
+to `https://beacon.twitch.tv/track` or HTTPS `spade.twitch.tv`. Same-origin loopback endpoint
 injection is constructor-only for MockWebServer tests.
 
 ## Web client

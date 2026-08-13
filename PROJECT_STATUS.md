@@ -23,6 +23,7 @@ changes.
 - [x] Every route enforces configured trusted Hosts; mutations enforce configured Origins and strict schemas
 - [x] Direct JVM listening defaults to loopback and Compose separates internal listen from host publication
 - [x] OAuth credentials are restricted to trusted Twitch endpoints; Spade watch events retain session attribution
+- [x] Watch earning uses fresh direct-Spade form posts with canonical channel/stream/game/user attribution
 - [x] Watch/configuration rejection is separate from authoritative invalid-token expiry
 - [x] Device authorization handles pending, slow-down, denial, expiry, malformed fields, and bounded bodies
 - [x] Campaign/drop windows are evaluated dynamically and active waits include campaign expiry
@@ -48,10 +49,22 @@ changes.
 
 ## Verification record — 2026-08-13
 
-- Restored Android parity for watch reporting: the root client now posts minute-watched events with
-  authenticated Twitch session headers after pinning the derived destination to HTTPS
-  `spade.twitch.tv`. Public channel/config discovery remains unauthenticated, and regression coverage
-  verifies both sides of that credential boundary.
+- Audited the merged direct-Spade fix in
+  `rangermix/TwitchDropsMiner#70`, its upstream working implementation in DevilXD commit `4148c71`,
+  and current public Twitch developer documentation. Twitch documents entitlement management but not
+  its private viewer earning collector, so the maintained miners remain the compatibility reference.
+- Tightened direct-Spade parity beyond the initial header repair: channel display names and canonical
+  logins are now preserved separately, configuration lookup and event attribution use the login, every
+  heartbeat gets a fresh millisecond UTC timestamp, and wire-level tests cover the full uncompressed
+  Base64 form payload plus success, rejection, missing-stream, and missing-configuration outcomes.
+- Restored current Twitch collector discovery: authenticated channel/config requests now accept the
+  hashed settings bundle from `assets.twitch.tv` as well as legacy `static.twitchcdn.net`, and direct
+  event delivery accepts the current exact `https://beacon.twitch.tv/track` destination as well as the
+  legacy HTTPS `spade.twitch.tv` host. Tests reject non-Twitch hosts, non-settings asset paths,
+  non-collector beacon paths, and plaintext HTTP.
+- Live verification with the saved eligible account confirmed consecutive collector HTTP 204
+  acceptances and Twitch inventory progress increasing from 83/120 to 84/120 minutes. Normal logging
+  was restored afterward and the Compose miner was left actively watching.
 - Post-fix packaged smoke on isolated `127.0.0.1:18791`: health, a persisted settings mutation, and
   state returned HTTP 200; the verification JVM was stopped and its disposable data was removed.
 - Root release audit covered bootstrap/configuration, persistence and encryption, HTTP routing and
@@ -59,11 +72,11 @@ changes.
   claims, command scheduling, packaged runtime behavior, and every browser view/state. The Android
   project was used only as a read-only behavioral reference.
 - Required root `gradle clean test installDist --no-daemon`: passed with Gradle 9.5.1 on JDK 21.
-- Root Gradle suite: 82 tests passed, 0 failures, 0 errors, 0 skipped across 15 suites. New regression
+- Root Gradle suite: 87 tests passed, 0 failures, 0 errors, 0 skipped across 16 suites. New regression
   coverage exercises terminal device-login denial without retry, safe partial-drop retention, current
   settings in serialized selection state, quoted JSON secret redaction, bounded persisted settings,
-  valid manual channel selection, and authenticated Spade attribution with anonymous configuration
-  discovery.
+  valid manual channel selection, authenticated Spade attribution and configuration discovery, and
+  the current Twitch settings/collector host and path allowlists.
 - A root `.gitignore` scope error that hid every nested `data/` package was corrected to ignore only
   the runtime `/data/` directory; all root-owned miner and persistence sources/tests are now visible to
   Git. The Docker build context was separately verified against current Docker ignore semantics and
@@ -81,11 +94,13 @@ changes.
 - JavaScript syntax checks passed for `app.js` and `theme-init.js`.
 - Docker Compose configuration validation and image rebuild passed. The image builder reran the full
   Gradle test/install distribution, and an isolated non-root, read-only container with tmpfs-only data
-  returned HTTP 200 for health, a settings mutation, and state before it was removed.
+  returned HTTP 200 for health, a settings mutation, and state on `127.0.0.1:18793` before it was
+  removed.
 - Android reference audit: nested Git worktree remained clean at
   `dfd7d8c5316ff896c838301bd3c769c84aef8d15` after all root implementation and verification.
-- The isolated verification JVM was stopped. Live Twitch authorization, campaign discovery, earning
-  telemetry, Spade delivery, progress, channel failover, and claims were not exercised.
+- The isolated verification JVM was stopped. Separately, the real Compose service exercised saved
+  authorization, campaign discovery, direct event delivery, and a confirmed progress increment;
+  channel failover and claiming were not forced during this verification.
 
 ## Verification record — 2026-08-12
 

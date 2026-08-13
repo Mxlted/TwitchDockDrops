@@ -41,13 +41,15 @@ on `127.0.0.1` by default.
 
 ## Outbound token boundary
 
-OAuth credentials are sent only to fixed, trusted Twitch OAuth, GraphQL, and Spade hosts. Channel HTML
-and Twitch static configuration requests use endpoint-specific minimal headers without OAuth. Spade
-watch-event requests carry the authenticated Twitch session headers required to attribute progress,
-but a derived event URL is accepted only when it is HTTPS on `spade.twitch.tv`. Static configuration
-is likewise limited to the expected `static.twitchcdn.net` path. Loopback URL injection exists only
+OAuth credentials are sent only to fixed, trusted Twitch OAuth and GraphQL hosts plus narrowly
+allowlisted Twitch watch-configuration and event destinations. Channel HTML, Twitch static
+configuration, and Spade watch-event requests carry the authenticated session headers required to
+attribute progress. A derived event URL is accepted only at `https://beacon.twitch.tv/track` or on the
+legacy HTTPS `spade.twitch.tv` host. Static configuration is limited to hashed `/config/settings.*.js`
+assets on `assets.twitch.tv` or legacy `static.twitchcdn.net`. Loopback URL injection exists only
 through constructor parameters used by local MockWebServer tests; an arbitrary HTTPS URL is not
-accepted.
+accepted. The Spade body also contains the numeric Twitch user ID required by the private event format;
+it is sent only upstream and is never exposed through the browser API.
 
 ## Browser protections
 

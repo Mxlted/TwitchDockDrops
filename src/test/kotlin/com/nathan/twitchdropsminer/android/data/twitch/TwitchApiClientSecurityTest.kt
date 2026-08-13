@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
@@ -15,7 +16,7 @@ import okhttp3.mockwebserver.MockWebServer
 
 class TwitchApiClientSecurityTest {
     @Test
-    fun `untrusted derived watch URL is rejected without receiving authorization`() {
+    fun `untrusted derived watch URL is rejected without receiving a request`() {
         val twitch = MockWebServer()
         val untrusted = MockWebServer()
         twitch.start()
@@ -27,7 +28,7 @@ class TwitchApiClientSecurityTest {
             assertFalse(runBlocking { client.sendWatchMinute(session(), channel()) })
 
             assertEquals(0, untrusted.requestCount)
-            assertNull(twitch.takeRequest().getHeader("Authorization"))
+            assertEquals("OAuth access-token-secret", twitch.takeRequest().getHeader("Authorization"))
         } finally {
             twitch.shutdown()
             untrusted.shutdown()
@@ -45,14 +46,14 @@ class TwitchApiClientSecurityTest {
                 runBlocking { client.sendWatchMinute(session(), channel()) }
             }
             assertEquals(TwitchApiErrorType.Http, configurationError.type)
-            assertNull(server.takeRequest().getHeader("Authorization"))
+            assertEquals("OAuth access-token-secret", server.takeRequest().getHeader("Authorization"))
 
             server.enqueue(html("""{"beacon_url":"${server.url("/spade")}"}"""))
             server.enqueue(MockResponse().setResponseCode(403))
             assertFalse(runBlocking { client.sendWatchMinute(session(), channel().copy(id = 2)) })
             val configurationRequest = server.takeRequest()
             val spadeRequest = server.takeRequest()
-            assertNull(configurationRequest.getHeader("Authorization"))
+            assertEquals("OAuth access-token-secret", configurationRequest.getHeader("Authorization"))
             assertEquals("OAuth access-token-secret", spadeRequest.getHeader("Authorization"))
             assertEquals("kd1unb4b3q4t58fwlpcbzcbnm76a8fp", spadeRequest.getHeader("Client-Id"))
             assertEquals("device-secret", spadeRequest.getHeader("Client-Session-Id"))
@@ -60,6 +61,26 @@ class TwitchApiClientSecurityTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    @Test
+    fun `current Twitch settings and watch collector URLs are narrowly trusted`() {
+        assertTrue(
+            isTrustedTwitchSettingsUrl(
+                "https://assets.twitch.tv/config/settings.01ea5b32d773303bd1d77952a1ff9b91.js",
+            ),
+        )
+        assertTrue(
+            isTrustedTwitchSettingsUrl(
+                "https://static.twitchcdn.net/config/settings.01ea5b32d773303bd1d77952a1ff9b91.js",
+            ),
+        )
+        assertTrue(isTrustedTwitchWatchEventUrl("https://beacon.twitch.tv/track"))
+        assertTrue(isTrustedTwitchWatchEventUrl("https://spade.twitch.tv/some/event/path"))
+        assertFalse(isTrustedTwitchSettingsUrl("https://assets.twitch.tv/other.js"))
+        assertFalse(isTrustedTwitchSettingsUrl("https://example.com/config/settings.01ea5b32d773303bd1d77952a1ff9b91.js"))
+        assertFalse(isTrustedTwitchWatchEventUrl("https://beacon.twitch.tv/not-track"))
+        assertFalse(isTrustedTwitchWatchEventUrl("http://beacon.twitch.tv/track"))
     }
 
     @Test

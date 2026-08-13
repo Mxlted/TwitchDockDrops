@@ -1979,7 +1979,8 @@ class LocalMinerRuntime(
                 appendDebug("Watch heartbeat accepted for ${channel.name}.")
                 WatchAttemptResult.Accepted
             } else {
-                appendDebug("Watch heartbeat rejected for ${channel.name}; configuration may be stale.")
+                val status = twitchApiClient.watchRejectionStatus()?.let { " (HTTP $it)" }.orEmpty()
+                appendDebug("Watch heartbeat rejected$status for ${channel.name}; configuration may be stale.")
                 WatchAttemptResult.Rejected
             }
         } catch (error: CancellationException) {

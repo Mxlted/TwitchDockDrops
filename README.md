@@ -56,8 +56,12 @@ The unattended scheduler wakes for known campaign/drop starts, active-drop ends,
 channel controls, inventory deadlines, and claim-retry deadlines. Unlinked progress remains supervised
 after its first increase: a sustained confirmed stall renews watch configuration, then tries another
 channel, campaign, or fallback group without treating progress-endpoint failures as no-progress proof.
-Minute-watched events carry the authenticated Twitch attribution headers used by the Android reference
-and are sent only to the allowlisted Twitch Spade endpoint discovered from public watch configuration.
+Each heartbeat directly form-POSTs a fresh, uncompressed Base64 `minute-watched` event to the
+allowlisted Twitch Spade-compatible collector discovered from authenticated watch configuration.
+Current configuration is accepted only from Twitch's hashed settings assets, and the current
+`https://beacon.twitch.tv/track` destination remains narrowly allowlisted. The event uses the canonical
+channel login, numeric Twitch user ID, current stream/game IDs, current UTC timestamp, and the complete
+live/player attribution fields; it does not route earning telemetry through a GraphQL mutation.
 
 Stop it without deleting the saved session:
 

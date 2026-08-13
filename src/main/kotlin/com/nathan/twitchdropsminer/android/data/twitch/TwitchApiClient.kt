@@ -8,6 +8,7 @@ import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
 import com.nathan.twitchdropsminer.android.data.model.inEarningOrder
 import java.io.IOException
 import java.time.Instant
+import java.time.format.DateTimeFormatterBuilder
 import java.util.Base64
 import java.util.Collections
 import java.util.LinkedHashMap
@@ -57,6 +58,7 @@ private const val MaxDiagnosticSummaryCharacters = 1_024
 private const val TwitchUserAgent =
     "Dalvik/2.1.0 (Linux; U; Android 16; Pixel Build/AP3A.240905.015) tv.twitch.android.app/25.3.0/2503006"
 private val JsonMediaType = "application/json; charset=utf-8".toMediaType()
+private val SpadeClientTimeFormatter = DateTimeFormatterBuilder().appendInstant(3).toFormatter()
 
 data class DeviceAuthorization(
     val deviceCode: String,
@@ -156,6 +158,7 @@ interface TwitchApi {
     suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress?
     suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult
     fun invalidateWatchConfiguration(channelId: Long) = Unit
+    fun watchRejectionStatus(): Int? = null
     fun newDeviceId(): String
 }
 
@@ -164,6 +167,7 @@ class TwitchApiClient(
     private val gqlEndpoint: String = "https://gql.twitch.tv/gql",
     private val twitchWebBaseUrl: String = TwitchClientUrl,
     private val oauthBaseUrl: String = "https://id.twitch.tv",
+    private val watchEventTime: () -> Instant = Instant::now,
 ) : TwitchApi {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -176,6 +180,8 @@ class TwitchApiClient(
             ): Boolean = size > MaxSpadeUrlCacheEntries
         },
     )
+    @Volatile
+    private var lastWatchRejectionStatus: Int? = null
     private val gqlUrl = requireServiceUrl(gqlEndpoint, setOf("gql.twitch.tv"))
     private val webBaseUrl = requireServiceUrl(twitchWebBaseUrl, setOf("www.twitch.tv", "twitch.tv"))
     private val oauthUrl = requireServiceUrl(oauthBaseUrl, setOf("id.twitch.tv"))
@@ -394,14 +400,14 @@ class TwitchApiClient(
         limit: Int,
     ): List<Channel> {
         val allowedChannels = campaign.allowedChannels
-            .distinctBy { it.name.lowercase() }
+            .distinctBy { it.login.lowercase() }
             .take(limit.coerceAtLeast(1))
         if (allowedChannels.isNotEmpty()) {
             // Campaign ACL membership is the strongest eligibility signal Twitch exposes here.
             // Bound the live checks so large allow-lists do not become slow channel scans.
             val attempts = allowedChannels.mapConcurrent(MaxConcurrentTwitchLookups) { channel ->
                 runCatchingCancellable {
-                    fetchChannel(session, channel.name, campaign.gameName)
+                    fetchChannel(session, channel.login, campaign.gameName)
                 }
             }
             val resolved = attempts.mapNotNull { it.getOrNullUnlessInvalidToken() }
@@ -470,6 +476,7 @@ class TwitchApiClient(
                 online = false,
                 dropsEnabled = false,
                 aclBased = true,
+                login = user["login"].asString(login),
             )
         val settings = user["broadcastSettings"].asObjectOrNull()
         val game = settings?.get("game").asObjectOrNull()
@@ -487,6 +494,7 @@ class TwitchApiClient(
             aclBased = true,
             broadcastId = stream["id"].asStringOrNull(),
             title = settings?.get("title").asStringOrNull(),
+            login = user["login"].asString(login),
         )
     }
 
@@ -494,6 +502,7 @@ class TwitchApiClient(
         session: StoredTwitchSession,
         channel: Channel,
     ): Boolean = withContext(Dispatchers.IO) {
+        lastWatchRejectionStatus = null
         val broadcastId = channel.broadcastId?.takeIf { it.isNotBlank() }
             ?: return@withContext false
         val userId = session.userId.toLongOrNull()
@@ -531,6 +540,8 @@ class TwitchApiClient(
         spadeUrls.remove(channelId)
     }
 
+    override fun watchRejectionStatus(): Int? = lastWatchRejectionStatus
+
     private fun postWatchEvent(
         session: StoredTwitchSession,
         spadeUrl: String,
@@ -557,6 +568,7 @@ class TwitchApiClient(
             )
         }
         response.use {
+            lastWatchRejectionStatus = it.code.takeUnless { code -> code == 204 }
             if (it.code == 401 || it.code == 403) {
                 return false
             }
@@ -730,14 +742,6 @@ class TwitchApiClient(
             .add("X-Device-Id", session.deviceId)
             .build()
 
-    private fun publicWebHeaders(): okhttp3.Headers =
-        okhttp3.Headers.Builder()
-            .add("Accept", "text/html,application/javascript;q=0.9,*/*;q=0.8")
-            .add("Origin", TwitchClientUrl)
-            .add("Referer", TwitchClientUrl)
-            .add("User-Agent", TwitchUserAgent)
-            .build()
-
     private fun encodeWatchPayload(
         userId: Long,
         channel: Channel,
@@ -750,8 +754,8 @@ class TwitchApiClient(
                     putJsonObject("properties") {
                         put("broadcast_id", broadcastId)
                         put("channel_id", channel.id.toString())
-                        put("channel", channel.name)
-                        put("client_time", Instant.now().toString())
+                        put("channel", channel.login)
+                        put("client_time", SpadeClientTimeFormatter.format(watchEventTime()))
                         put("game", channel.game.orEmpty())
                         put("game_id", channel.gameId.orEmpty())
                         put("hidden", false)
@@ -771,25 +775,26 @@ class TwitchApiClient(
     }
 
     private fun resolveSpadeUrl(
-        @Suppress("UNUSED_PARAMETER") session: StoredTwitchSession,
+        session: StoredTwitchSession,
         channel: Channel,
     ): String? {
         val channelUrl = webBaseUrl.newBuilder()
-            .addPathSegment(channel.name)
+            .addPathSegment(channel.login)
             .build()
-        val channelHtml = getWatchConfiguration(channelUrl.toString(), allowSettingsHost = false)
+        val channelHtml = getWatchConfiguration(session, channelUrl.toString(), allowSettingsHost = false)
         SpadeUrlPattern.find(channelHtml)?.groupValues?.get(1)?.let { candidate ->
             return candidate.takeIf(::isAllowedSpadeUrl)
         }
         val settingsUrl = SettingsUrlPattern.find(channelHtml)?.groupValues?.get(1)
             ?.takeIf(::isAllowedSettingsUrl)
             ?: return null
-        val settings = getWatchConfiguration(settingsUrl, allowSettingsHost = true)
+        val settings = getWatchConfiguration(session, settingsUrl, allowSettingsHost = true)
         return SpadeUrlPattern.find(settings)?.groupValues?.get(1)
             ?.takeIf(::isAllowedSpadeUrl)
     }
 
     private fun getWatchConfiguration(
+        session: StoredTwitchSession,
         url: String,
         allowSettingsHost: Boolean,
     ): String {
@@ -802,7 +807,7 @@ class TwitchApiClient(
         }
         val request = Request.Builder()
             .url(url)
-            .headers(publicWebHeaders())
+            .headers(sessionHeaders(session))
             .get()
             .build()
         val response = try {
@@ -846,14 +851,13 @@ class TwitchApiClient(
     private fun isAllowedSettingsUrl(candidate: String): Boolean {
         val url = candidate.toHttpUrlOrNull() ?: return false
         if (localTestOrigin != null && url.sameOrigin(localTestOrigin)) return true
-        return url.isHttps && url.host == "static.twitchcdn.net" &&
-            Regex("^/config/settings\\.[0-9a-f]{32}\\.js$").matches(url.encodedPath)
+        return isTrustedTwitchSettingsUrl(candidate)
     }
 
     private fun isAllowedSpadeUrl(candidate: String): Boolean {
         val url = candidate.toHttpUrlOrNull() ?: return false
         if (localTestOrigin != null && url.sameOrigin(localTestOrigin)) return true
-        return url.isHttps && url.host == "spade.twitch.tv"
+        return isTrustedTwitchWatchEventUrl(candidate)
     }
 
     private fun String.asObject(): JsonObject =
@@ -866,6 +870,20 @@ private val SettingsUrlPattern = Regex(
     "src=[\\\"'](https?://[^\\\"']+/config/settings\\.[0-9a-f]{32}\\.js)[\\\"']",
     RegexOption.IGNORE_CASE,
 )
+
+internal fun isTrustedTwitchSettingsUrl(candidate: String): Boolean {
+    val url = candidate.toHttpUrlOrNull() ?: return false
+    return url.isHttps &&
+        url.host in setOf("assets.twitch.tv", "static.twitchcdn.net") &&
+        Regex("^/config/settings\\.[0-9a-f]{32}\\.js$").matches(url.encodedPath)
+}
+
+internal fun isTrustedTwitchWatchEventUrl(candidate: String): Boolean {
+    val url = candidate.toHttpUrlOrNull() ?: return false
+    if (!url.isHttps) return false
+    return url.host == "spade.twitch.tv" ||
+        (url.host == "beacon.twitch.tv" && url.encodedPath == "/track")
+}
 
 internal data class CampaignMappingResult(
     val campaign: Campaign?,
@@ -1126,22 +1144,28 @@ private fun JsonObject.toDropReward(): DropReward =
         id = this.path("benefit")["id"].asStringOrNull(),
     )
 
-private fun JsonObject.toAllowedChannel(): Channel =
-    Channel(
-        id = this["id"].asLong(0L),
-        name = this["login"].asString(
-            this["name"].asString(this["displayName"].asString("channel")),
-        ),
-        aclBased = true,
+private fun JsonObject.toAllowedChannel(): Channel {
+    val login = this["login"].asString(
+        this["name"].asString(this["displayName"].asString("channel")),
     )
+    return Channel(
+        id = this["id"].asLong(0L),
+        name = this["displayName"].asString(this["name"].asString(login)),
+        aclBased = true,
+        login = login,
+    )
+}
 
 private fun JsonObject.toDirectoryChannel(gameName: String, dropsEnabled: Boolean): Channel {
     val broadcaster = this["broadcaster"].asObjectOrNull()
     val game = this["game"].asObjectOrNull()
+    val login = broadcaster?.get("login").asString(
+        broadcaster?.get("displayName").asString("streamer"),
+    )
     return Channel(
         id = broadcaster?.get("id").asLong(0L),
         name = broadcaster?.get("displayName").asString(
-            broadcaster?.get("login").asString("streamer"),
+            login,
         ),
         game = game?.get("displayName").asStringOrNull() ?: gameName,
         gameId = game?.get("id").asStringOrNull(),
@@ -1150,6 +1174,7 @@ private fun JsonObject.toDirectoryChannel(gameName: String, dropsEnabled: Boolea
         dropsEnabled = dropsEnabled,
         broadcastId = this["id"].asStringOrNull(),
         title = this["title"].asStringOrNull(),
+        login = login,
     )
 }
 

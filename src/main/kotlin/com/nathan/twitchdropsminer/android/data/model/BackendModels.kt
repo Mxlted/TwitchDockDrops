@@ -313,6 +313,7 @@ data class Channel(
     val broadcastId: String? = null,
     val gameId: String? = null,
     val title: String? = null,
+    val login: String = name,
 ) {
     val statusLabel: String
         get() = when {
