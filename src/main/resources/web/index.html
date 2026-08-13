@@ -53,7 +53,7 @@
 
         <div class="sidebar-foot">
           <div class="mini-orbit" aria-hidden="true"><span></span></div>
-          <p>Local-first<br><strong>Container healthy</strong></p>
+          <p>Local service<br><strong id="serviceStatus">Connecting</strong></p>
         </div>
       </aside>
 
@@ -65,7 +65,7 @@
           </div>
           <div class="topbar-actions">
             <span class="preview-pill" id="previewPill" hidden>Preview data</span>
-            <span class="connection-pill is-connecting" id="connectionPill">
+            <span class="connection-pill is-connecting" id="connectionPill" role="status" aria-live="polite" aria-atomic="true">
               <span class="status-dot"></span>
               <span>Connecting</span>
             </span>
@@ -79,7 +79,7 @@
           </div>
         </header>
 
-        <section id="app" class="content" aria-live="polite">
+        <section id="app" class="content" aria-busy="true">
           <div class="loading-garden">
             <span></span><span></span><span></span>
             <p>Opening the greenhouse…</p>

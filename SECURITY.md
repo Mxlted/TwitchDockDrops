@@ -72,7 +72,8 @@ writable.
 
 Local logs may contain Twitch user IDs, campaign names, channel names, and bounded error summaries.
 Every entry normalizes CR/LF, is length-limited, and passes credential-label redaction before the
-bounded file is atomically rewritten. They must not contain access tokens, device-code secrets,
+bounded file is atomically rewritten. Redaction recognizes both plain diagnostic labels and quoted
+JSON-style credential labels. Logs must not contain access tokens, device-code secrets,
 encryption keys, raw session content, full upstream bodies, or filesystem paths. Review logs before
 sharing them publicly.
 

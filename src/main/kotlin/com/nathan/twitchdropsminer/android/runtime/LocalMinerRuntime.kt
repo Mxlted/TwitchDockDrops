@@ -17,6 +17,7 @@ import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
 import com.nathan.twitchdropsminer.android.data.model.inEarningOrder
 import com.nathan.twitchdropsminer.android.data.network.NetworkStatusProvider
 import com.nathan.twitchdropsminer.android.data.twitch.CurrentDropProgress
+import com.nathan.twitchdropsminer.android.data.twitch.DeviceAuthorizationException
 import com.nathan.twitchdropsminer.android.data.twitch.DeviceTokenPollResult
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApi
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApiErrorType
@@ -288,7 +289,7 @@ class LocalMinerRuntime(
                 throw error
             } catch (error: TwitchApiException) {
                 if (error.type == TwitchApiErrorType.InvalidToken) {
-                    runtimeCommands.trySend(
+                    runtimeCommands.send(
                         RuntimeCommand.ExpireSession(expectedSessionGeneration, error.message),
                     )
                 } else if (isCurrentMiningRun(expectedSessionGeneration, runGeneration)) {
@@ -373,7 +374,7 @@ class LocalMinerRuntime(
                 throw error
             } catch (error: TwitchApiException) {
                 if (error.type == TwitchApiErrorType.InvalidToken) {
-                    runtimeCommands.trySend(
+                    runtimeCommands.send(
                         RuntimeCommand.ExpireSession(expectedSessionGeneration, error.message),
                     )
                 } else if (isCurrentInventoryRefresh(expectedSessionGeneration, refreshGeneration)) {
@@ -546,6 +547,8 @@ class LocalMinerRuntime(
                             deviceId,
                         ).also { ensureCurrentAuthentication(authGeneration) }
                     } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: DeviceAuthorizationException) {
                         throw error
                     } catch (error: Throwable) {
                         ensureCurrentAuthentication(authGeneration)
@@ -932,8 +935,8 @@ class LocalMinerRuntime(
                 inventoryRefreshAt,
                 dropClaimHandler.nextRetryAt(),
             )
-            var unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings)
-            var linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings)
+            var unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings, now())
+            var linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings, now())
             if (unlinkedProgressProbe != null) {
                 appendActivity(
                     RuntimePhase.Watching,
@@ -981,8 +984,8 @@ class LocalMinerRuntime(
                         channels = promotion.channels
                         currentMode = promotion.mode
                         currentDropId = currentCampaign.watchableDrop(now = now())?.id
-                        unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(promotionSettings)
-                        linkedProgressProbe = currentCampaign.startLinkedProgressProbe(promotionSettings)
+                        unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(promotionSettings, now())
+                        linkedProgressProbe = currentCampaign.startLinkedProgressProbe(promotionSettings, now())
                         consecutiveRejectedWatchEvents = 0
                         transientWatchFailures = 0
                         consecutiveProgressFailures = 0
@@ -1031,7 +1034,7 @@ class LocalMinerRuntime(
                     break
                 }
                 if (resumedAfterNetworkLoss && unlinkedProgressProbe != null) {
-                    unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings)
+                    unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings, now())
                     appendActivity(
                         RuntimePhase.Watching,
                         "Restarting unlinked progress check",
@@ -1039,7 +1042,7 @@ class LocalMinerRuntime(
                     )
                 }
                 if (resumedAfterNetworkLoss && linkedProgressProbe != null) {
-                    linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings)
+                    linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings, now())
                 }
                 val pendingChannelControlRequest = channelControlRequests.value
                 if (pendingChannelControlRequest.id != handledChannelControlRequestId) {
@@ -1094,8 +1097,9 @@ class LocalMinerRuntime(
                             currentChannel = selected.copy(watching = true)
                             consecutiveRejectedWatchEvents = 0
                             transientWatchFailures = 0
-                            unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings)
-                            linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings)
+                            unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings, now())
+                            linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings, now())
+                            consecutiveProgressFailures = 0
                             watchConfigurationRenewals = 0
                             nextWatchAt = now()
                             updateSnapshot(
@@ -1137,8 +1141,8 @@ class LocalMinerRuntime(
                         nextWatchAt = settingsChangedAt.plusSeconds(
                             latestSettings.watchIntervalSeconds.toLong(),
                         )
-                        unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(latestSettings)
-                        linkedProgressProbe = currentCampaign.startLinkedProgressProbe(latestSettings)
+                        unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(latestSettings, now())
+                        linkedProgressProbe = currentCampaign.startLinkedProgressProbe(latestSettings, now())
                     }
                     nextHigherPriorityCheckAt = settingsChangedAt
                 }
@@ -1332,8 +1336,8 @@ class LocalMinerRuntime(
                     currentMode = reportedMode
                     currentDropId = progressRefresh.reportedDropId
                     channels = listOf(currentChannel)
-                    unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings)
-                    linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings)
+                    unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings, now())
+                    linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings, now())
                     watchConfigurationRenewals = 0
                     appendActivity(
                         RuntimePhase.Watching,
@@ -1470,7 +1474,7 @@ class LocalMinerRuntime(
                                     ensureCurrentOperation()
                                     watchConfigurationRenewals += 1
                                     twitchApiClient.invalidateWatchConfiguration(currentChannel.id)
-                                    linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings)
+                                    linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings, now())
                                     watchAgainImmediately = true
                                     appendActivity(
                                         RuntimePhase.Watching,
@@ -2376,16 +2380,22 @@ private class RuntimeOperationGuard(
     companion object Key : CoroutineContext.Key<RuntimeOperationGuard>
 }
 
-private fun Campaign.startUnlinkedProgressProbe(settings: AppSettings): UnlinkedProgressProbe? =
-    if (canTryUnlinkedLocally) {
-        UnlinkedProgressProbe.start(this, settings, Instant.now())
+private fun Campaign.startUnlinkedProgressProbe(
+    settings: AppSettings,
+    startedAt: Instant,
+): UnlinkedProgressProbe? =
+    if (canTryUnlinkedLocallyAt(startedAt)) {
+        UnlinkedProgressProbe.start(this, settings, startedAt)
     } else {
         null
     }
 
-private fun Campaign.startLinkedProgressProbe(settings: AppSettings): LinkedProgressProbe? =
-    if (canEarnLocally) {
-        LinkedProgressProbe.start(this, settings, Instant.now())
+private fun Campaign.startLinkedProgressProbe(
+    settings: AppSettings,
+    startedAt: Instant,
+): LinkedProgressProbe? =
+    if (canEarnLocallyAt(startedAt)) {
+        LinkedProgressProbe.start(this, settings, startedAt)
     } else {
         null
     }
@@ -3508,7 +3518,17 @@ private fun mergePartialInventory(
     val previousById = previous.associateBy(Campaign::id)
     val merged = partial.map { campaign ->
         val known = previousById[campaign.id]
-        if (known != null && campaign.drops.isEmpty() && known.drops.isNotEmpty()) known else campaign
+        if (known == null) {
+            campaign
+        } else {
+            val partialDropIds = campaign.drops.mapTo(mutableSetOf(), CampaignDrop::id)
+            val mergedDrops = campaign.drops + known.drops.filterNot { drop -> drop.id in partialDropIds }
+            campaign.copy(
+                drops = mergedDrops.inEarningOrder(),
+                claimedDrops = mergedDrops.count(CampaignDrop::isClaimed),
+                totalDrops = mergedDrops.size,
+            )
+        }
     }.toMutableList()
     val loadedIds = partial.mapTo(mutableSetOf(), Campaign::id)
     merged += previous.filterNot { it.id in loadedIds }
@@ -3524,8 +3544,8 @@ private fun List<Campaign>.progressSummary(): String {
     }
     val active = count { it.active }
     val claimed = sumOf { it.claimedDrops }
-    val total = sumOf { it.totalDrops }.coerceAtLeast(1)
-    val percent = ((claimed.toFloat() / total) * 100).toInt()
+    val total = sumOf { it.totalDrops }
+    val percent = if (total > 0) ((claimed.toFloat() / total) * 100).toInt() else 0
     return "$active active campaigns, $claimed/$total drops claimed ($percent%)"
 }
 

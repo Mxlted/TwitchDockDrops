@@ -182,6 +182,18 @@ class WebServerTest {
     }
 
     @Test
+    fun `channel selection command accepts a positive numeric identifier`() {
+        execute(
+            "/api/channels/select",
+            "POST",
+            """{"channelId":123456789}""",
+        ).use { response ->
+            assertEquals(202, response.code)
+            assertEquals("{\"ok\":true}", response.body!!.string())
+        }
+    }
+
+    @Test
     fun `sse clients are bounded and assets are revalidated`() {
         val first = execute("/api/events")
         try {

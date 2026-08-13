@@ -12,6 +12,7 @@ import com.nathan.twitchdropsminer.android.data.network.NetworkStatusProvider
 import com.nathan.twitchdropsminer.android.data.twitch.CurrentDropProgress
 import com.nathan.twitchdropsminer.android.data.twitch.CampaignInventory
 import com.nathan.twitchdropsminer.android.data.twitch.DeviceAuthorization
+import com.nathan.twitchdropsminer.android.data.twitch.DeviceAuthorizationException
 import com.nathan.twitchdropsminer.android.data.twitch.DeviceTokenPollResult
 import com.nathan.twitchdropsminer.android.data.twitch.DropClaimResult
 import com.nathan.twitchdropsminer.android.data.twitch.DropClaimOutcome
@@ -199,6 +200,29 @@ class LocalMinerRuntimeExecutionTest {
     }
 
     @Test
+    fun `terminal device authorization denial is surfaced without retrying`() = runBlocking {
+        val api = AuthenticationTwitchApi(
+            pollFailure = DeviceAuthorizationException(
+                oauthError = "access_denied",
+                message = "Twitch device authorization was denied.",
+            ),
+        )
+        val runtime = runtime(sessionStore(), api)
+
+        runtime.startAuthentication()
+        val failed = withTimeout(3_000) {
+            runtime.snapshot.first { snapshot ->
+                snapshot.error?.contains("denied", ignoreCase = true) == true
+            }
+        }
+        delay(150)
+
+        assertEquals("Twitch login failed", failed.currentTask)
+        assertEquals(1, api.pollCalls.get())
+        runtime.resetSessionAndJoin()
+    }
+
+    @Test
     fun `inventory refresh never removes a saved absent game priority`() = runBlocking {
         val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
         val settings = SettingsRepository(directory)
@@ -228,6 +252,36 @@ class LocalMinerRuntimeExecutionTest {
         }
 
         assertEquals(listOf("known"), runtime.snapshot.value.campaigns.map { it.id })
+    }
+
+    @Test
+    fun `partial campaign data retains previously known drops`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val firstDrop = watchCampaign("known", "Known Game").drops.single()
+        val secondDrop = firstDrop.copy(id = "known-drop-2", name = "second drop", requiredMinutes = 90)
+        val known = watchCampaign("known", "Known Game").copy(
+            drops = listOf(firstDrop, secondDrop),
+            totalDrops = 2,
+        )
+        val partial = known.copy(
+            drops = listOf(firstDrop.copy(currentMinutes = 10, progress = 10f / 60f)),
+            totalDrops = 1,
+        )
+        val api = PartialInventoryTwitchApi(known, partial)
+        val runtime = runtime(store, api)
+
+        runtime.bootstrap()
+        withTimeout(2_000) { runtime.snapshot.first { it.campaigns.singleOrNull()?.drops?.size == 2 } }
+        runtime.refreshInventory()
+        withTimeout(2_000) {
+            while (api.inventoryCalls.get() < 2) delay(10)
+            runtime.snapshot.first { it.error?.contains("partially parsed") == true }
+        }
+
+        val merged = runtime.snapshot.value.campaigns.single()
+        assertEquals(2, merged.drops.size)
+        assertEquals(10, merged.drops.first { it.id == firstDrop.id }.currentMinutes)
+        assertTrue(merged.drops.any { it.id == secondDrop.id })
     }
 
     @Test
@@ -553,6 +607,7 @@ private class CandidateFailureTwitchApi(
 
 private class PartialInventoryTwitchApi(
     private val knownCampaign: Campaign,
+    private val partialCampaign: Campaign? = null,
 ) : TwitchApi {
     val inventoryCalls = AtomicInteger()
 
@@ -561,7 +616,7 @@ private class PartialInventoryTwitchApi(
             CampaignInventory(listOf(knownCampaign))
         } else {
             CampaignInventory(
-                campaigns = emptyList(),
+                campaigns = listOfNotNull(partialCampaign),
                 sourceRecordCount = 1,
                 diagnostics = listOf("Campaign record could not be parsed safely."),
             )
@@ -642,12 +697,14 @@ private class AuthenticationTwitchApi(
     private val blockFirstDeviceCode: Boolean = false,
     private val failFirstDeviceCode: Boolean = false,
     private val blockFirstPoll: Boolean = false,
+    private val pollFailure: Throwable? = null,
 ) : TwitchApi {
     val deviceCodeRequests = AtomicInteger()
     val firstDeviceCodeStarted = CompletableDeferred<Unit>()
     val releaseFirstDeviceCode = CompletableDeferred<Unit>()
     val firstPollStarted = CompletableDeferred<Unit>()
     val releaseFirstPoll = CompletableDeferred<Unit>()
+    val pollCalls = AtomicInteger()
 
     override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization {
         val request = deviceCodeRequests.incrementAndGet()
@@ -670,11 +727,13 @@ private class AuthenticationTwitchApi(
     }
 
     override suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult {
+        pollCalls.incrementAndGet()
         if (deviceCode == "device-code-1" && blockFirstPoll) {
             firstPollStarted.complete(Unit)
             withContext(NonCancellable) { releaseFirstPoll.await() }
             return DeviceTokenPollResult.Authorized(TokenResponse("stale-token"))
         }
+        pollFailure?.let { throw it }
         return DeviceTokenPollResult.AuthorizationPending
     }
 

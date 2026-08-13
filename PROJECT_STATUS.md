@@ -28,6 +28,7 @@ changes.
 - [x] Campaign/drop windows are evaluated dynamically and active waits include campaign expiry
 - [x] Malformed inventories produce bounded diagnostics and preserve last known-good/partial data safely
 - [x] Candidate failures continue safely and detail/channel lookup uses bounded sliding concurrency
+- [x] Upstream calls have a whole-call timeout and large lookup sets use a fixed worker pool
 - [x] Persistent API mutations are serialized and acknowledged only after successful local storage
 - [x] Verbose logs emit bounded selection, heartbeat, progress, and retry diagnostics without credentials
 - [x] Corrupt persistence is distinguished, preserved/quarantined, permission-hardened, and safely diagnosed
@@ -37,6 +38,8 @@ changes.
 - [x] Responsive soft-color glassmorphism UI covers overview, campaigns, activity, and settings
 - [x] Dark mode is the default, with a persisted light-mode toggle and flash-free theme initialization
 - [x] Active drop/channel Twitch links and linked/unlinked campaign filters are available
+- [x] Compatible-channel loading, empty, refresh, and manual-selection states are available
+- [x] Navigation/filter semantics, visible focus, and 44px touch targets cover desktop and mobile controls
 - [x] Dockerfile configures a non-root runtime compatible with a read-only root filesystem
 - [x] Compose declares loopback binding, a named volume, restart policy, init, and health check
 - [x] Gradle tests pass
@@ -45,8 +48,35 @@ changes.
 
 ## Verification record — 2026-08-13
 
-- Root Git baseline is on `main`; future change tasks are documented to finish in focused local
-  commits while preserving unrelated work and keeping the Android reference at its recorded gitlink
+- Root release audit covered bootstrap/configuration, persistence and encryption, HTTP routing and
+  mutation validation, state redaction, OAuth, inventory mapping, selection/failover, watch/progress,
+  claims, command scheduling, packaged runtime behavior, and every browser view/state. The Android
+  project was used only as a read-only behavioral reference.
+- Required root `gradle clean test installDist --no-daemon`: passed with Gradle 9.5.1 on JDK 21.
+- Root Gradle suite: 82 tests passed, 0 failures, 0 errors, 0 skipped across 15 suites. New regression
+  coverage exercises terminal device-login denial without retry, safe partial-drop retention, current
+  settings in serialized selection state, quoted JSON secret redaction, bounded persisted settings,
+  and valid manual channel selection.
+- A root `.gitignore` scope error that hid every nested `data/` package was corrected to ignore only
+  the runtime `/data/` directory; all root-owned miner and persistence sources/tests are now visible to
+  Git. The Docker build context was separately verified against current Docker ignore semantics and
+  was not affected by this Git-only pattern.
+- Packaged distribution smoke on isolated `127.0.0.1:18784`: health and state returned HTTP 200; a
+  settings mutation persisted and restored with HTTP 200; an untrusted Origin returned HTTP 403;
+  `app.js` returned `no-cache`; state exposed neither `accessToken` nor `deviceCode`; and SSE delivered
+  an initial state event.
+- Browser QA at 1280×800 desktop, 390×844 mobile, and a narrow 320×640 mobile viewport covered real
+  logged-out/empty, preparing/loading, displayed-code/replacement, expired/error, active, compatible
+  channel selection, campaign search/filter, settings, and confirmation-dialog states. There were no
+  console warnings/errors or horizontal page overflow. Visible interactive controls met 44px minimum
+  targets, the narrow campaign filters scrolled within their card, keyboard focus used a visible 3px
+  ring, navigation exposed `aria-current`, and filters exposed `aria-pressed`.
+- JavaScript syntax checks passed for `app.js` and `theme-init.js`.
+- Docker validation/build could not run because the Docker CLI is not installed on this host.
+- Android reference audit: nested Git worktree remained clean at
+  `dfd7d8c5316ff896c838301bd3c769c84aef8d15` after all root implementation and verification.
+- The isolated verification JVM was stopped. Live Twitch authorization, campaign discovery, earning
+  telemetry, Spade delivery, progress, channel failover, and claims were not exercised.
 
 ## Verification record — 2026-08-12
 

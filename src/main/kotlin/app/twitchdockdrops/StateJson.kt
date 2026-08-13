@@ -115,7 +115,7 @@ private fun Campaign.toJson(settings: AppSettings): JsonObject = buildJsonObject
     put("totalDrops", totalDrops)
     put("remainingMinutes", remainingMinutes)
     put("progress", progress.toDouble())
-    put("selected", selected)
+    put("selected", settings.isCampaignSelected(this@toJson))
     put("excluded", settings.isCampaignExcluded(this@toJson))
     put("priorityIndex", settings.gamePriorityIndex(gameName) ?: -1)
     put("earnable", canEarnLocally)

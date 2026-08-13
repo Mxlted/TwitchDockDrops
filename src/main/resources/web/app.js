@@ -11,6 +11,8 @@ const ui = {
   renderedView: null,
   renderedMarkup: null,
   theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
+  channelPickerOpen: false,
+  channelPickerLoading: false,
 };
 
 const app = document.querySelector("#app");
@@ -21,6 +23,7 @@ const campaignCount = document.querySelector("#campaignCount");
 const previewPill = document.querySelector("#previewPill");
 const confirmDialog = document.querySelector("#confirmDialog");
 const themeButton = document.querySelector("#themeButton");
+const serviceStatus = document.querySelector("#serviceStatus");
 const titleByView = {
   overview: ["Overview", "Your drop garden"],
   campaigns: ["Campaigns", "Choose what grows first"],
@@ -49,6 +52,7 @@ async function boot() {
 
 function startPolling() {
   if (ui.pollTimer) return;
+  loadState();
   ui.pollTimer = window.setInterval(loadState, 15000);
 }
 
@@ -70,6 +74,7 @@ async function loadState() {
     renderConnection();
     if (!ui.data) {
       app.innerHTML = renderUnavailable(error.message);
+      app.setAttribute("aria-busy", "false");
     }
   }
 }
@@ -92,9 +97,7 @@ function connectEvents() {
     }
   });
   ui.eventSource.onerror = () => {
-    ui.connected = false;
     startPolling();
-    renderConnection();
   };
 }
 
@@ -105,8 +108,12 @@ function render() {
   pageEyebrow.textContent = eyebrow;
   campaignCount.textContent = String(ui.data.snapshot.campaigns.length);
   document.querySelectorAll("[data-view]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.view === ui.view);
+    const isActive = button.dataset.view === ui.view;
+    button.classList.toggle("is-active", isActive);
+    if (isActive) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
+  document.querySelector(".topbar [data-action='refresh']").disabled = !ui.data.snapshot.account.authenticated;
   renderConnection();
 
   const view = {
@@ -120,6 +127,7 @@ function render() {
   if (!viewChanged && ui.renderedMarkup === markup) return;
 
   app.innerHTML = markup;
+  app.setAttribute("aria-busy", "false");
   if (viewChanged) app.firstElementChild?.classList.add("is-entering");
   ui.renderedView = ui.view;
   ui.renderedMarkup = markup;
@@ -129,6 +137,7 @@ function renderConnection() {
   const label = ui.preview ? "Preview" : ui.connected ? "Local host" : "Reconnecting";
   connectionPill.className = `connection-pill ${ui.connected ? "is-online" : "is-offline"}`;
   connectionPill.querySelector("span:last-child").textContent = label;
+  serviceStatus.textContent = ui.preview ? "Preview only" : ui.connected ? "Host reachable" : "Reconnecting";
 }
 
 function renderOverview(data) {
@@ -146,6 +155,10 @@ function renderOverview(data) {
     (total, campaign) => total + campaign.drops.filter((drop) => drop.canClaim && !drop.claimed).length,
     0,
   );
+  if (!snapshot.miningActive || !activeCampaign || !activeDrop) {
+    ui.channelPickerOpen = false;
+    ui.channelPickerLoading = false;
+  }
 
   const hero = waitingForCode
     ? renderLoginCodeHero(account)
@@ -170,7 +183,7 @@ function renderOverview(data) {
             <div><h2>Growing now</h2><p>The campaign and drop currently receiving watch progress.</p></div>
             ${snapshot.miningActive ? '<span class="soft-chip"><span class="status-dot"></span>heartbeat active</span>' : ""}
           </div>
-          ${activeCampaign && activeDrop ? renderWatchCard(activeCampaign, activeDrop, activeChannel) : renderEmptyWatch(authenticated)}
+          ${activeCampaign && activeDrop ? renderWatchCard(activeCampaign, activeDrop, activeChannel, snapshot.channels, snapshot.channelSearchInProgress) : renderEmptyWatch(authenticated)}
         </section>
         <section class="soft-card section-card">
           <div class="section-head">
@@ -272,7 +285,7 @@ function renderDropOrbit(active = false) {
     </div>`;
 }
 
-function renderWatchCard(campaign, drop, channel) {
+function renderWatchCard(campaign, drop, channel, channels = [], channelSearchInProgress = false) {
   const progress = percent(drop.progress);
   const campaignUrl = safeTwitchUrl(campaign.campaignUrl);
   const channelUrl = channel ? twitchChannelUrl(channel.name) : null;
@@ -284,6 +297,12 @@ function renderWatchCard(campaign, drop, channel) {
       ? `<a class="soft-chip is-link" href="${attr(channelUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${attr(channel.name)} on Twitch">@${esc(channel.name)}<span class="external-mark" aria-hidden="true">↗</span></a>`
       : `<span class="soft-chip">@${esc(channel.name)}</span>`
     : "";
+  const searching = channelSearchInProgress || ui.channelPickerLoading;
+  const showChannelPicker = ui.channelPickerOpen || channelSearchInProgress;
+  const alternatives = channels.filter((candidate) =>
+    candidate && Number.isSafeInteger(candidate.id) && candidate.id > 0 && candidate.online &&
+    candidate.dropsEnabled && (!channel || candidate.id !== channel.id),
+  );
   return `
     <div class="watch-card">
       ${renderArt(campaign)}
@@ -296,9 +315,28 @@ function renderWatchCard(campaign, drop, channel) {
         <p>${esc(campaign.gameName)} · ${drop.currentMinutes} of ${drop.requiredMinutes} minutes</p>
         <progress class="progress-track" max="100" value="${progress}" aria-label="${progress}% gathered"></progress>
         <div class="progress-line"><span>${progress}% gathered</span><span>${drop.remainingMinutes}m remaining</span></div>
-        ${channel ? `<div class="inline-actions"><button class="tiny-button" data-action="find-channel" type="button">Find another channel</button></div>` : ""}
+        ${channel ? `<div class="inline-actions"><button class="tiny-button" data-action="find-channel" type="button" aria-expanded="${showChannelPicker}" aria-controls="channelPicker" ${searching ? "disabled" : ""}>${searching ? "Finding channels…" : showChannelPicker ? "Refresh channel list" : "Find another channel"}</button></div>` : ""}
       </div>
       <div class="progress-ring"><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18"></circle><circle class="ring-progress" cx="22" cy="22" r="18" pathLength="100" stroke-dasharray="${progress} 100"></circle></svg><strong>${progress}%</strong></div>
+      ${channel && showChannelPicker ? renderChannelPicker(alternatives, searching) : ""}
+    </div>`;
+}
+
+function renderChannelPicker(channels, searching) {
+  return `
+    <div class="channel-picker" id="channelPicker" role="group" aria-label="Compatible live channels">
+      <div class="channel-picker-head">
+        <strong>Choose another streamer</strong>
+        <span role="status">${searching ? "Refreshing Twitch’s compatible channel list…" : channels.length ? `${channels.length} alternative${channels.length === 1 ? "" : "s"} available` : "No live alternatives found"}</span>
+      </div>
+      ${searching ? '<div class="channel-picker-loading" aria-hidden="true"><span></span><span></span><span></span></div>' : channels.length ? `
+        <div class="channel-options">
+          ${channels.map((candidate) => `
+            <button class="channel-option" type="button" data-action="select-channel" data-id="${attr(candidate.id)}">
+              <span>@${esc(candidate.name)}</span>
+              <small>${candidate.viewers == null ? "Live with Drops" : `${formatViewers(candidate.viewers)} viewers`}</small>
+            </button>`).join("")}
+        </div>` : '<p class="channel-picker-empty">The current channel stays active. Try refreshing again after more Drops-enabled streams go live.</p>'}
     </div>`;
 }
 
@@ -323,7 +361,7 @@ function renderCampaigns(data) {
     const matchesFilter = ui.campaignFilter === "all"
       || (ui.campaignFilter === "active" && campaign.active && !campaign.excluded)
       || (ui.campaignFilter === "linked" && campaign.linked)
-      || (ui.campaignFilter === "unlinked" && !campaign.linked)
+      || (ui.campaignFilter === "unlinked" && campaign.linkStatusKnown && !campaign.linked)
       || (ui.campaignFilter === "priority" && campaign.priorityIndex >= 0)
       || (ui.campaignFilter === "excluded" && campaign.excluded);
     return matchesQuery && matchesFilter;
@@ -339,7 +377,7 @@ function renderCampaigns(data) {
           <input id="campaignSearch" type="search" autocomplete="off" placeholder="Find a game or campaign" value="${attr(ui.campaignSearch)}">
         </label>
         <div class="filter-pills" aria-label="Campaign filters">
-          ${["all", "active", "linked", "unlinked", "priority", "excluded"].map((filter) => `<button class="filter-pill ${ui.campaignFilter === filter ? "is-active" : ""}" type="button" data-action="campaign-filter" data-filter="${filter}">${capitalize(filter)}</button>`).join("")}
+          ${["all", "active", "linked", "unlinked", "priority", "excluded"].map((filter) => `<button class="filter-pill ${ui.campaignFilter === filter ? "is-active" : ""}" type="button" data-action="campaign-filter" data-filter="${filter}" aria-pressed="${ui.campaignFilter === filter}">${capitalize(filter)}</button>`).join("")}
         </div>
       </section>
       <section class="soft-card section-card">
@@ -365,8 +403,9 @@ function renderCampaigns(data) {
 
 function renderCampaignRow(campaign, settings, compact = false) {
   const priority = campaign.priorityIndex;
-  const statusClass = campaign.excluded ? "is-excluded" : campaign.active ? "is-live" : "is-upcoming";
+  const statusClass = campaign.excluded ? "is-excluded" : campaign.active ? "is-live" : campaign.upcoming ? "is-upcoming" : campaign.expired ? "is-ended" : "is-unknown";
   const statusLabel = campaign.excluded ? "Excluded" : campaign.active ? "Active" : campaign.upcoming ? "Upcoming" : campaign.expired ? "Ended" : "Unknown";
+  const linkLabel = campaign.linkStatusKnown ? (campaign.linked ? "Linked" : "Unlinked") : "Link unknown";
   const topDrop = campaign.drops.find((drop) => !drop.claimed) || campaign.drops[0];
   const progress = percent(campaign.progress);
   return `
@@ -375,7 +414,7 @@ function renderCampaignRow(campaign, settings, compact = false) {
       <div class="campaign-copy">
         <div class="campaign-tags">
           <span class="status-chip ${statusClass}">${statusLabel}</span>
-          <span class="soft-chip">${campaign.linked ? "Linked" : "Unlinked"}</span>
+          <span class="soft-chip">${linkLabel}</span>
           ${priority >= 0 ? `<span class="priority-chip">Priority ${priority + 1}</span>` : ""}
         </div>
         <h3>${esc(campaign.gameName)}</h3>
@@ -536,11 +575,11 @@ function renderStat(label, value, note, tint, icon) {
 function renderArt(campaign) {
   const imageUrl = safeUrl(campaign.gameBoxArtUrl);
   const initials = (campaign.gameName || "?").split(/\s+/).slice(0, 2).map((word) => word[0]).join("").toUpperCase();
-  return `<div class="game-art">${imageUrl ? `<img src="${attr(imageUrl)}" alt="${attr(campaign.gameName)} box art" loading="lazy">` : esc(initials)}</div>`;
+  return `<div class="game-art">${imageUrl ? `<img src="${attr(imageUrl)}" alt="" loading="lazy">` : esc(initials)}</div>`;
 }
 
 function renderError(message) {
-  return `<div class="error-banner"><span class="activity-seed">!</span><div><strong>The garden hit a snag</strong>${esc(message)}</div></div>`;
+  return `<div class="error-banner" role="alert"><span class="activity-seed">!</span><div><strong>The garden hit a snag</strong>${esc(message)}</div></div>`;
 }
 
 function renderEmptyCampaigns(authenticated) {
@@ -560,7 +599,8 @@ async function handleClick(event) {
   if (viewButton) {
     ui.view = viewButton.dataset.view;
     render();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reducedMotion ? "auto" : "smooth" });
     return;
   }
 
@@ -574,7 +614,24 @@ async function handleClick(event) {
     if (action === "start") await command("/api/miner/start");
     if (action === "stop") await command("/api/miner/stop");
     if (action === "refresh") await command("/api/inventory/refresh");
-    if (action === "find-channel") await command("/api/channels/find");
+    if (action === "find-channel") {
+      ui.channelPickerOpen = true;
+      ui.channelPickerLoading = true;
+      render();
+      try {
+        await command("/api/channels/find");
+      } finally {
+        ui.channelPickerLoading = false;
+        render();
+      }
+    }
+    if (action === "select-channel") {
+      const channelId = Number(button.dataset.id);
+      if (!Number.isSafeInteger(channelId) || channelId <= 0) throw new Error("The selected channel ID is invalid.");
+      await command("/api/channels/select", { channelId });
+      ui.channelPickerOpen = false;
+      render();
+    }
     if (action === "toggle-priority") await command("/api/priorities/toggle", { gameName: button.dataset.game });
     if (action === "move-priority") await command("/api/priorities/move", { gameName: button.dataset.game, offset: Number(button.dataset.offset) });
     if (action === "clear-priorities") await command("/api/priorities/clear");
@@ -745,7 +802,11 @@ function previewState() {
       lastUpdate: iso(-1),
       account: { state: "loggedin", statusText: "Logged in with Twitch", userId: "preview", oauthUrl: null, oauthCode: null, expiresAt: null, authenticated: true, actionRequired: false },
       campaigns,
-      channels: [{ id: 1, name: "willowbyte", game: "No Man's Sky", viewers: 812, online: true, dropsEnabled: true, aclBased: false, watching: true, title: "Soft base building & expedition", statusLabel: "Watching" }],
+      channels: [
+        { id: 1, name: "willowbyte", game: "No Man's Sky", viewers: 812, online: true, dropsEnabled: true, aclBased: false, watching: true, title: "Soft base building & expedition", statusLabel: "Watching" },
+        { id: 2, name: "fern_signal", game: "No Man's Sky", viewers: 426, online: true, dropsEnabled: true, aclBased: false, watching: false, title: "Expedition route and cozy bases", statusLabel: "Drops enabled" },
+        { id: 3, name: "quiet_orbit", game: "No Man's Sky", viewers: 97, online: true, dropsEnabled: true, aclBased: true, watching: false, title: "Community drop session", statusLabel: "Drops enabled" },
+      ],
       activity: [
         { timestamp: iso(-1), state: "watching", title: "Watch heartbeat accepted", detail: "willowbyte · No Man's Sky" },
         { timestamp: iso(-7), state: "findingchannel", title: "Compatible channel selected", detail: "willowbyte, 812 viewers" },
@@ -861,6 +922,13 @@ function formatTime(value) {
 function formatDateTime(value) {
   if (!value) return "—";
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
+}
+
+function formatViewers(value) {
+  const viewers = Number(value);
+  return Number.isFinite(viewers) && viewers >= 0
+    ? new Intl.NumberFormat(undefined, { notation: viewers >= 10000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(viewers)
+    : "—";
 }
 
 function capitalize(value) {

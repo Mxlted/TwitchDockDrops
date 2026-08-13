@@ -4,7 +4,7 @@ object SafeText {
     private const val DefaultDiagnosticLimit = 512
 
     private val labeledSecret = Regex(
-        "(?i)((?:authorization|access[_-]?token|device[_-]?code|session[_-]?key|encryption[_-]?key|twitch_drops_session_key)\\s*[=:]\\s*[\\\"']?(?:oauth\\s+|bearer\\s+)?)[^\\s\\\"',;}]+",
+        "(?i)([\\\"']?(?:authorization|access[_-]?token|device[_-]?code|session[_-]?key|encryption[_-]?key|twitch_drops_session_key)[\\\"']?\\s*[=:]\\s*[\\\"']?(?:oauth\\s+|bearer\\s+)?)[^\\s\\\"',;}]+",
     )
     private val authorizationSecret = Regex("(?i)\\b(OAuth|Bearer)\\s+[A-Za-z0-9._~+/=-]+")
 

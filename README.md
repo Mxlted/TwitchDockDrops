@@ -13,7 +13,9 @@ The web client is deliberately not a clone of the Android screens. Its visual di
 controls, and clear status hierarchy without the usual Twitch-purple streaming dashboard treatment.
 The header theme control switches to the light greenhouse palette and remembers that choice in the
 browser; dark mode is the default for new browser profiles. The active-watch card links its current
-drop campaign and channel to Twitch, while Campaigns can be filtered by linked or unlinked status.
+drop campaign and channel to Twitch, exposes a **Find another channel** chooser for compatible live
+streams, and keeps clear loading and empty results. Campaigns can be filtered by linked or unlinked
+status.
 
 > This is an unofficial project and is not affiliated with Twitch. Twitch's private endpoints and
 > persisted GraphQL operations can change without notice.
@@ -110,7 +112,9 @@ The `twitch-dock-drops-data` named volume is mounted at `/data` and stores:
 Settings and sessions are written atomically with owner-only permissions where POSIX permissions are
 available. Corrupt settings and locally encrypted sessions are quarantined instead of being silently
 overwritten. A session encrypted under a different configured key is preserved so the correct key can
-be restored. Safe diagnostics appear in the local log without file paths or secret contents.
+be restored. Saved priorities and exclusions are normalized, deduplicated, length-checked, and capped
+before every write so a malformed imported settings file cannot grow the durable state without bound.
+Safe diagnostics appear in the local log without file paths or secret contents.
 
 **Verbose local logs** adds bounded debug entries for campaign/channel selection, watch-heartbeat
 results, progress observations, and claim-retry scheduling. Log messages have normalized line breaks,

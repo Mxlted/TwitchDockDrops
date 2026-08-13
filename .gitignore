@@ -1,7 +1,7 @@
 .gradle/
 build/
 .env
-data/
+/data/
 *.log
 *.key
 *.enc

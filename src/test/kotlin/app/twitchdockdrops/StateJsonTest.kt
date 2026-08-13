@@ -1,6 +1,7 @@
 package app.twitchdockdrops
 
 import com.nathan.twitchdropsminer.android.data.model.AppSettings
+import com.nathan.twitchdropsminer.android.data.model.Campaign
 import com.nathan.twitchdropsminer.android.data.model.LocalLogEntry
 import com.nathan.twitchdropsminer.android.data.model.LoginSession
 import com.nathan.twitchdropsminer.android.data.model.LoginState
@@ -54,5 +55,29 @@ class StateJsonTest {
         assertFalse(encoded.contains("evil.example"))
         assertTrue(encoded.contains("[redacted]"))
         assertTrue(encoded.contains("PUBLIC-CODE"))
+    }
+
+    @Test
+    fun `campaign selection is derived from current settings instead of stale runtime flags`() {
+        val campaign = Campaign(
+            id = "campaign",
+            name = "Campaign",
+            gameName = "Game",
+            selected = true,
+        )
+
+        val unselected = StateJson(Instant.EPOCH).encode(
+            RuntimeSnapshot(campaigns = listOf(campaign)),
+            AppSettings().normalized(),
+            emptyList(),
+        )
+        val selected = StateJson(Instant.EPOCH).encode(
+            RuntimeSnapshot(campaigns = listOf(campaign.copy(selected = false))),
+            AppSettings(selectedGamePriority = listOf("Game")).normalized(),
+            emptyList(),
+        )
+
+        assertTrue(unselected.contains("\"selected\":false"))
+        assertTrue(selected.contains("\"selected\":true"))
     }
 }

@@ -20,6 +20,7 @@ fun main() {
     val sessionStore = SecureSessionStore(environment.dataDirectory, environment.sessionKey)
     val logRepository = LogRepository(environment.dataDirectory)
     val httpClient = OkHttpClient.Builder()
+        .callTimeout(Duration.ofMinutes(2))
         .connectTimeout(Duration.ofSeconds(15))
         .readTimeout(Duration.ofSeconds(30))
         .writeTimeout(Duration.ofSeconds(30))

@@ -48,7 +48,8 @@ at a time. Repeated start commands are idempotent. Refresh commands received whi
 coalesced into the mining loop instead of creating a competing inventory job. The command channel is
 bounded and coalesces queued idempotent lifecycle requests. Device authorization parses
 `authorization_pending`, increases its polling cadence for `slow_down`, surfaces `access_denied` and
-`expired_token` immediately, and rejects malformed/unknown replies. It retries genuinely transient
+`expired_token` immediately without routing either terminal outcome through transient retry, and
+rejects malformed/unknown replies. It retries genuinely transient
 Twitch/network failures until the code expires, and a completed login immediately schedules inventory
 loading. Ordinary login start is idempotent while a code is being
 prepared or a still-valid code is being polled. A separate replacement command cancels and invalidates
@@ -62,8 +63,10 @@ does not accidentally emit an extra heartbeat. Idle waits also include the earli
 drop start and pending claim-retry deadline; active waits include the current campaign and drop ends. A boundary wake
 re-evaluates cached lifecycle dates and refreshes inventory as needed, so later scheduled drops do not
 wait for the hourly refresh and do not cause busy polling. Independent Twitch detail/channel lookups use
-a bounded sliding-concurrency window, so a slow early lookup does not hold all later candidates behind
-a fixed batch. Campaign detail requests are skipped when summary/inventory fields are already sufficient.
+a fixed-size sliding worker pool, so a slow early lookup does not hold all later candidates behind a
+fixed batch and large inventories cannot create one suspended coroutine per candidate. Campaign detail
+requests are skipped when summary/inventory fields are already sufficient. The shared HTTP client also
+bounds each complete upstream call, including redirects and response-body reads, to two minutes.
 
 Automatic selection exhausts linked work before unlinked work by default: linked claimed-progress,
 linked viewing-progress, linked fresh, unlinked claimed-progress, unlinked viewing-progress, then
@@ -132,6 +135,8 @@ trusted hosts and origins explicitly.
 The Compose volume at `/data` is the only mutable application filesystem:
 
 - settings are normalized before an atomic JSON replacement;
+- saved game priorities and campaign exclusions are deduplicated, length-checked, and capped at 500
+  entries each before persistence;
 - the Twitch session is encrypted using AES-256-GCM;
 - a random local key is created on first start unless an external key is supplied;
 - logs are capped so unattended runs cannot grow the volume without bound.
@@ -150,7 +155,8 @@ single full-string override through `TWITCH_DROPS_JAVA_OPTS` for exceptional inv
 OAuth, GraphQL, HTML configuration, and error bodies have endpoint-specific response limits. Campaign
 mapping produces bounded diagnostics instead of silently dropping malformed records. A nonempty
 inventory with no safe campaign is a schema failure that preserves the last known-good inventory;
-identified safe partial results merge without pruning omitted campaigns or saved priorities. Empty
+identified safe partial results merge without pruning omitted campaigns, missing drops within a
+partially returned campaign, or saved priorities. Empty
 GraphQL error arrays are accepted, while partial data with errors is retained with diagnostics.
 
 OAuth Authorization is restricted to fixed Twitch OAuth/GraphQL destinations. Upstream-derived static
@@ -172,6 +178,8 @@ discard focus. Active drop and channel links are emitted only for validated HTTP
 destinations, and linked/unlinked campaign filters remain browser-local presentation state. Priorities
 missing from a partial/current inventory are displayed as unavailable without being deleted. Mutable
 HTML, JavaScript, and CSS use `no-cache`, preventing a stale client from crossing a state-schema upgrade.
+The active-watch card exposes compatible live channel alternatives through the existing serialized
+runtime command flow; the browser owns only the accessible loading, empty, and selection presentation.
 
 The responsive breakpoints are:
 
