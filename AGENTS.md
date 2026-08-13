@@ -124,6 +124,8 @@ Parity work is manual and explicit; Android changes require a separate user requ
 - Keep generated key/session files owner-readable only where POSIX permissions are available.
 - Do not weaken the Compose loopback default, non-root user, dropped capabilities, read-only root,
   `no-new-privileges`, or health check without documenting a concrete reason in `SECURITY.md`.
+- Preserve LAN mode as an explicit opt-in: accept only literal private/link-local addresses and require
+  LAN mutation origins to match the request Host and port. Never turn it into a public wildcard.
 - Never commit `.env`, volume data, credentials, tokens, keys, logs, or Twitch response captures.
 
 ## UI design system

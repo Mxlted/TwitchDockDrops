@@ -45,6 +45,7 @@ fun main() {
     val webServer = WebServer(
         port = environment.port,
         listenHost = environment.listenHost,
+        allowLanAccess = environment.allowLanAccess,
         trustedHosts = environment.trustedHosts,
         trustedOrigins = environment.trustedOrigins,
         runtime = runtime,

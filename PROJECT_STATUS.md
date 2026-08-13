@@ -22,6 +22,7 @@ changes.
 - [x] Continuous confirmed-progress watchdogs drive unlinked and linked channel/campaign recovery
 - [x] Every route enforces configured trusted Hosts; mutations enforce configured Origins and strict schemas
 - [x] Direct JVM listening defaults to loopback and Compose separates internal listen from host publication
+- [x] The example environment enables private-LAN access with same-origin Host/Origin enforcement
 - [x] OAuth credentials are restricted to trusted Twitch endpoints; Spade watch events retain session attribution
 - [x] Watch earning uses fresh direct-Spade form posts with canonical channel/stream/game/user attribution
 - [x] Watch/configuration rejection is separate from authoritative invalid-token expiry
@@ -49,6 +50,14 @@ changes.
 
 ## Verification record — 2026-08-13
 
+- Added opt-in private-network request trust and made `.env.example` LAN-ready. LAN mode accepts only
+  literal private/link-local destination addresses, requires mutation Origin to match the request Host
+  and port, and leaves the no-`.env` Compose default loopback-only.
+- Gradle 9.5.1/JDK 21 verification passed 90 tests across 16 suites. Compose resolved the base config
+  to `127.0.0.1` with LAN mode off and `.env.example` to `0.0.0.0` with LAN mode on. Packaged and
+  hardened-container smokes returned HTTP 200 for a private-IP health request and matching-origin
+  settings mutation; a mismatched LAN origin returned HTTP 403. The Docker image rebuilt successfully
+  and reran the complete suite in its isolated builder stage.
 - Prepared the root project for independent GitHub publication: removed Android submodule metadata,
   ignored optional local Android checkouts and broader local secret/build artifacts, added a root MIT
   license, and replaced repository-relative Android documentation links with the upstream repository.

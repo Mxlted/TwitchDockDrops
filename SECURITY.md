@@ -2,22 +2,31 @@
 
 ## Default deployment
 
-Compose publishes the UI only on `127.0.0.1`. This is the supported safe default. The UI has control
-over the Twitch session and miner, so access to the port should be treated like access to the local
-desktop application.
+Compose publishes the UI only on `127.0.0.1` when no `.env` is present. This is the safest default.
+The UI has control over the Twitch session and miner, so access to the port should be treated like
+access to the local desktop application.
 
-If you change `TWITCH_DROPS_BIND` to `0.0.0.0` or a LAN address, put an authenticated HTTPS reverse
-proxy in front of the service and use host firewall rules. Also configure
-`TWITCH_DROPS_TRUSTED_HOSTS` with the external Host plus loopback for the container health check, and
-`TWITCH_DROPS_TRUSTED_ORIGINS` with the exact external HTTPS origin. The application validates Host
-on every route and Origin on every mutation. It deliberately ignores `Forwarded`,
-`X-Forwarded-Host`, and related headers rather than letting an unauthenticated client redefine the
-trust boundary. The application does not provide user accounts, password authentication, or TLS
-termination.
+Copying `.env.example` to `.env` explicitly enables trusted-LAN access: Compose publishes on every
+host IPv4 interface and the application accepts literal RFC 1918, IPv4 link-local, IPv6 unique-local,
+and IPv6 link-local server addresses. LAN-mode mutations are accepted only over HTTP when the Origin
+host and port exactly match the request Host, which preserves same-origin protection without knowing
+the Docker host's address in advance. DNS and mDNS names are not inferred; list those explicitly in
+`TWITCH_DROPS_TRUSTED_HOSTS` and `TWITCH_DROPS_TRUSTED_ORIGINS` when needed.
+
+LAN mode does not authenticate clients. Every device able to reach the port can control the miner and
+saved Twitch session. Use it only on a trusted private network, keep host firewall rules in place, and
+never port-forward the service. Guest Wi-Fi, shared networks, public interfaces, and internet access
+require an authenticated HTTPS reverse proxy. Configure its external Host plus loopback in
+`TWITCH_DROPS_TRUSTED_HOSTS` and its exact HTTPS origin in `TWITCH_DROPS_TRUSTED_ORIGINS`.
+
+The application validates Host on every route and Origin on every mutation. It deliberately ignores
+`Forwarded`, `X-Forwarded-Host`, and related headers rather than letting an unauthenticated client
+redefine the trust boundary. The application does not provide user accounts, password authentication,
+or TLS termination.
 
 Direct JVM execution binds to `127.0.0.1` unless `TWITCH_DROPS_LISTEN_HOST` is explicitly changed.
-Compose uses `0.0.0.0` only for the container-internal listener and continues to publish the host port
-on `127.0.0.1` by default.
+Compose uses `0.0.0.0` for the container-internal listener. Host publication remains loopback-only
+without `.env`; the supplied example changes host publication to `0.0.0.0` for explicit LAN use.
 
 ## Twitch credentials
 

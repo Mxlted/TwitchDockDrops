@@ -14,6 +14,7 @@ services:
       TWITCH_DROPS_DATA_DIR: /data
       TWITCH_DROPS_PORT: 8080
       TWITCH_DROPS_LISTEN_HOST: 0.0.0.0
+      TWITCH_DROPS_ALLOW_LAN: "${TWITCH_DROPS_ALLOW_LAN:-false}"
       TWITCH_DROPS_TRUSTED_HOSTS: "${TWITCH_DROPS_TRUSTED_HOSTS:-127.0.0.1,localhost,[::1]}"
       TWITCH_DROPS_TRUSTED_ORIGINS: "${TWITCH_DROPS_TRUSTED_ORIGINS:-http://127.0.0.1:*,http://localhost:*,http://[::1]:*}"
       JAVA_OPTS: "${TWITCH_DROPS_JAVA_OPTS:--Xms16m -Xmx256m -XX:+UseSerialGC -XX:MaxMetaspaceSize=96m -XX:ReservedCodeCacheSize=32m -XX:MaxDirectMemorySize=32m -Dfile.encoding=UTF-8}"

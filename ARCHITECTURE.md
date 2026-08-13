@@ -130,6 +130,11 @@ Every route validates Host against `TWITCH_DROPS_TRUSTED_HOSTS` before routing. 
 `application/json`, an object body no larger than 64 KiB, known fields, exact JSON primitive types,
 and bounded values. Forwarded headers are ignored. Errors are stable JSON with an `error` field.
 
+`TWITCH_DROPS_ALLOW_LAN` is an opt-in extension to those static allowlists. It accepts only literal
+private or link-local IP Host values. A LAN mutation must use HTTP and its Origin host and port must
+match the request Host exactly, so another LAN web origin cannot issue commands merely because both
+addresses are private. Public IPs and inferred DNS names remain rejected.
+
 Persistence mutations share one server mutex and return HTTP 200 only after atomic local storage
 succeeds. Commands whose Twitch/network work continues asynchronously return HTTP 202. An acknowledged
 log clear holds the repository lock through deletion, so it cannot erase a later append. Long Twitch
@@ -139,8 +144,8 @@ mutation while that command is in flight, and the runtime remains the final idem
 `/api/auth/replace` explicitly invalidates the current device-code generation and requests a new code.
 
 Direct execution listens on loopback by default. Compose explicitly uses a container-internal
-`0.0.0.0` listener while retaining loopback host publication. Reverse proxies must configure external
-trusted hosts and origins explicitly.
+`0.0.0.0` listener while retaining loopback host publication unless `.env` opts into LAN binding.
+Reverse proxies must configure external trusted hosts and origins explicitly.
 
 ## Persistence
 

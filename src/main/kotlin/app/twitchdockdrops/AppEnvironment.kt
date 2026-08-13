@@ -7,6 +7,7 @@ data class AppEnvironment(
     val dataDirectory: Path,
     val port: Int,
     val listenHost: String,
+    val allowLanAccess: Boolean,
     val trustedHosts: Set<String>,
     val trustedOrigins: Set<String>,
     val sessionKey: String?,
@@ -32,6 +33,7 @@ data class AppEnvironment(
                 ?.trim()
                 ?.takeIf(String::isNotEmpty)
                 ?: "127.0.0.1"
+            val allowLanAccess = environment.boolean("TWITCH_DROPS_ALLOW_LAN")
             val trustedHosts = environment.csv("TWITCH_DROPS_TRUSTED_HOSTS")
                 .ifEmpty { setOf("localhost", "127.0.0.1", "[::1]") }
             val trustedOrigins = environment.csv("TWITCH_DROPS_TRUSTED_ORIGINS")
@@ -47,6 +49,7 @@ data class AppEnvironment(
                 dataDirectory = dataDirectory,
                 port = port,
                 listenHost = listenHost,
+                allowLanAccess = allowLanAccess,
                 trustedHosts = trustedHosts,
                 trustedOrigins = trustedOrigins,
                 sessionKey = environment["TWITCH_DROPS_SESSION_KEY"]
@@ -63,3 +66,15 @@ private fun Map<String, String>.csv(name: String): Set<String> = this[name]
     ?.filter(String::isNotEmpty)
     ?.toSet()
     .orEmpty()
+
+private fun Map<String, String>.boolean(name: String): Boolean {
+    val configured = this[name]
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?: return false
+    return when (configured.lowercase()) {
+        "true" -> true
+        "false" -> false
+        else -> throw IllegalArgumentException("$name must be true or false.")
+    }
+}

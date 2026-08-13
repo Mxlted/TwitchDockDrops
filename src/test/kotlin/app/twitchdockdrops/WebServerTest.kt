@@ -20,6 +20,7 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
@@ -114,6 +115,43 @@ class WebServerTest {
         ).use {
             assertEquals(403, it.code)
             assertStructuredError(it)
+        }
+    }
+
+    @Test
+    fun `lan mode accepts private same-origin addresses only`() {
+        val enabled = TrustedRequestPolicy(
+            trustedHosts = setOf("localhost"),
+            trustedOrigins = setOf("http://localhost:*"),
+            allowLanAccess = true,
+        )
+        listOf(
+            "10.20.30.40:8080" to "http://10.20.30.40:8080",
+            "172.31.5.8:9090" to "http://172.31.5.8:9090",
+            "192.168.1.25:8080" to "http://192.168.1.25:8080",
+            "169.254.10.4:8080" to "http://169.254.10.4:8080",
+            "[fd00::25]:8080" to "http://[fd00::25]:8080",
+        ).forEach { (host, origin) ->
+            enabled.verifyHost(listOf(host))
+            enabled.verifyOrigin(listOf(origin), listOf(host))
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            enabled.verifyHost(listOf("203.0.113.10:8080"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            enabled.verifyOrigin(
+                listOf("http://192.168.1.26:8080"),
+                listOf("192.168.1.25:8080"),
+            )
+        }
+
+        val disabled = TrustedRequestPolicy(
+            trustedHosts = setOf("localhost"),
+            trustedOrigins = setOf("http://localhost:*"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            disabled.verifyHost(listOf("192.168.1.25:8080"))
         }
     }
 

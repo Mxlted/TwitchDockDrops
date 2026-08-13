@@ -31,12 +31,16 @@ Requirements:
 Start the service:
 
 ```bash
+cp .env.example .env
 docker compose up --build -d
 ```
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080), choose **Connect Twitch**, and approve the device
-code at the Twitch activation page. The app never asks for a Twitch password. A successful login
-loads the Drops inventory automatically; there is no need to issue a separate refresh.
+Docker Compose loads `.env` automatically. With the supplied example copied into place, open
+`http://<docker-host-lan-ip>:8080` from any device on the same trusted LAN, or open
+[http://127.0.0.1:8080](http://127.0.0.1:8080) on the Docker host. Choose **Connect Twitch**, then
+approve the device code at the Twitch activation page. The app never asks for a Twitch password. A
+successful login loads the Drops inventory automatically; there is no need to issue a separate
+refresh.
 
 Repeated **Connect Twitch** actions do not replace a device code that is still being prepared or
 polled. Use **Request a new code** only when you explicitly want to cancel the displayed attempt and
@@ -76,9 +80,11 @@ Follow service logs:
 docker compose logs -f app
 ```
 
-The host publication defaults to `127.0.0.1:8080`. Copy `.env.example` to `.env` to change the host
-port. Direct JVM execution also listens on `127.0.0.1` by default; Compose explicitly listens on
-`0.0.0.0` only inside the container while retaining the loopback host publication.
+Without `.env`, host publication safely defaults to `127.0.0.1:8080`. Copying `.env.example` to
+`.env` opts into LAN access by publishing on `0.0.0.0:8080` and accepting literal RFC 1918,
+link-local, and IPv6 unique-local server addresses. LAN mutation requests must remain same-origin:
+their browser Origin must match the requested server IP and port. Direct JVM execution continues to
+listen on `127.0.0.1` by default; Compose listens on `0.0.0.0` inside the container.
 
 Every request validates its `Host` header, including health, state, events, and static assets.
 Mutations additionally require a configured browser `Origin`, strict `application/json`, an exact
@@ -92,8 +98,11 @@ Operator-visible environment variables:
   nonblank value is a startup error.
 - `TWITCH_DROPS_LISTEN_HOST` — direct JVM listener; defaults to `127.0.0.1`. Compose sets it to
   `0.0.0.0` inside the container.
+- `TWITCH_DROPS_ALLOW_LAN` — accepts literal private/link-local Host addresses and matching same-origin
+  HTTP mutations; defaults to `false`, while `.env.example` enables it for LAN use.
 - `TWITCH_DROPS_TRUSTED_HOSTS` — comma-separated accepted Host names or authorities. Bare names accept
-  any port; entries with a port are exact. Keep `127.0.0.1` for the Compose health check.
+  any port; entries with a port are exact. LAN DNS/mDNS names still require explicit entries. Keep
+  `127.0.0.1` for the Compose health check.
 - `TWITCH_DROPS_TRUSTED_ORIGINS` — comma-separated `http://` or `https://` browser origins. Exact
   origins are recommended; the explicit `:*` port form is intended for loopback Compose publication.
 - `TWITCH_DROPS_SESSION_KEY` — optional base64-encoded 32-byte AES key supplied through a secret
@@ -162,11 +171,13 @@ rewriting history are separate actions and should be performed only when explici
 
 ## Security boundary
 
-The web UI intentionally has no application-level password because the default Compose port is
-loopback-only. Do not publish it on a LAN or public interface without an authenticated TLS reverse
-proxy, explicit trusted hosts/origins, and firewall rules. The application never trusts
-`Forwarded`/`X-Forwarded-*` headers. See [SECURITY.md](./SECURITY.md) for the complete threat model and
-deployment guidance.
+The web UI has no application-level password. The base Compose defaults are loopback-only;
+`.env.example` deliberately opts into access from a trusted private LAN, where every device that can
+reach the port can control the miner and its Twitch session. Do not use LAN mode on guest or untrusted
+networks, expose it through router port forwarding, or publish it on the internet. Broader exposure
+requires an authenticated TLS reverse proxy, explicit trusted hosts/origins, and firewall rules. The
+application never trusts `Forwarded`/`X-Forwarded-*` headers. See [SECURITY.md](./SECURITY.md) for the
+complete threat model and deployment guidance.
 
 ## Project documentation
 

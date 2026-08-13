@@ -10,6 +10,8 @@ import com.nathan.twitchdropsminer.android.runtime.LocalMinerRuntime
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.IOException
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
 import java.nio.charset.StandardCharsets
@@ -37,6 +39,7 @@ class WebServer(
     private val settingsRepository: SettingsRepository,
     private val logRepository: LogRepository,
     listenHost: String = "127.0.0.1",
+    allowLanAccess: Boolean = false,
     trustedHosts: Set<String> = setOf("localhost", "127.0.0.1", "[::1]"),
     trustedOrigins: Set<String> = setOf(
         "http://localhost:$port",
@@ -46,7 +49,7 @@ class WebServer(
     private val maxSseClients: Int = DefaultMaxSseClients,
 ) : AutoCloseable {
     private val stateJson = StateJson()
-    private val requestTrust = TrustedRequestPolicy(trustedHosts, trustedOrigins)
+    private val requestTrust = TrustedRequestPolicy(trustedHosts, trustedOrigins, allowLanAccess)
     private val mutationMutex = Mutex()
     private val eventClients = Semaphore(maxSseClients.coerceAtLeast(1), true)
     private val executor: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
@@ -228,7 +231,10 @@ class WebServer(
         if (!contentType.equals("application/json", ignoreCase = true)) {
             throw RequestException(415, "Mutations require application/json.")
         }
-        requestTrust.verifyOrigin(exchange.requestHeaders["Origin"])
+        requestTrust.verifyOrigin(
+            exchange.requestHeaders["Origin"],
+            exchange.requestHeaders["Host"],
+        )
     }
 
     private fun streamEvents(exchange: HttpExchange) {
@@ -332,6 +338,7 @@ class WebServer(
 internal class TrustedRequestPolicy(
     trustedHosts: Set<String>,
     trustedOrigins: Set<String>,
+    private val allowLanAccess: Boolean = false,
 ) {
     private val hosts = trustedHosts.map { value ->
         parseAuthority(value) ?: throw IllegalArgumentException("Invalid trusted Host entry.")
@@ -350,17 +357,25 @@ internal class TrustedRequestPolicy(
             ?: throw RequestException(400, "Exactly one Host header is required.")
         val authority = parseAuthority(value)
             ?: throw RequestException(400, "Host header is invalid.")
-        if (hosts.none { allowed -> allowed.matches(authority) }) {
+        val trustedLanAddress = allowLanAccess && authority.host.isLanAddressLiteral()
+        if (hosts.none { allowed -> allowed.matches(authority) } && !trustedLanAddress) {
             throw RequestException(403, "Host is not trusted.")
         }
     }
 
-    fun verifyOrigin(values: List<String>?) {
+    fun verifyOrigin(values: List<String>?, hostValues: List<String>?) {
         val value = values?.singleOrNull()
             ?: throw RequestException(403, "A trusted Origin header is required.")
         val origin = parseOrigin(value)
             ?: throw RequestException(403, "Request origin could not be verified.")
-        if (origins.none { allowed -> allowed.matches(origin) }) {
+        val requestHost = hostValues?.singleOrNull()?.let(::parseAuthority)
+        val trustedLanOrigin = allowLanAccess &&
+            origin.scheme == "http" &&
+            origin.authority.host.isLanAddressLiteral() &&
+            requestHost != null &&
+            requestHost.host == origin.authority.host &&
+            (requestHost.port ?: 80) == origin.authority.port
+        if (origins.none { allowed -> allowed.matches(origin) } && !trustedLanOrigin) {
             throw RequestException(403, "Request origin is not trusted.")
         }
     }
@@ -424,6 +439,27 @@ private fun parseAuthority(raw: String): Authority? {
     val host = uri.host?.lowercase(Locale.ROOT)?.trim('[', ']') ?: return null
     if (host.isEmpty() || uri.rawUserInfo != null || uri.rawPath.orEmpty().isNotEmpty()) return null
     return Authority(host, uri.port.takeIf { it >= 0 })
+}
+
+private fun String.isLanAddressLiteral(): Boolean {
+    val ipv4 = split('.').takeIf { segments ->
+        segments.size == 4 && segments.all { segment ->
+            segment.isNotEmpty() && segment.all(Char::isDigit)
+        }
+    }?.map { segment -> segment.toIntOrNull() ?: return false }
+    if (ipv4 != null && ipv4.all { it in 0..255 }) {
+        return ipv4[0] == 10 ||
+            (ipv4[0] == 172 && ipv4[1] in 16..31) ||
+            (ipv4[0] == 192 && ipv4[1] == 168) ||
+            (ipv4[0] == 169 && ipv4[1] == 254)
+    }
+    if (':' !in this) return false
+    val address = runCatching { InetAddress.getByName(this) }.getOrNull()
+    if (address !is Inet6Address) return false
+    val bytes = address.address
+    val first = bytes[0].toInt() and 0xff
+    val second = bytes[1].toInt() and 0xff
+    return (first and 0xfe) == 0xfc || (first == 0xfe && (second and 0xc0) == 0x80)
 }
 
 private fun parseOriginPattern(raw: String): OriginPattern? {
