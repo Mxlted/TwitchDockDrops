@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0e1715">
+    <meta name="description" content="A calm, container-hosted Twitch Drops miner.">
+    <title>Twitch Dock Drops</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <script src="/theme-init.js"></script>
+    <link rel="stylesheet" href="/app.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-mint" aria-hidden="true"></div>
+    <div class="ambient ambient-lilac" aria-hidden="true"></div>
+    <div class="ambient ambient-peach" aria-hidden="true"></div>
+
+    <div class="app-shell">
+      <aside class="sidebar glass-panel">
+        <a class="brand" href="/" aria-label="Twitch Dock Drops overview">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 48" role="img">
+              <path d="M24 6C17 14 11 20 11 29a13 13 0 0 0 26 0C37 20 31 14 24 6Z"></path>
+              <path class="brand-spark" d="M20 30c2.8-1.2 5.4-3.7 7-7 1.2 4.6-.2 8.4-4.1 11.2"></path>
+            </svg>
+          </span>
+          <span>
+            <strong>DockDrops</strong>
+            <small>quietly keeping watch</small>
+          </span>
+        </a>
+
+        <nav class="primary-nav" aria-label="Primary navigation">
+          <button class="nav-item is-active" type="button" data-view="overview">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"></path></svg>
+            <span>Overview</span>
+          </button>
+          <button class="nav-item" type="button" data-view="campaigns">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-4l-3 4-3-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"></path><path d="M8 10h8M8 7h5"></path></svg>
+            <span>Campaigns</span>
+            <span class="nav-count" id="campaignCount">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view="activity">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h3l2-6 4 12 2-6h5"></path></svg>
+            <span>Activity</span>
+          </button>
+          <button class="nav-item" type="button" data-view="settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"></path></svg>
+            <span>Settings</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="mini-orbit" aria-hidden="true"><span></span></div>
+          <p>Local-first<br><strong>Container healthy</strong></p>
+        </div>
+      </aside>
+
+      <main class="main-area">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="pageEyebrow">Your drop garden</p>
+            <h1 id="pageTitle">Overview</h1>
+          </div>
+          <div class="topbar-actions">
+            <span class="preview-pill" id="previewPill" hidden>Preview data</span>
+            <span class="connection-pill is-connecting" id="connectionPill">
+              <span class="status-dot"></span>
+              <span>Connecting</span>
+            </span>
+            <button class="icon-button theme-button" id="themeButton" type="button" data-action="toggle-theme" aria-label="Use light mode" title="Use light mode">
+              <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+              <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 15.1A8.5 8.5 0 0 1 8.9 3.7 8.5 8.5 0 1 0 20.3 15.1Z"></path></svg>
+            </button>
+            <button class="icon-button" type="button" data-action="refresh" aria-label="Refresh inventory" title="Refresh inventory">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5"></path><path d="M18.2 15a7 7 0 1 1-.3-6.4L20 12"></path></svg>
+            </button>
+          </div>
+        </header>
+
+        <section id="app" class="content" aria-live="polite">
+          <div class="loading-garden">
+            <span></span><span></span><span></span>
+            <p>Opening the greenhouse…</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <nav class="mobile-nav glass-panel" aria-label="Mobile navigation">
+      <button class="is-active" type="button" data-view="overview"><span>Overview</span></button>
+      <button type="button" data-view="campaigns"><span>Campaigns</span></button>
+      <button type="button" data-view="activity"><span>Activity</span></button>
+      <button type="button" data-view="settings"><span>Settings</span></button>
+    </nav>
+
+    <dialog id="confirmDialog" class="confirm-dialog">
+      <form method="dialog">
+        <div class="dialog-icon" aria-hidden="true">?</div>
+        <h2 id="confirmTitle">Are you sure?</h2>
+        <p id="confirmMessage"></p>
+        <div class="dialog-actions">
+          <button class="button button-quiet" value="cancel">Keep things as they are</button>
+          <button class="button button-danger" id="confirmButton" value="confirm">Continue</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast-region" id="toastRegion" aria-live="assertive" aria-atomic="true"></div>
+  </body>
+</html>

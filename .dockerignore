@@ -1,0 +1,12 @@
+.git
+.gradle
+build
+data
+.env
+/TwitchDropsMinerAndroid/
+**/build
+**/.gradle
+**/.idea
+**/*.iml
+**/.DS_Store
+**/local.properties
