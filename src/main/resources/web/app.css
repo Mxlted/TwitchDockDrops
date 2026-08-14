@@ -740,7 +740,6 @@ a {
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-soft);
-  backdrop-filter: blur(24px) saturate(120%);
 }
 
 .stat-card {
