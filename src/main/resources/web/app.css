@@ -296,13 +296,12 @@ a {
   background: transparent;
   text-align: left;
   cursor: pointer;
-  transition: transform 180ms ease, color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+  transition: color 180ms ease, background 180ms ease, box-shadow 180ms ease;
 }
 
 .nav-item:hover {
   color: var(--ink);
   background: var(--surface-soft);
-  transform: translateX(2px);
 }
 
 .nav-item.is-active {

@@ -53,6 +53,11 @@ changes.
 
 ## Verification record — 2026-08-13
 
+- Removed the sidebar navigation hover translation that could expose a Chromium backdrop-filter tile
+  seam as a pale vertical stripe through content cards. Desktop hover QA at 1200×900 retained the
+  rounded color highlight with no transformed layer or horizontal overflow; mobile QA at 390×844
+  retained the bottom navigation with no page overflow. The clean Gradle/JDK 21 test and install
+  distribution passed with 93 tests across 16 suites.
 - Fallback to other games now defaults on for fresh, reset, and legacy field-absent settings while an
   explicitly saved off preference remains off after restart. Focused persistence coverage and the
   clean Gradle 9.5.1/JDK 21 test/install-distribution build passed with 93 tests across 16 suites.
