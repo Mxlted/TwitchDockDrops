@@ -18,6 +18,7 @@ changes.
 - [x] Campaign/drop boundaries and claim cooldowns participate in serialized runtime scheduling
 - [x] Saved priorities survive incomplete Twitch inventories and promote in their saved game order
 - [x] Default Auto Mode exhausts claimed, viewing, and fresh linked work before unlinked work
+- [x] Fallback to other games is enabled by default while an explicitly saved off choice is preserved
 - [x] Login start is idempotent and replacement codes use an explicit generation-invalidating command
 - [x] Result-aware claim cooldowns reselect useful work and retry automatically without watch spam
 - [x] Continuous confirmed-progress watchdogs drive unlinked and linked channel/campaign recovery
@@ -52,6 +53,11 @@ changes.
 
 ## Verification record — 2026-08-13
 
+- Fallback to other games now defaults on for fresh, reset, and legacy field-absent settings while an
+  explicitly saved off preference remains off after restart. Focused persistence coverage and the
+  clean Gradle 9.5.1/JDK 21 test/install-distribution build passed with 93 tests across 16 suites.
+  Android parity was reviewed read-only; its separate default remains off pending an explicit Android
+  change request.
 - Unknown-drop progress now prompts an immediate serialized inventory refresh while retaining the
   current watch; unresolved reports retry no more than every five minutes. A regression reproduces
   Twitch's blank drop ID at 0 minutes and verifies one immediate reload, clearer activity text, and no

@@ -14,6 +14,27 @@ class SettingsRepositoryTest {
     lateinit var directory: Path
 
     @Test
+    fun `new and reset settings enable fallback to other games by default`() = runBlocking {
+        val repository = SettingsRepository(directory)
+
+        assertTrue(repository.settings.value.fallbackToOtherGames)
+        repository.update { it.copy(fallbackToOtherGames = false) }
+        repository.resetSettings()
+
+        assertTrue(repository.settings.value.fallbackToOtherGames)
+    }
+
+    @Test
+    fun `saved settings without a fallback preference adopt the enabled default`() {
+        Files.writeString(
+            directory.resolve("settings.json"),
+            """{"schemaVersion":1,"hasCompletedOnboarding":true}""",
+        )
+
+        assertTrue(SettingsRepository(directory).settings.value.fallbackToOtherGames)
+    }
+
+    @Test
     fun `settings are normalized and survive a new repository instance`() = runBlocking {
         val repository = SettingsRepository(directory)
         repository.update {
@@ -21,7 +42,7 @@ class SettingsRepositoryTest {
                 watchIntervalSeconds = 4,
                 inventoryRefreshMinutes = 999,
                 selectedGamePriority = listOf(" Warframe ", "warframe", "Palia"),
-                fallbackToOtherGames = true,
+                fallbackToOtherGames = false,
             )
         }
 
@@ -29,7 +50,7 @@ class SettingsRepositoryTest {
         assertEquals(20, loaded.watchIntervalSeconds)
         assertEquals(180, loaded.inventoryRefreshMinutes)
         assertEquals(listOf("Warframe", "Palia"), loaded.selectedGamePriority)
-        assertTrue(loaded.fallbackToOtherGames)
+        assertFalse(loaded.fallbackToOtherGames)
     }
 
     @Test

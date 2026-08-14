@@ -126,7 +126,7 @@ class SettingsRepository(dataDirectory: Path) {
                 inventoryRefreshMinutes = root.int("inventoryRefreshMinutes", 60),
                 runInForeground = root.boolean("runInForeground", true),
                 keepActiveScreenMode = root.boolean("keepActiveScreenMode", false),
-                fallbackToOtherGames = root.boolean("fallbackToOtherGames", false),
+                fallbackToOtherGames = root.boolean("fallbackToOtherGames", true),
                 autoModePriorityOrder = root.stringList("autoModePriorityOrder")
                     .mapNotNull(AutoModePriority::fromStorageKey),
                 excludedCampaignIds = root.stringList("excludedCampaignIds").toSet(),

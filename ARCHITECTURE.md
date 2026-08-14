@@ -81,9 +81,10 @@ configuration bundles are accepted only from `assets.twitch.tv` or the legacy
 
 Automatic selection exhausts linked work before unlinked work by default: linked claimed-progress,
 linked viewing-progress, linked fresh, unlinked claimed-progress, unlinked viewing-progress, then
-unlinked fresh. User-saved ordering remains authoritative. Both campaign and drop start/end windows
-must be open before work is watchable, including when the drop omits its own end. Completed or
-claimable drops remain claim candidates after their watch window.
+unlinked fresh. Fallback to other games is enabled for new and reset settings; an explicitly saved off
+preference remains authoritative. User-saved ordering remains authoritative. Both campaign and drop
+start/end windows must be open before work is watchable, including when the drop omits its own end.
+Completed or claimable drops remain claim candidates after their watch window.
 Within the prioritized-game group, promotion checks only games earlier than the current game in the
 saved order; fallback work still checks every higher fallback group. Promotion results are revalidated
 against the latest settings before they commit.
