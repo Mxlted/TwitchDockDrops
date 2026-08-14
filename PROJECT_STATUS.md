@@ -14,6 +14,7 @@ changes.
 - [x] Existing Twitch sessions refresh inventory automatically after container startup
 - [x] Runtime lifecycle commands are serialized and stale coroutine results are generation-guarded
 - [x] Active inventory refreshes are coalesced and mining waits react to settings/control changes
+- [x] Unknown Twitch drops trigger an immediate inventory refresh with a five-minute retry cooldown
 - [x] Campaign/drop boundaries and claim cooldowns participate in serialized runtime scheduling
 - [x] Saved priorities survive incomplete Twitch inventories and promote in their saved game order
 - [x] Default Auto Mode exhausts claimed, viewing, and fresh linked work before unlinked work
@@ -51,6 +52,12 @@ changes.
 
 ## Verification record — 2026-08-13
 
+- Unknown-drop progress now prompts an immediate serialized inventory refresh while retaining the
+  current watch; unresolved reports retry no more than every five minutes. A regression reproduces
+  Twitch's blank drop ID at 0 minutes and verifies one immediate reload, clearer activity text, and no
+  rapid refresh loop. The clean Gradle 9.5.1/JDK 21 suite and install distribution passed with 91 tests
+  across 16 suites. Android parity was reviewed read-only; the separate Android runtime still ignores
+  unexpected drops until its normal refresh and remained outside this root-only change.
 - Reworked the root README into a user-facing app showcase with a safe built-in-preview screenshot,
   concise benefits, feature highlights, a three-step farming flow, and a focused quick start. Moved
   networking, environment, persistence, runtime, and maintenance detail into `OPERATIONS.md`.

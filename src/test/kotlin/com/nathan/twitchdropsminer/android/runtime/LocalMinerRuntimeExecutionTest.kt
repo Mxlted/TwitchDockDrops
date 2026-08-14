@@ -121,6 +121,27 @@ class LocalMinerRuntimeExecutionTest {
     }
 
     @Test
+    fun `unknown Twitch drop refreshes inventory immediately without a refresh loop`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val campaign = watchCampaign("known", "Known Game")
+        val api = UnknownDropTwitchApi(campaign)
+        val runtime = runtime(store, api)
+
+        runtime.startMining()
+        withTimeout(2_000) {
+            while (api.inventoryCalls.get() < 2) delay(10)
+        }
+        delay(150)
+
+        assertEquals(2, api.inventoryCalls.get())
+        val refreshActivity = runtime.snapshot.value.activity.first { activity ->
+            activity.title == "Refreshing inventory for Twitch-reported drop"
+        }
+        assertTrue(refreshActivity.detail?.contains("an unrecognized drop at 0m") == true)
+        runtime.stopMiningAndJoin()
+    }
+
+    @Test
     fun `ordinary authentication start is idempotent and mining commands preserve device code`() = runBlocking {
         val api = AuthenticationTwitchApi()
         val runtime = runtime(sessionStore(), api)
@@ -630,6 +651,48 @@ private class PartialInventoryTwitchApi(
     override suspend fun fetchChannel(session: StoredTwitchSession, login: String, expectedGame: String?): Channel = unused()
     override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel): Boolean = unused()
     override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress? = unused()
+    override suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult = unused()
+    override fun newDeviceId(): String = "device"
+
+    private fun <T> unused(): T = error("Unexpected Twitch API call")
+}
+
+private class UnknownDropTwitchApi(
+    private val campaign: Campaign,
+) : TwitchApi {
+    val inventoryCalls = AtomicInteger()
+
+    override suspend fun validateAccessToken(accessToken: String): ValidatedToken =
+        ValidatedToken("12345", "client")
+
+    override suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign> {
+        inventoryCalls.incrementAndGet()
+        return listOf(campaign)
+    }
+
+    override suspend fun fetchEligibleChannels(
+        session: StoredTwitchSession,
+        campaign: Campaign,
+        limit: Int,
+    ): List<Channel> = listOf(
+        Channel(
+            id = 42,
+            name = "channel-known",
+            game = campaign.gameName,
+            online = true,
+            dropsEnabled = true,
+            broadcastId = "broadcast-known",
+        ),
+    )
+
+    override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel): Boolean = true
+
+    override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress =
+        CurrentDropProgress(dropId = "", currentMinutes = 0)
+
+    override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization = unused()
+    override suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult = unused()
+    override suspend fun fetchChannel(session: StoredTwitchSession, login: String, expectedGame: String?): Channel = unused()
     override suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult = unused()
     override fun newDeviceId(): String = "device"
 

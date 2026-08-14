@@ -60,6 +60,7 @@ private val FailedChannelRetryDelay: Duration = Duration.ofMinutes(15)
 private val HigherPriorityChannelCheckInterval: Duration = Duration.ofMinutes(2)
 private val MinLinkedProgressCheckDelay: Duration = Duration.ofMinutes(5)
 private val MaxLinkedProgressCheckDelay: Duration = Duration.ofMinutes(10)
+private val UnknownDropInventoryRefreshCooldown: Duration = Duration.ofMinutes(5)
 
 class LocalMinerRuntime(
     private val settingsRepository: SettingsRepository,
@@ -829,6 +830,7 @@ class LocalMinerRuntime(
         var channelDiscoveryFailures = 0
         var handledChannelControlRequestId = channelControlRequests.value.id
         var handledInventoryRefreshRequestId = inventoryRefreshRequests.value
+        var nextUnknownDropRefreshAt: Instant? = null
         while (currentCoroutineContext().isActive) {
             ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
             awaitUsableNetwork()
@@ -1312,6 +1314,26 @@ class LocalMinerRuntime(
                     campaigns = campaignSnapshot,
                     channel = currentChannel,
                 )
+                val progressCheckedAt = now()
+                if (progressRefresh.observation == ProgressObservation.UnexpectedDrop) {
+                    val refreshAllowedAt = nextUnknownDropRefreshAt
+                    if (refreshAllowedAt == null || !progressCheckedAt.isBefore(refreshAllowedAt)) {
+                        nextUnknownDropRefreshAt = progressCheckedAt.plus(UnknownDropInventoryRefreshCooldown)
+                        refreshAt = progressCheckedAt
+                        appendActivity(
+                            RuntimePhase.LoadingInventory,
+                            "Refreshing inventory for Twitch-reported drop",
+                            progressRefresh.unknownDropRefreshDetail(currentChannel),
+                        )
+                    } else {
+                        appendDebug(
+                            "Unknown Twitch drop already prompted an inventory refresh; " +
+                                "the next automatic retry is allowed after $refreshAllowedAt.",
+                        )
+                    }
+                } else if (progressRefresh.observation.isConfirmed) {
+                    nextUnknownDropRefreshAt = null
+                }
                 campaignSnapshot = progressRefresh.campaigns
                 if (progressRefresh.campaign.id != currentCampaign.id) {
                     val reportedMode = CampaignPrioritySelector.modeForCampaign(
@@ -2031,15 +2053,11 @@ class LocalMinerRuntime(
             candidate.drops.any { drop -> drop.id == progress.dropId }
         }
         if (reportedCampaign == null) {
-            appendActivity(
-                RuntimePhase.Watching,
-                "Progress belongs to an unknown drop",
-                "Twitch reported drop ${progress.dropId} (${progress.currentMinutes}m) on ${channel.name}; retaining current work until inventory refresh.",
-            )
             return CampaignProgressRefresh(
                 campaigns = campaigns,
                 campaign = campaign,
                 reportedDropId = progress.dropId,
+                reportedMinutes = progress.currentMinutes,
                 observation = ProgressObservation.UnexpectedDrop,
             )
         }
@@ -2049,6 +2067,7 @@ class LocalMinerRuntime(
                 campaigns = campaigns,
                 campaign = campaign,
                 reportedDropId = progress.dropId,
+                reportedMinutes = progress.currentMinutes,
                 observation = ProgressObservation.UnexpectedDrop,
             )
         }
@@ -2056,6 +2075,7 @@ class LocalMinerRuntime(
             campaigns = campaigns.replaceCampaign(applied.campaign),
             campaign = applied.campaign,
             reportedDropId = progress.dropId,
+            reportedMinutes = progress.currentMinutes,
             observation = ProgressObservation.Confirmed,
         )
     }
@@ -3371,8 +3391,20 @@ private data class CampaignProgressRefresh(
     val campaigns: List<Campaign>,
     val campaign: Campaign,
     val reportedDropId: String? = null,
+    val reportedMinutes: Int? = null,
     val observation: ProgressObservation,
-)
+) {
+    fun unknownDropRefreshDetail(channel: Channel): String {
+        val dropLabel = reportedDropId
+            ?.takeIf(String::isNotBlank)
+            ?.take(80)
+            ?.let { "drop $it" }
+            ?: "an unrecognized drop"
+        val minuteLabel = reportedMinutes?.coerceAtLeast(0)?.let { " at ${it}m" }.orEmpty()
+        return "Twitch reported $dropLabel$minuteLabel on ${channel.name}; " +
+            "refreshing inventory now while retaining the current watch."
+    }
+}
 
 private data class ClaimApplication(
     val campaign: Campaign,

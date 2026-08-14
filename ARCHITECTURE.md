@@ -95,7 +95,9 @@ renews cached watch configuration, then abandons the channel if a fresh configur
 normal selector tries another channel for the same campaign, the next campaign in the same group, and
 only then the next fallback group. Existing channel cooldowns prevent rapid cycling. If Twitch reports
 progress for a different known campaign, the runtime follows that authoritative campaign when settings
-permit it.
+permit it. If Twitch reports a drop absent from the current inventory, the same mining loop retains the
+watch and refreshes inventory immediately. Persistent unknown reports are limited to one automatic
+refresh every five minutes, avoiding both the normal 15-minute minimum wait and a rapid refresh loop.
 
 ## Root-owned JVM core
 
