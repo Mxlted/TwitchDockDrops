@@ -188,8 +188,8 @@ injection is constructor-only for MockWebServer tests.
 
 ## Web client
 
-The greenhouse palette is dark by default, with a browser-local light preference available from the
-header. A same-origin pre-paint initializer applies a saved preference before the stylesheet renders,
+The flat greenhouse palette (opaque surfaces, hairline borders, a single mint accent, system type) is
+dark by default, with a browser-local light preference available from the header. A same-origin pre-paint initializer applies a saved preference before the stylesheet renders,
 avoiding a theme flash. The server checks for state changes every two seconds but serializes and sends
 the full state document only when the snapshot, settings, or bounded logs change; idle connections
 receive sparse keepalives. Event clients are capped, and excess tabs receive HTTP 503 and use the

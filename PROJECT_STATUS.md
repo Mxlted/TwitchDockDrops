@@ -39,7 +39,7 @@ changes.
 - [x] JVM reachability is advisory for proxy compatibility; actual HTTP outcomes remain authoritative
 - [x] OAuth/GraphQL/HTML bodies, SSE clients, command queues, logs, and diagnostics are resource-bounded
 - [x] Mutable web assets revalidate and invalid nonnumeric port configuration fails startup
-- [x] Responsive soft-color glassmorphism UI covers overview, campaigns, activity, and settings
+- [x] Responsive flat Apple/Anthropic-style UI covers overview, campaigns, activity, and settings
 - [x] General-user README showcases the app and routes operational detail to a dedicated guide
 - [x] Dark mode is the default, with a persisted light-mode toggle and flash-free theme initialization
 - [x] Active drop/channel Twitch links and linked/unlinked campaign filters are available
@@ -50,6 +50,24 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Verification record — 2026-08-24
+
+- Redesigned the web client from glassmorphism to a flat Apple/Anthropic-style system: opaque
+  surfaces with hairline borders, no blur/gradients/ambient blobs/floating orbit art, a single mint
+  accent with tint/deep token pairs, system type with tight heading tracking and larger body copy, an
+  edge-anchored sidebar and bottom mobile bar, and hero panels that pair copy with a factual aside
+  (status rows, onboarding steps, or the device code). Also fixed browser bugs found on the way: the
+  confirm dialog reset `returnValue` before each prompt so Escape can no longer reuse a previous
+  "confirm" result; clipboard copy explains the secure-context requirement (plain-HTTP LAN mode)
+  instead of throwing a TypeError; the welcome hero's preview link now opens the full active preview
+  (unknown `?preview=` values previously blanked activity and logs); unparseable timestamps render as
+  "—" instead of aborting the render; active-navigation state is scoped to the nav bars; and the
+  range slider no longer paints its track color across the whole control. Verified with headless
+  Chrome at 1440, 900, and 390 widths in both themes across active, logged-out, preparing, device-code,
+  and expired states, plus campaigns, activity, and settings views. `docker compose build` passed with
+  the Gradle test suite in the builder stage; the local host answered `/api/health` and a settings
+  `PUT` with HTTP 200. The README screenshot was regenerated from the built-in preview.
 
 ## Verification record — 2026-08-13
 

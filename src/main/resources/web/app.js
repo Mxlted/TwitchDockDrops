@@ -24,12 +24,14 @@ const previewPill = document.querySelector("#previewPill");
 const confirmDialog = document.querySelector("#confirmDialog");
 const themeButton = document.querySelector("#themeButton");
 const serviceStatus = document.querySelector("#serviceStatus");
+const serviceDot = document.querySelector("#serviceDot");
 const titleByView = {
   overview: ["Overview", "Your drop garden"],
   campaigns: ["Campaigns", "Choose what grows first"],
   activity: ["Activity", "A quiet record of the work"],
   settings: ["Settings", "Shape the runtime"],
 };
+const previewVariants = ["active", "loggedout", "preparing", "code", "expired"];
 
 document.addEventListener("DOMContentLoaded", boot);
 document.addEventListener("click", handleClick);
@@ -107,7 +109,7 @@ function render() {
   pageTitle.textContent = title;
   pageEyebrow.textContent = eyebrow;
   campaignCount.textContent = String(ui.data.snapshot.campaigns.length);
-  document.querySelectorAll("[data-view]").forEach((button) => {
+  document.querySelectorAll(".primary-nav [data-view], .mobile-nav [data-view]").forEach((button) => {
     const isActive = button.dataset.view === ui.view;
     button.classList.toggle("is-active", isActive);
     if (isActive) button.setAttribute("aria-current", "page");
@@ -138,6 +140,7 @@ function renderConnection() {
   connectionPill.className = `connection-pill ${ui.connected ? "is-online" : "is-offline"}`;
   connectionPill.querySelector("span:last-child").textContent = label;
   serviceStatus.textContent = ui.preview ? "Preview only" : ui.connected ? "Host reachable" : "Reconnecting";
+  serviceDot.className = `service-dot ${ui.connected ? "is-online" : "is-offline"}`;
 }
 
 function renderOverview(data) {
@@ -212,11 +215,22 @@ function renderWelcomeHero() {
         <p>Connect Twitch with a one-time device code. The miner stays in this container, follows eligible campaigns, sends watch heartbeats, and claims completed drops.</p>
         <div class="hero-actions">
           <button class="button button-primary" data-action="connect" type="button">${linkIcon()} Connect Twitch</button>
-          <a class="button button-quiet" href="/?preview=1">Explore with preview data</a>
+          <a class="button button-quiet" href="/?preview=active">Explore with preview data</a>
         </div>
       </div>
-      ${renderDropOrbit()}
+      <aside class="hero-aside" aria-label="How it works">
+        <p class="hero-aside-title">How it works</p>
+        <ol class="step-list">
+          ${renderStep(1, "Connect Twitch", "Approve a one-time device code. The token stays encrypted in this container.")}
+          ${renderStep(2, "Choose priorities", "Pin the games you want first, or let Auto Mode find useful work.")}
+          ${renderStep(3, "Let it run", "Watch heartbeats, channel recovery, and claims happen on the server.")}
+        </ol>
+      </aside>
     </section>`;
+}
+
+function renderStep(index, title, detail) {
+  return `<li class="step"><span class="step-index" aria-hidden="true">${index}</span><span><strong>${esc(title)}</strong><span>${esc(detail)}</span></span></li>`;
 }
 
 function renderLoginCodeHero(account) {
@@ -226,17 +240,20 @@ function renderLoginCodeHero(account) {
       <div class="hero-copy">
         <p class="hero-kicker">One small step outside</p>
         <h2>Approve this <em>device code.</em></h2>
-        <p>Open Twitch activation in a new tab, sign in there, and enter the code below. This page will notice when approval is complete.</p>
-        <div class="login-code">
-          <strong>${esc(account.oauthCode)}</strong>
-          <button class="tiny-button" type="button" data-action="copy-code" data-code="${attr(account.oauthCode)}">Copy</button>
-        </div>
+        <p>Open Twitch activation in a new tab, sign in there, and enter the code shown here. This page will notice when approval is complete.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="${attr(activationUrl)}" target="_blank" rel="noopener noreferrer">Open Twitch activation</a>
           <button class="button button-quiet" data-action="replace-code" type="button">Request a new code</button>
         </div>
       </div>
-      ${renderDropOrbit()}
+      <aside class="hero-aside" aria-label="Device code">
+        <p class="hero-aside-title">Your device code</p>
+        <div class="code-display">
+          <strong>${esc(account.oauthCode)}</strong>
+          <button class="tiny-button" type="button" data-action="copy-code" data-code="${attr(account.oauthCode)}">Copy code</button>
+          <small>${account.expiresAt ? `Expires ${esc(formatTime(account.expiresAt))}` : "Enter it on twitch.tv/activate"}</small>
+        </div>
+      </aside>
     </section>`;
 }
 
@@ -251,7 +268,10 @@ function renderLoginPreparingHero() {
           <button class="button button-primary" type="button" disabled>${refreshIcon()} Preparing code…</button>
         </div>
       </div>
-      ${renderDropOrbit(true)}
+      <aside class="hero-aside" aria-label="Login status">
+        <p class="hero-aside-title">Status</p>
+        <div class="spinner-block"><span class="spinner" aria-hidden="true"></span><span>Contacting Twitch for a device code…</span></div>
+      </aside>
     </section>`;
 }
 
@@ -271,18 +291,21 @@ function renderMinerHero(snapshot) {
           <button class="button button-quiet" data-action="refresh" type="button">${refreshIcon()} Refresh inventory</button>
         </div>
       </div>
-      ${renderDropOrbit(active)}
+      <aside class="hero-aside" aria-label="Miner status">
+        <p class="hero-aside-title">Right now</p>
+        <div class="fact-list">
+          ${renderFactRow("Miner", active ? "Watching" : "Resting")}
+          ${renderFactRow("Channel", snapshot.currentChannel ? `@${snapshot.currentChannel.name}` : "—")}
+          ${renderFactRow("Drop", snapshot.activeDrop ? snapshot.activeDrop.name : "—")}
+          ${renderFactRow("Progress", snapshot.activeDrop ? `${percent(snapshot.activeDrop.progress)}% · ${snapshot.activeDrop.remainingMinutes}m left` : "—")}
+          ${renderFactRow("Last update", formatTime(snapshot.lastUpdate))}
+        </div>
+      </aside>
     </section>`;
 }
 
-function renderDropOrbit(active = false) {
-  return `
-    <div class="hero-visual" aria-hidden="true">
-      <div class="drop-orbit ${active ? "is-active" : ""}">
-        <span class="orbit-seed one"></span><span class="orbit-seed two"></span><span class="orbit-seed three"></span>
-        <div class="drop-core">${sproutIcon()}</div>
-      </div>
-    </div>`;
+function renderFactRow(label, value) {
+  return `<div class="fact-row"><span>${esc(label)}</span><span>${esc(value)}</span></div>`;
 }
 
 function renderWatchCard(campaign, drop, channel, channels = [], channelSearchInProgress = false) {
@@ -343,7 +366,7 @@ function renderChannelPicker(channels, searching) {
 function renderEmptyWatch(authenticated) {
   return `
     <div class="empty-state">
-      <div><div class="empty-state-illustration" aria-hidden="true"></div>
+      <div>${emptyIcon()}
       <h3>${authenticated ? "No drop is growing yet" : "The campaign bed is empty"}</h3>
       <p>${authenticated ? "Start the miner, or refresh the inventory if you just linked a game account." : "Connect Twitch to load eligible campaigns and watch progress."}</p></div>
     </div>`;
@@ -448,11 +471,11 @@ function renderActivity(data) {
         </section>
         <section class="soft-card section-card">
           <div class="section-head"><div><h2>Session pulse</h2><p>What the miner believes right now.</p></div></div>
-          <div class="settings-list">
-            ${renderFact("Phase", capitalize(data.snapshot.phase))}
-            ${renderFact("Current task", data.snapshot.currentTask)}
-            ${renderFact("Last update", formatDateTime(data.snapshot.lastUpdate))}
-            ${renderFact("Claims this session", String(data.snapshot.dropsClaimedThisSession))}
+          <div class="fact-list">
+            ${renderFactRow("Phase", capitalize(data.snapshot.phase) || "—")}
+            ${renderFactRow("Current task", data.snapshot.currentTask || "—")}
+            ${renderFactRow("Last update", formatDateTime(data.snapshot.lastUpdate))}
+            ${renderFactRow("Claims this session", String(data.snapshot.dropsClaimedThisSession))}
           </div>
         </section>
       </div>
@@ -465,7 +488,7 @@ function renderActivity(data) {
           </div>
         </div>
         <div class="log-window">
-          <div class="log-head"><span class="window-dots"><i></i><i></i><i></i></span><span>runtime.log · last ${data.logs.length} entries</span></div>
+          <div class="log-head"><span>runtime.log</span><span>last ${data.logs.length} entries</span></div>
           <pre class="log-body" id="logBody">${esc(logText)}</pre>
         </div>
       </section>
@@ -553,18 +576,18 @@ function renderTimeline(activities, compact = false) {
   if (!activities.length) return renderTimelineEmpty();
   return `<div class="timeline">${activities.map((activity) => `
     <div class="activity-item">
-      <span class="activity-seed">${activity.state === "error" ? "!" : "·"}</span>
+      <span class="activity-seed ${activity.state === "error" ? "is-error" : ""}">${activity.state === "error" ? "!" : "·"}</span>
       <div class="activity-copy"><h4>${esc(activity.title)}</h4>${activity.detail ? `<p>${esc(activity.detail)}</p>` : ""}</div>
       <time class="activity-time" datetime="${attr(activity.timestamp)}">${compact ? formatTime(activity.timestamp) : formatDateTime(activity.timestamp)}</time>
     </div>`).join("")}</div>`;
 }
 
 function renderTimelineEmpty() {
-  return `<div class="empty-state"><div><div class="empty-state-illustration" aria-hidden="true"></div><h3>Nothing stirred yet</h3><p>Login, refresh, and miner milestones will appear here.</p></div></div>`;
+  return `<div class="empty-state"><div>${emptyIcon()}<h3>Nothing stirred yet</h3><p>Login, refresh, and miner milestones will appear here.</p></div></div>`;
 }
 
-function renderFact(label, value) {
-  return `<div class="setting-row"><div class="setting-copy"><h3>${esc(label)}</h3></div><span class="soft-chip">${esc(value || "—")}</span></div>`;
+function emptyIcon() {
+  return `<div class="empty-state-icon" aria-hidden="true">${sproutIcon()}</div>`;
 }
 
 function renderStat(label, value, note, tint, icon) {
@@ -583,15 +606,15 @@ function renderError(message) {
 }
 
 function renderEmptyCampaigns(authenticated) {
-  return `<div class="empty-state"><div><div class="empty-state-illustration" aria-hidden="true"></div><h3>${authenticated ? "No campaigns loaded" : "Connect Twitch first"}</h3><p>${authenticated ? "Refresh the inventory to ask Twitch for current eligible campaigns." : "Your eligible campaigns and progress will live here after device authorization."}</p></div></div>`;
+  return `<div class="empty-state"><div>${emptyIcon()}<h3>${authenticated ? "No campaigns loaded" : "Connect Twitch first"}</h3><p>${authenticated ? "Refresh the inventory to ask Twitch for current eligible campaigns." : "Your eligible campaigns and progress will live here after device authorization."}</p></div></div>`;
 }
 
 function renderFilteredEmpty(hasCampaigns) {
-  return `<div class="empty-state"><div><div class="empty-state-illustration" aria-hidden="true"></div><h3>${hasCampaigns ? "No campaigns match" : "No campaigns loaded"}</h3><p>${hasCampaigns ? "Try a different search or filter." : "Connect Twitch and refresh the inventory to begin."}</p></div></div>`;
+  return `<div class="empty-state"><div>${emptyIcon()}<h3>${hasCampaigns ? "No campaigns match" : "No campaigns loaded"}</h3><p>${hasCampaigns ? "Try a different search or filter." : "Connect Twitch and refresh the inventory to begin."}</p></div></div>`;
 }
 
 function renderUnavailable(message) {
-  return `<div class="page-stack"><section class="soft-card empty-state"><div><div class="empty-state-illustration" aria-hidden="true"></div><h3>The local host is out of reach</h3><p>${esc(message)} The page will keep trying.</p></div></section></div>`;
+  return `<div class="page-stack"><section class="soft-card empty-state"><div>${emptyIcon()}<h3>The local host is out of reach</h3><p>${esc(message)} The page will keep trying.</p></div></section></div>`;
 }
 
 async function handleClick(event) {
@@ -668,7 +691,7 @@ function renderThemeToggle() {
   const label = useLight ? "Use light mode" : "Use dark mode";
   themeButton.setAttribute("aria-label", label);
   themeButton.title = label;
-  document.querySelector('meta[name="theme-color"]').content = ui.theme === "dark" ? "#0e1715" : "#eef5f1";
+  document.querySelector('meta[name="theme-color"]').content = ui.theme === "dark" ? "#141513" : "#f5f4ef";
 }
 
 function handleInput(event) {
@@ -722,6 +745,9 @@ function ask(title, message, confirmLabel) {
   document.querySelector("#confirmTitle").textContent = title;
   document.querySelector("#confirmMessage").textContent = message;
   document.querySelector("#confirmButton").textContent = confirmLabel;
+  // Escape closes the dialog without touching returnValue, so a stale "confirm" from an
+  // earlier prompt would otherwise be treated as approval.
+  confirmDialog.returnValue = "";
   confirmDialog.showModal();
   return new Promise((resolve) => {
     confirmDialog.addEventListener("close", () => resolve(confirmDialog.returnValue === "confirm"), { once: true });
@@ -729,7 +755,16 @@ function ask(title, message, confirmLabel) {
 }
 
 async function copyText(value, message) {
-  await navigator.clipboard.writeText(value);
+  // navigator.clipboard is only exposed in secure contexts, so plain-HTTP LAN mode needs a
+  // clear explanation instead of a TypeError.
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Copying needs a secure (HTTPS or localhost) page. Select the text and copy it manually.");
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    throw new Error("The browser refused clipboard access. Select the text and copy it manually.");
+  }
   toast(message);
 }
 
@@ -829,7 +864,8 @@ function previewState() {
       { timestamp: iso(-1), level: "DEBUG", message: "Watch heartbeat accepted; current drop 74/120 minutes" },
     ],
   };
-  const variant = new URLSearchParams(window.location.search).get("preview") || "active";
+  const requested = new URLSearchParams(window.location.search).get("preview") || "active";
+  const variant = previewVariants.includes(requested) ? requested : "active";
   if (variant === "loggedout") {
     preview.snapshot.phase = "stopped";
     preview.snapshot.currentTask = "Local miner stopped";
@@ -915,13 +951,18 @@ function percent(value) {
 }
 
 function formatTime(value) {
-  if (!value) return "—";
-  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(value));
+  return formatDate(value, { hour: "numeric", minute: "2-digit" });
 }
 
 function formatDateTime(value) {
+  return formatDate(value, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function formatDate(value, options) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
+  const date = new Date(value);
+  // An unparseable timestamp must not throw and take the whole view down with it.
+  return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat(undefined, options).format(date);
 }
 
 function formatViewers(value) {

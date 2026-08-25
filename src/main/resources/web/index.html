@@ -2,8 +2,8 @@
 <html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0e1715">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#141513">
     <meta name="description" content="A calm, container-hosted Twitch Drops miner.">
     <title>Twitch Dock Drops</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -12,12 +12,8 @@
     <script src="/app.js" defer></script>
   </head>
   <body>
-    <div class="ambient ambient-mint" aria-hidden="true"></div>
-    <div class="ambient ambient-lilac" aria-hidden="true"></div>
-    <div class="ambient ambient-peach" aria-hidden="true"></div>
-
     <div class="app-shell">
-      <aside class="sidebar glass-panel">
+      <aside class="sidebar">
         <a class="brand" href="/" aria-label="Twitch Dock Drops overview">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 48 48" role="img">
@@ -26,8 +22,8 @@
             </svg>
           </span>
           <span>
-            <strong>DockDrops</strong>
-            <small>quietly keeping watch</small>
+            <strong>Dock Drops</strong>
+            <small>Twitch Drops miner</small>
           </span>
         </a>
 
@@ -52,7 +48,7 @@
         </nav>
 
         <div class="sidebar-foot">
-          <div class="mini-orbit" aria-hidden="true"><span></span></div>
+          <span class="service-dot" id="serviceDot" aria-hidden="true"></span>
           <p>Local service<br><strong id="serviceStatus">Connecting</strong></p>
         </div>
       </aside>
@@ -80,15 +76,15 @@
         </header>
 
         <section id="app" class="content" aria-busy="true">
-          <div class="loading-garden">
-            <span></span><span></span><span></span>
+          <div class="loading-state">
+            <span class="spinner" aria-hidden="true"></span>
             <p>Opening the greenhouse…</p>
           </div>
         </section>
       </main>
     </div>
 
-    <nav class="mobile-nav glass-panel" aria-label="Mobile navigation">
+    <nav class="mobile-nav" aria-label="Mobile navigation">
       <button class="is-active" type="button" data-view="overview"><span>Overview</span></button>
       <button type="button" data-view="campaigns"><span>Campaigns</span></button>
       <button type="button" data-view="activity"><span>Activity</span></button>

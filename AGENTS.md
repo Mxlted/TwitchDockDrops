@@ -133,12 +133,19 @@ Parity work is manual and explicit; Android changes require a separate user requ
 
 ## UI design system
 
-The web client is a soft-color "drop greenhouse," not a generic Twitch-purple dashboard.
+The web client is a flat, modern "drop greenhouse" in the Apple/Anthropic idiom, not a generic
+Twitch-purple dashboard and not a glassmorphism showcase.
 
-- Use the existing mist, mint, lilac, peach, sky, ink, and muted tokens in `app.css`.
-- Glass is supporting texture: maintain readable opaque-enough surfaces and visible borders.
-- Preserve rounded, tactile controls, clear focus rings, minimum 44px touch targets, and useful empty
-  states.
+- Use the existing mist, paper, line, ink, muted, mint, lilac, peach, sky, and lemon tokens in
+  `app.css`. Each palette color has a `--*` tint for fills and a `--*-deep` for text/accents; mint is
+  the single primary accent.
+- Surfaces are opaque with 1px hairline borders and no drop shadows, blur, gradients, or ambient
+  decoration. Pop-over elements (dialog, toast) may use the one `--shadow-pop` token.
+- Typography is the system stack (SF Pro / Segoe UI Variable / Inter fallbacks) with tight tracking on
+  headings and 13–15px body copy; never smaller than 11px.
+- Preserve rounded (8–20px) controls, 2px accent focus rings, minimum 44px touch targets, and useful
+  empty states. Motion is limited to short opacity/color transitions.
+- Hero panels pair copy with a factual aside (status rows, steps, or the device code), not artwork.
 - Keep status meaning independent of color and meet accessible contrast.
 - Support desktop, tablet, and mobile layouts plus `prefers-reduced-motion`.
 - Do not add remote fonts, UI frameworks, icon packages, or build tooling without a strong reason.
