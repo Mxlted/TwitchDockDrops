@@ -188,8 +188,8 @@ injection is constructor-only for MockWebServer tests.
 
 ## Web client
 
-The flat greenhouse palette (opaque surfaces, hairline borders, a single mint accent, system type) is
-dark by default, with a browser-local light preference available from the header. A same-origin pre-paint initializer applies a saved preference before the stylesheet renders,
+The flat dashboard palette (opaque surfaces, hairline borders, a single Twitch-purple accent, system
+type) is dark by default, with a browser-local light preference available from the header. A same-origin pre-paint initializer applies a saved preference before the stylesheet renders,
 avoiding a theme flash. The server checks for state changes every two seconds but serializes and sends
 the full state document only when the snapshot, settings, or bounded logs change; idle connections
 receive sparse keepalives. Event clients are capped, and excess tabs receive HTTP 503 and use the
@@ -202,12 +202,18 @@ missing from a partial/current inventory are displayed as unavailable without be
 HTML, JavaScript, and CSS use `no-cache`, preventing a stale client from crossing a state-schema upgrade.
 The active-watch card exposes compatible live channel alternatives through the existing serialized
 runtime command flow; the browser owns only the accessible loading, empty, and selection presentation.
+The header carries the miner status pill and the global Start/Stop, refresh, and theme controls; the
+current view is mirrored in the URL hash so refresh, back, and bookmarks restore it. Estimated finish
+times, relative campaign end dates, and the priority-queue preview are browser-side presentation of
+serialized snapshot fields, not a second scheduler. When the event stream and polling both fail, an
+offline banner is shown over the last known state.
 
 The responsive breakpoints are:
 
 - desktop: fixed left navigation and a wide content canvas;
 - tablet: compact navigation with two-column content;
-- mobile: top brand strip, bottom navigation, and single-column cards.
+- mobile: compact header with the status pill and actions, an icon bottom navigation, and
+  single-column cards.
 
 ## Failure behavior
 

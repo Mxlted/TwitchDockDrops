@@ -39,7 +39,9 @@ changes.
 - [x] JVM reachability is advisory for proxy compatibility; actual HTTP outcomes remain authoritative
 - [x] OAuth/GraphQL/HTML bodies, SSE clients, command queues, logs, and diagnostics are resource-bounded
 - [x] Mutable web assets revalidate and invalid nonnumeric port configuration fails startup
-- [x] Responsive flat Apple/Anthropic-style UI covers overview, campaigns, activity, and settings
+- [x] Responsive flat Twitch-purple dashboard covers overview, campaigns, activity, and settings
+- [x] Header Start/Stop and status pill, hash-addressed views, offline banner, and expandable drop/reward
+  lists with campaign end dates are available
 - [x] General-user README showcases the app and routes operational detail to a dedicated guide
 - [x] Dark mode is the default, with a persisted light-mode toggle and flash-free theme initialization
 - [x] Active drop/channel Twitch links and linked/unlinked campaign filters are available
@@ -50,6 +52,28 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Verification record — 2026-08-25
+
+- Restructured the web UI layout and moved the primary accent from mint to Twitch purple
+  (`#9146ff` fills, `#bf94ff`/`#6f2fd8` text in dark/light). The header now owns the miner status
+  pill, a global Start/Stop button, refresh, and theme controls; the always-on connection pill and
+  the duplicated sidebar/host indicator were replaced by a single sidebar host row plus an offline
+  banner that only appears when the host stops responding. The authenticated overview replaced the
+  marketing hero and its duplicated "Right now" fact list with four stat tiles (including the current
+  drop with an estimated finish time), a "Now watching" panel that lists every drop in the active
+  campaign, recent activity, and a priority-queue preview. Campaign rows gained relative end/start
+  dates, a "Link account" action for unlinked campaigns, and an expandable drop list with rewards and
+  per-drop state; the filter toolbar reports the visible count. Activity dropped the redundant
+  "Session pulse" list, and Settings replaced the static posture notices with a Service card
+  (account, miner, phase, version, uptime, pinned/excluded counts). Views are addressed by URL hash,
+  the mobile tab bar has icons, and `[hidden]` now wins over component display rules. Verified with
+  headless Chrome over CDP at 1440, 900, and 390 widths in both themes across the active, logged-out,
+  device-code, and expired states plus campaigns (expanded drops), activity, settings, the channel
+  picker, and the confirm dialog, with no horizontal overflow. The README screenshot was regenerated
+  from the built-in preview. No JDK 21 was available locally, so `docker compose build` ran the Gradle
+  suite in its builder stage (BUILD SUCCESSFUL); the built image on a throwaway volume answered
+  `/api/health`, the redesigned assets, and a settings `PUT` with HTTP 200.
 
 ## Verification record — 2026-08-24
 
