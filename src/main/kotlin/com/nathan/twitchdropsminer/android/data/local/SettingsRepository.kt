@@ -48,6 +48,7 @@ class SettingsRepository(dataDirectory: Path) {
 
     suspend fun resetSessionSettings() = update {
         it.copy(
+            miningRequested = false,
             selectedCampaignIds = emptySet(),
             selectedGames = emptySet(),
             selectedGamePriority = emptyList(),
@@ -58,7 +59,10 @@ class SettingsRepository(dataDirectory: Path) {
     }
 
     suspend fun resetSettings() = update {
-        AppSettings(hasCompletedOnboarding = it.hasCompletedOnboarding).normalized()
+        AppSettings(
+            hasCompletedOnboarding = it.hasCompletedOnboarding,
+            miningRequested = it.miningRequested,
+        ).normalized()
     }
 
     suspend fun toggleGamePriority(gameName: String) = update { current ->
@@ -122,6 +126,7 @@ class SettingsRepository(dataDirectory: Path) {
             val root = Json.parseToJsonElement(Files.readString(settingsFile)) as JsonObject
             val loaded = AppSettings(
                 hasCompletedOnboarding = root.boolean("hasCompletedOnboarding", true),
+                miningRequested = root.boolean("miningRequested", false),
                 watchIntervalSeconds = root.int("watchIntervalSeconds", 59),
                 inventoryRefreshMinutes = root.int("inventoryRefreshMinutes", 60),
                 runInForeground = root.boolean("runInForeground", true),
@@ -186,6 +191,7 @@ class SettingsRepository(dataDirectory: Path) {
         buildJsonObject {
             put("schemaVersion", 1)
             put("hasCompletedOnboarding", settings.hasCompletedOnboarding)
+            put("miningRequested", settings.miningRequested)
             put("watchIntervalSeconds", settings.watchIntervalSeconds)
             put("inventoryRefreshMinutes", settings.inventoryRefreshMinutes)
             put("runInForeground", settings.runInForeground)

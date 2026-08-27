@@ -71,7 +71,8 @@ the [Operator Guide](./OPERATIONS.md#network-access) for loopback-only and rever
 
 Twitch Dock Drops refreshes your campaigns, chooses an eligible live channel, reports watch progress,
 recovers from stalled channels, and claims completed Drops. Your saved session is restored after a
-container restart, so normal day-to-day use is simply opening the dashboard when you want to check in.
+container restart, and the miner resumes automatically if it was running before the restart, so normal
+day-to-day use is simply opening the dashboard when you want to check in.
 
 ## The dashboard
 

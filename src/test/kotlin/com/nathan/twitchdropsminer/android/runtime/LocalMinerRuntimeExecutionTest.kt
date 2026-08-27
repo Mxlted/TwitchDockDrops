@@ -25,8 +25,10 @@ import java.nio.file.Path
 import java.time.Duration
 import java.time.Instant
 import java.util.Base64
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -334,6 +336,109 @@ class LocalMinerRuntimeExecutionTest {
     }
 
     @Test
+    fun `access token is revalidated after one hour on the next inventory reload`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val clock = AtomicReference(Instant.parse("2026-08-27T12:00:00Z"))
+        val api = RevalidationTwitchApi {
+            clock.updateAndGet { instant -> instant.plus(Duration.ofMinutes(61)) }
+        }
+        val runtime = runtime(store, api, clock = clock::get)
+
+        runtime.startMining()
+        withTimeout(2_000) { api.firstInventoryLoaded.await() }
+        runtime.refreshInventory()
+        withTimeout(2_000) {
+            while (api.validationCalls.get() < 2) delay(10)
+        }
+
+        assertEquals(2, api.validationCalls.get())
+        runtime.stopMiningAndJoin()
+    }
+
+    @Test
+    fun `offline channel status recheck skips the channel and selects another`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val campaign = watchCampaign("status", "Status Game")
+        val first = testChannel(1L, "first", "old-broadcast", viewers = 100)
+        val second = testChannel(2L, "second", "second-broadcast", viewers = 50)
+        val api = ChannelStatusTwitchApi(campaign, listOf(first, second)) { login ->
+            if (login == first.login) first.copy(online = false) else second
+        }
+        val runtime = runtime(
+            store,
+            api,
+            channelStatusCheckInterval = Duration.ofMillis(25),
+        )
+
+        runtime.startMining()
+        val recovered = withTimeout(2_000) {
+            runtime.snapshot.first { snapshot ->
+                snapshot.currentChannel?.id == second.id &&
+                    snapshot.activity.any { it.title == "Channel went offline" }
+            }
+        }
+
+        assertEquals(second.id, recovered.currentChannel?.id)
+        runtime.stopMiningAndJoin()
+    }
+
+    @Test
+    fun `unchanged channel status recheck does not update the snapshot`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val campaign = watchCampaign("quiet-status", "Status Game")
+        val channel = testChannel(5L, "steady", "steady-broadcast", viewers = 100)
+        val statusChecked = CompletableDeferred<Unit>()
+        val api = ChannelStatusTwitchApi(campaign, listOf(channel)) {
+            statusChecked.complete(Unit)
+            channel
+        }
+        val runtime = runtime(
+            store,
+            api,
+            channelStatusCheckInterval = Duration.ofMillis(500),
+        )
+
+        runtime.startMining()
+        withTimeout(2_000) {
+            while (api.watchedBroadcastIds.isEmpty()) delay(10)
+        }
+        delay(50)
+        val lastUpdateBeforeRecheck = runtime.snapshot.value.lastUpdate
+        withTimeout(2_000) { statusChecked.await() }
+        delay(50)
+
+        assertEquals(lastUpdateBeforeRecheck, runtime.snapshot.value.lastUpdate)
+        runtime.stopMiningAndJoin()
+    }
+
+    @Test
+    fun `stream restart refreshes broadcast id before the next watch minute`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val campaign = watchCampaign("restart", "Restart Game")
+        val original = testChannel(10L, "restartable", "old-broadcast", viewers = 100)
+        val api = ChannelStatusTwitchApi(campaign, listOf(original)) {
+            original.copy(
+                broadcastId = "new-broadcast",
+                title = "Restarted stream",
+                viewers = 125,
+            )
+        }
+        val runtime = runtime(
+            store,
+            api,
+            channelStatusCheckInterval = Duration.ZERO,
+        )
+
+        runtime.startMining()
+        withTimeout(2_000) {
+            while (api.watchedBroadcastIds.isEmpty()) delay(10)
+        }
+
+        assertEquals("new-broadcast", api.watchedBroadcastIds.first())
+        runtime.stopMiningAndJoin()
+    }
+
+    @Test
     fun `transient completed claim failure watches other work and retries automatically`() = runBlocking {
         val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
         val api = ClaimRetryRuntimeTwitchApi()
@@ -519,6 +624,8 @@ class LocalMinerRuntimeExecutionTest {
         settings: SettingsRepository = SettingsRepository(directory),
         claimFailureCooldown: Duration = DefaultClaimFailureCooldown,
         higherPriorityCheckInterval: Duration = Duration.ofMinutes(2),
+        channelStatusCheckInterval: Duration = Duration.ofMinutes(3),
+        clock: () -> Instant = Instant::now,
     ) = LocalMinerRuntime(
         settingsRepository = settings,
         secureSessionStore = store,
@@ -527,6 +634,8 @@ class LocalMinerRuntimeExecutionTest {
         networkStatusProvider = AlwaysOnlineForExecutionTests,
         claimFailureCooldown = claimFailureCooldown,
         higherPriorityCheckInterval = higherPriorityCheckInterval,
+        channelStatusCheckInterval = channelStatusCheckInterval,
+        clock = clock,
     )
 
     private fun sessionStore(): SecureSessionStore {
@@ -560,6 +669,24 @@ class LocalMinerRuntimeExecutionTest {
             ),
         ),
         totalDrops = 1,
+    )
+
+    private fun testChannel(
+        id: Long,
+        login: String,
+        broadcastId: String,
+        viewers: Int,
+    ) = Channel(
+        id = id,
+        name = login,
+        login = login,
+        game = "Status Game",
+        viewers = viewers,
+        online = true,
+        dropsEnabled = true,
+        broadcastId = broadcastId,
+        gameId = "game-id",
+        title = "Live stream",
     )
 }
 
@@ -752,6 +879,78 @@ private class ExecutionTwitchApi(
     override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress? = unused()
     override suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult = unused()
     override fun newDeviceId(): String = "device-new"
+
+    private fun <T> unused(): T = error("Unexpected Twitch API call")
+}
+
+private class RevalidationTwitchApi(
+    private val afterFirstInventory: () -> Unit,
+) : TwitchApi {
+    val validationCalls = AtomicInteger()
+    val firstInventoryLoaded = CompletableDeferred<Unit>()
+    private val inventoryCalls = AtomicInteger()
+
+    override suspend fun validateAccessToken(accessToken: String): ValidatedToken {
+        validationCalls.incrementAndGet()
+        return ValidatedToken("12345", "client")
+    }
+
+    override suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign> {
+        if (inventoryCalls.incrementAndGet() == 1) {
+            afterFirstInventory()
+            firstInventoryLoaded.complete(Unit)
+        }
+        return emptyList()
+    }
+
+    override suspend fun fetchEligibleChannels(session: StoredTwitchSession, campaign: Campaign, limit: Int): List<Channel> = emptyList()
+    override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization = unused()
+    override suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult = unused()
+    override suspend fun fetchChannel(session: StoredTwitchSession, login: String, expectedGame: String?): Channel = unused()
+    override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel): Boolean = unused()
+    override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress? = unused()
+    override suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult = unused()
+    override fun newDeviceId(): String = "device"
+
+    private fun <T> unused(): T = error("Unexpected Twitch API call")
+}
+
+private class ChannelStatusTwitchApi(
+    private val campaign: Campaign,
+    private val channels: List<Channel>,
+    private val channelStatus: (String) -> Channel,
+) : TwitchApi {
+    val watchedBroadcastIds = CopyOnWriteArrayList<String?>()
+
+    override suspend fun validateAccessToken(accessToken: String): ValidatedToken =
+        ValidatedToken("12345", "client")
+
+    override suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign> = listOf(campaign)
+
+    override suspend fun fetchEligibleChannels(
+        session: StoredTwitchSession,
+        campaign: Campaign,
+        limit: Int,
+    ): List<Channel> = channels
+
+    override suspend fun fetchChannel(
+        session: StoredTwitchSession,
+        login: String,
+        expectedGame: String?,
+    ): Channel = channelStatus(login)
+
+    override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel): Boolean {
+        watchedBroadcastIds += channel.broadcastId
+        return true
+    }
+
+    override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress =
+        CurrentDropProgress("${campaign.id}-drop", 0)
+
+    override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization = unused()
+    override suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult = unused()
+    override suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult = unused()
+    override fun newDeviceId(): String = "device"
 
     private fun <T> unused(): T = error("Unexpected Twitch API call")
 }

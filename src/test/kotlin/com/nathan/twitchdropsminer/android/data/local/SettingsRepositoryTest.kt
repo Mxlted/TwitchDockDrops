@@ -35,6 +35,28 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun `saved settings without mining intent default to stopped`() {
+        Files.writeString(
+            directory.resolve("settings.json"),
+            """{"schemaVersion":1,"hasCompletedOnboarding":true}""",
+        )
+
+        assertFalse(SettingsRepository(directory).settings.value.miningRequested)
+    }
+
+    @Test
+    fun `mining intent persists and follows reset scope`() = runBlocking {
+        val repository = SettingsRepository(directory)
+        repository.update { it.copy(miningRequested = true) }
+
+        assertTrue(SettingsRepository(directory).settings.value.miningRequested)
+        repository.resetSettings()
+        assertTrue(repository.settings.value.miningRequested)
+        repository.resetSessionSettings()
+        assertFalse(repository.settings.value.miningRequested)
+    }
+
+    @Test
     fun `settings are normalized and survive a new repository instance`() = runBlocking {
         val repository = SettingsRepository(directory)
         repository.update {
@@ -43,6 +65,7 @@ class SettingsRepositoryTest {
                 inventoryRefreshMinutes = 999,
                 selectedGamePriority = listOf(" Warframe ", "warframe", "Palia"),
                 fallbackToOtherGames = false,
+                miningRequested = true,
             )
         }
 
@@ -51,6 +74,7 @@ class SettingsRepositoryTest {
         assertEquals(180, loaded.inventoryRefreshMinutes)
         assertEquals(listOf("Warframe", "Palia"), loaded.selectedGamePriority)
         assertFalse(loaded.fallbackToOtherGames)
+        assertTrue(loaded.miningRequested)
     }
 
     @Test

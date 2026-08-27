@@ -63,6 +63,12 @@ docker compose config
 settings, priorities, exclusions, and activity log, and signs the app out irreversibly unless the
 volume was backed up.
 
+For restarts and maintenance, the last explicit **Start** or **Stop** choice is stored as
+`miningRequested` in `settings.json`. It is honored after container restarts and after a Twitch
+re-login, while process shutdown itself does not count as pressing **Stop**.
+If that settings write fails, the current Start or Stop still takes effect and a warning is logged,
+but the choice cannot survive the next restart.
+
 ## Network access
 
 ### Trusted LAN setup
@@ -154,8 +160,9 @@ session data.
 
 ## Runtime behavior
 
-On startup, a saved Twitch session triggers an inventory refresh in the background without delaying
-the local health endpoint or web UI.
+On startup, a saved Twitch session resumes mining when `miningRequested` is enabled; otherwise it
+triggers an inventory refresh in the background. Neither path delays the local health endpoint or web
+UI.
 
 The default Auto Mode order exhausts linked work before unlinked work:
 

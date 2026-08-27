@@ -198,6 +198,7 @@ class RuntimeExecutionPolicyTest {
             RuntimeTemporalSchedule.nextActiveDeadline(
                 nextWatchAt = now.plusSeconds(59),
                 nextPromotionCheckAt = now.plusSeconds(120),
+                nextChannelStatusCheckAt = now.plusSeconds(180),
                 refreshAt = now.plusSeconds(3_600),
                 activeCampaignEndsAt = null,
                 activeDropEndsAt = now.plusSeconds(45),
@@ -261,6 +262,7 @@ class RuntimeExecutionPolicyTest {
             RuntimeTemporalSchedule.nextActiveDeadline(
                 nextWatchAt = boundary.plusSeconds(59),
                 nextPromotionCheckAt = boundary.plusSeconds(120),
+                nextChannelStatusCheckAt = boundary.plusSeconds(180),
                 refreshAt = boundary.plusSeconds(3_600),
                 activeCampaignEndsAt = boundary.plusSeconds(20),
                 activeDropEndsAt = null,

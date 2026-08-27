@@ -11,7 +11,10 @@ changes.
 - [x] JVM settings, encrypted session, log, and network adapters are durable and tested
 - [x] Redacted JSON state API and server-sent event updates are available
 - [x] Login, start/stop, refresh, priority, exclusion, channel, settings, log, and reset controls are wired
-- [x] Existing Twitch sessions refresh inventory automatically after container startup
+- [x] Existing Twitch sessions refresh inventory or resume requested mining after container startup
+- [x] Explicit Start/Stop mining intent survives restart and re-login while reset/shutdown scopes remain distinct
+- [x] Active mining revalidates access tokens hourly on inventory reloads
+- [x] Active channels are rechecked every three minutes for offline, category, and broadcast changes
 - [x] Runtime lifecycle commands are serialized and stale coroutine results are generation-guarded
 - [x] Active inventory refreshes are coalesced and mining waits react to settings/control changes
 - [x] Unknown Twitch drops trigger an immediate inventory refresh with a five-minute retry cooldown
@@ -55,6 +58,16 @@ changes.
 
 ## Verification record — 2026-08-27
 
+- Persisted `miningRequested` runtime intent now resumes unattended mining after container restart and
+  re-login, user Start/Stop commands update it through the serialized command channel, shutdown leaves
+  it intact, session reset clears it, and preference reset preserves it. Failed intent writes emit a
+  safe warning without blocking Start or Stop. The mining loop reuses guarded retry/backoff validation
+  at least hourly on inventory reloads and rechecks the active channel every three minutes, failing over
+  when it goes offline or changes category and refreshing cached watch configuration when its broadcast
+  ID changes; unchanged rechecks do not update the snapshot. Focused persistence, startup, execution,
+  and temporal scheduling regressions cover each behavior. The full Gradle 9.5.1/JDK 21 Docker suite
+  passed with 109 tests across 16 suites, 0 failures, 0 errors, and 0 skipped (`BUILD SUCCESSFUL in
+  57s`). Live Twitch behavior was not exercised.
 - Hardened the Twitch client against transient GraphQL authorization responses by re-validating the
   saved token before session expiry, updated the Inventory and Viewer Drops Dashboard persisted-query
   hashes, accepted both beacon and spade collector URL keys, made scalar JSON parsing tolerant of

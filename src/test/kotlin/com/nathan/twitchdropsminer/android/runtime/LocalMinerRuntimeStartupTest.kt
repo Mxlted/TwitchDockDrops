@@ -15,12 +15,15 @@ import com.nathan.twitchdropsminer.android.data.twitch.DropClaimResult
 import com.nathan.twitchdropsminer.android.data.twitch.TokenResponse
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApi
 import com.nathan.twitchdropsminer.android.data.twitch.ValidatedToken
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
 import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +58,85 @@ class LocalMinerRuntimeStartupTest {
         }
         assertEquals(LoginState.LoggedIn, refreshed.account.state)
         assertEquals(listOf("campaign-1"), refreshed.campaigns.map(Campaign::id))
+        assertFalse(refreshed.miningActive)
+        assertNull(withTimeoutOrNull(100) { twitchApi.validationRequest.await() })
+    }
+
+    @Test
+    fun `bootstrap resumes mining when stored intent requests it`() = runBlocking {
+        val sessionStore = sessionStore()
+        val storedSession = StoredTwitchSession(
+            accessToken = "test-token",
+            userId = "user-123",
+            deviceId = "device-123",
+            savedAt = Instant.parse("2026-08-10T12:00:00Z"),
+        )
+        sessionStore.saveTwitchSession(storedSession)
+        val settings = SettingsRepository(directory)
+        settings.update { it.copy(miningRequested = true) }
+        val twitchApi = RecordingTwitchApi(campaigns = emptyList())
+        val runtime = runtime(sessionStore, twitchApi, settings)
+
+        runtime.bootstrap()
+
+        assertEquals("test-token", withTimeout(2_000) { twitchApi.validationRequest.await() })
+        val resumed = withTimeout(2_000) {
+            runtime.snapshot.first { snapshot -> snapshot.miningActive }
+        }
+        assertTrue(resumed.activity.any { it.title == "Resuming mining after restart" })
+        runtime.stopMiningAndJoin()
+        assertTrue(settings.settings.value.miningRequested)
+    }
+
+    @Test
+    fun `user start and stop commands persist mining intent`() = runBlocking {
+        val settings = SettingsRepository(directory)
+        val runtime = runtime(sessionStore(), RecordingTwitchApi(), settings)
+
+        runtime.startMining()
+        withTimeout(2_000) { settings.settings.first { it.miningRequested } }
+        runtime.stopMining()
+        withTimeout(2_000) { settings.settings.first { !it.miningRequested } }
+
+        assertFalse(settings.settings.value.miningRequested)
+    }
+
+    @Test
+    fun `start mining continues when intent cannot be persisted`() = runBlocking {
+        val sessionStore = sessionStore().also { store ->
+            store.saveTwitchSession(
+                StoredTwitchSession(
+                    accessToken = "test-token",
+                    userId = "user-123",
+                    deviceId = "device-123",
+                    savedAt = Instant.parse("2026-08-10T12:00:00Z"),
+                ),
+            )
+        }
+        val settings = SettingsRepository(directory)
+        Files.createDirectory(directory.resolve("settings.json"))
+        val logs = LogRepository(directory)
+        val twitchApi = RecordingTwitchApi(campaigns = emptyList())
+        val runtime = LocalMinerRuntime(
+            settingsRepository = settings,
+            secureSessionStore = sessionStore,
+            logRepository = logs,
+            twitchApiClient = twitchApi,
+            networkStatusProvider = OnlineNetworkStatusProvider,
+        )
+
+        runtime.startMining()
+
+        withTimeout(2_000) { runtime.snapshot.first { snapshot -> snapshot.miningActive } }
+        val warning = withTimeout(2_000) {
+            logs.entries.first { entries ->
+                entries.any { entry ->
+                    entry.level == "WARN" && entry.message.contains("Mining intent could not be saved")
+                }
+            }
+        }
+        assertTrue(warning.any { it.message.contains("it will not survive a restart") })
+        runtime.stopMiningAndJoin()
     }
 
     @Test
@@ -71,8 +153,9 @@ class LocalMinerRuntimeStartupTest {
     private fun runtime(
         sessionStore: SecureSessionStore,
         twitchApi: TwitchApi,
+        settings: SettingsRepository = SettingsRepository(directory),
     ): LocalMinerRuntime = LocalMinerRuntime(
-        settingsRepository = SettingsRepository(directory),
+        settingsRepository = settings,
         secureSessionStore = sessionStore,
         logRepository = LogRepository(directory),
         twitchApiClient = twitchApi,
@@ -89,26 +172,32 @@ private object OnlineNetworkStatusProvider : NetworkStatusProvider {
     override val isOnline: StateFlow<Boolean> = MutableStateFlow(true)
 }
 
-private class RecordingTwitchApi : TwitchApi {
+private class RecordingTwitchApi(
+    private val campaigns: List<Campaign> = listOf(
+        Campaign(
+            id = "campaign-1",
+            name = "Test campaign",
+            gameName = "Test game",
+            active = true,
+        ),
+    ),
+) : TwitchApi {
     val inventoryRequest = CompletableDeferred<StoredTwitchSession>()
+    val validationRequest = CompletableDeferred<String>()
 
     override suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign> {
         inventoryRequest.complete(session)
-        return listOf(
-            Campaign(
-                id = "campaign-1",
-                name = "Test campaign",
-                gameName = "Test game",
-                active = true,
-            ),
-        )
+        return campaigns
     }
 
     override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization = unused()
 
     override suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult = unused()
 
-    override suspend fun validateAccessToken(accessToken: String): ValidatedToken = unused()
+    override suspend fun validateAccessToken(accessToken: String): ValidatedToken {
+        validationRequest.complete(accessToken)
+        return ValidatedToken("user-123", "client")
+    }
 
     override suspend fun fetchEligibleChannels(
         session: StoredTwitchSession,

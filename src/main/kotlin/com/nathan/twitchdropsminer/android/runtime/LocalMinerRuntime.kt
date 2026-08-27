@@ -1,5 +1,6 @@
 package com.nathan.twitchdropsminer.android.runtime
 
+import app.twitchdockdrops.security.SafeText
 import com.nathan.twitchdropsminer.android.data.local.LogRepository
 import com.nathan.twitchdropsminer.android.data.local.SecureSessionStore
 import com.nathan.twitchdropsminer.android.data.local.SettingsRepository
@@ -58,6 +59,8 @@ private val MinUnlinkedProgressCheckDelay: Duration = Duration.ofMinutes(2)
 private val MaxUnlinkedProgressCheckDelay: Duration = Duration.ofMinutes(5)
 private val FailedChannelRetryDelay: Duration = Duration.ofMinutes(15)
 private val HigherPriorityChannelCheckInterval: Duration = Duration.ofMinutes(2)
+private val ChannelStatusCheckInterval: Duration = Duration.ofMinutes(3)
+private val TokenRevalidationInterval: Duration = Duration.ofHours(1)
 private val MinLinkedProgressCheckDelay: Duration = Duration.ofMinutes(5)
 private val MaxLinkedProgressCheckDelay: Duration = Duration.ofMinutes(10)
 private val UnknownDropInventoryRefreshCooldown: Duration = Duration.ofMinutes(5)
@@ -70,6 +73,7 @@ class LocalMinerRuntime(
     private val networkStatusProvider: NetworkStatusProvider,
     claimFailureCooldown: Duration = DefaultClaimFailureCooldown,
     private val higherPriorityCheckInterval: Duration = HigherPriorityChannelCheckInterval,
+    private val channelStatusCheckInterval: Duration = ChannelStatusCheckInterval,
     private val clock: () -> Instant = Instant::now,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -129,7 +133,12 @@ class LocalMinerRuntime(
             )
         }
         if (session != null) {
-            refreshInventory()
+            if (settingsRepository.settings.value.miningRequested) {
+                appendActivity(RuntimePhase.LoadingInventory, "Resuming mining after restart")
+                enqueueCoalesced(RuntimeCommand.StartMining())
+            } else {
+                refreshInventory()
+            }
         }
     }
 
@@ -140,7 +149,7 @@ class LocalMinerRuntime(
                     RuntimeCommand.StartAuthentication -> handleStartAuthentication(replace = false)
                     RuntimeCommand.ReplaceAuthentication -> handleStartAuthentication(replace = true)
                     is RuntimeCommand.AuthenticationSucceeded -> handleAuthenticationSucceeded(command)
-                    RuntimeCommand.StartMining -> handleStartMining()
+                    is RuntimeCommand.StartMining -> handleStartMining(command)
                     is RuntimeCommand.StopMining -> handleStopMining(command)
                     RuntimeCommand.RefreshInventory -> handleRefreshInventory()
                     is RuntimeCommand.ResetSession -> handleResetSession(command)
@@ -243,10 +252,18 @@ class LocalMinerRuntime(
             )
         }
         appendActivity(RuntimePhase.Idle, "Twitch session saved securely")
-        enqueueCoalesced(RuntimeCommand.RefreshInventory)
+        if (settingsRepository.settings.value.miningRequested) {
+            appendActivity(RuntimePhase.LoadingInventory, "Resuming mining after Twitch login")
+            enqueueCoalesced(RuntimeCommand.StartMining())
+        } else {
+            enqueueCoalesced(RuntimeCommand.RefreshInventory)
+        }
     }
 
-    private suspend fun handleStartMining() {
+    private suspend fun handleStartMining(command: RuntimeCommand.StartMining) {
+        if (command.persistIntent) {
+            persistMiningIntent(requested = true)
+        }
         if (miningJob?.isActive == true) {
             return
         }
@@ -311,6 +328,9 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleStopMining(command: RuntimeCommand.StopMining) {
+        if (command.persistIntent) {
+            persistMiningIntent(requested = false)
+        }
         miningRunGeneration += 1L
         val job = miningJob
         miningJob = null
@@ -330,6 +350,22 @@ class LocalMinerRuntime(
         }
         appendActivity(RuntimePhase.Stopped, "Local miner stopped")
         command.completed?.complete(Unit)
+    }
+
+    private suspend fun persistMiningIntent(requested: Boolean) {
+        try {
+            settingsRepository.update { it.copy(miningRequested = requested) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            runCatchingCancellable {
+                logRepository.append(
+                    "WARN",
+                    "Mining intent could not be saved: ${SafeText.diagnostic(error.message, 160)}; " +
+                        "it will not survive a restart.",
+                )
+            }
+        }
     }
 
     private suspend fun handleRefreshInventory() {
@@ -654,11 +690,11 @@ class LocalMinerRuntime(
     }
 
     fun startMining() {
-        enqueueCoalesced(RuntimeCommand.StartMining)
+        enqueueCoalesced(RuntimeCommand.StartMining(persistIntent = true))
     }
 
     fun stopMining() {
-        enqueueCoalesced(RuntimeCommand.StopMining())
+        enqueueCoalesced(RuntimeCommand.StopMining(persistIntent = true))
     }
 
     suspend fun stopMiningAndJoin() {
@@ -801,30 +837,7 @@ class LocalMinerRuntime(
         expectedSessionGeneration: Long,
         runGeneration: Long,
     ) {
-        var validationFailures = 0
-        while (currentCoroutineContext().isActive) {
-            ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
-            awaitUsableNetwork()
-            val validation = runCatchingCancellable {
-                twitchApiClient.validateAccessToken(session.accessToken)
-            }
-            ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
-            if (validation.isSuccess) {
-                break
-            }
-            val error = validation.exceptionOrNull() ?: continue
-            if (error is TwitchApiException && error.type == TwitchApiErrorType.InvalidToken) {
-                throw error
-            }
-            validationFailures += 1
-            val retryDelay = RuntimeRetryBackoff.delayFor(validationFailures)
-            updateSnapshot(RuntimePhase.Error, "Unable to validate Twitch session") {
-                it.copy(
-                    error = "${error.message ?: "Twitch validation failed"} Retrying in ${retryDelay.runtimeLabel()}.",
-                )
-            }
-            delay(retryDelay.toMillis())
-        }
+        var lastValidatedAt = validateMiningSession(session, expectedSessionGeneration, runGeneration)
 
         var inventoryFailures = 0
         var channelDiscoveryFailures = 0
@@ -834,6 +847,9 @@ class LocalMinerRuntime(
         while (currentCoroutineContext().isActive) {
             ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
             awaitUsableNetwork()
+            if (!now().isBefore(lastValidatedAt.plus(TokenRevalidationInterval))) {
+                lastValidatedAt = validateMiningSession(session, expectedSessionGeneration, runGeneration)
+            }
             var settings = settingsRepository.settings.first()
             updateSnapshot(RuntimePhase.LoadingInventory, "Loading Twitch drops inventory")
             val campaignLoad = loadCampaigns(
@@ -957,6 +973,7 @@ class LocalMinerRuntime(
             var watchConfigurationRenewals = 0
             var nextWatchAt = now()
             var nextHigherPriorityCheckAt = now().plus(higherPriorityCheckInterval)
+            var nextChannelStatusCheckAt = now().plus(channelStatusCheckInterval)
             var higherPriorityCheck: Deferred<Result<SelectedCampaignWork?>>? = null
             while (
                 currentCoroutineContext().isActive &&
@@ -994,6 +1011,7 @@ class LocalMinerRuntime(
                         watchConfigurationRenewals = 0
                         nextWatchAt = now()
                         nextHigherPriorityCheckAt = now().plus(higherPriorityCheckInterval)
+                        nextChannelStatusCheckAt = now().plus(channelStatusCheckInterval)
                         updateSnapshot(
                             RuntimePhase.Watching,
                             "Higher-priority stream available; watching ${currentCampaign.gameName}",
@@ -1104,6 +1122,7 @@ class LocalMinerRuntime(
                             consecutiveProgressFailures = 0
                             watchConfigurationRenewals = 0
                             nextWatchAt = now()
+                            nextChannelStatusCheckAt = now().plus(channelStatusCheckInterval)
                             updateSnapshot(
                                 RuntimePhase.Watching,
                                 "Switched to ${currentChannel.name}",
@@ -1213,6 +1232,23 @@ class LocalMinerRuntime(
                     }
                     nextHigherPriorityCheckAt = schedulingNow.plus(higherPriorityCheckInterval)
                 }
+                if (!schedulingNow.isBefore(nextChannelStatusCheckAt)) {
+                    nextChannelStatusCheckAt = schedulingNow.plus(channelStatusCheckInterval)
+                    val statusApplication = recheckCurrentChannel(
+                        session = session,
+                        currentChannel = currentChannel,
+                        channels = channels,
+                        currentCampaign = currentCampaign,
+                        currentDropId = currentDropId,
+                        checkedAt = schedulingNow,
+                        unlinkedProgressProbe = unlinkedProgressProbe,
+                    )
+                    currentChannel = statusApplication.currentChannel
+                    channels = statusApplication.channels
+                    if (statusApplication.reselect) {
+                        break
+                    }
+                }
                 val activeDrop = currentCampaign.watchableDrop(currentDropId, schedulingNow)
                 if (activeDrop == null) {
                     val idleStatus = CampaignTemporalPolicy.idleStatus(currentCampaign, schedulingNow)
@@ -1239,6 +1275,7 @@ class LocalMinerRuntime(
                         deadline = RuntimeTemporalSchedule.nextActiveDeadline(
                             nextWatchAt,
                             nextHigherPriorityCheckAt,
+                            nextChannelStatusCheckAt,
                             refreshAt,
                             currentCampaign.endsAt,
                             activeDrop.endsAt,
@@ -1361,6 +1398,7 @@ class LocalMinerRuntime(
                     unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings, now())
                     linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings, now())
                     watchConfigurationRenewals = 0
+                    nextChannelStatusCheckAt = now().plus(channelStatusCheckInterval)
                     appendActivity(
                         RuntimePhase.Watching,
                         "Following Twitch-reported campaign",
@@ -1616,6 +1654,7 @@ class LocalMinerRuntime(
                     deadline = RuntimeTemporalSchedule.nextActiveDeadline(
                         nextWatchAt,
                         nextHigherPriorityCheckAt,
+                        nextChannelStatusCheckAt,
                         refreshAt,
                         currentCampaign.endsAt,
                         currentCampaign.watchableDrop(currentDropId, now())?.endsAt,
@@ -1624,6 +1663,117 @@ class LocalMinerRuntime(
             }
             higherPriorityCheck?.cancelAndJoin()
         }
+    }
+
+    private suspend fun validateMiningSession(
+        session: StoredTwitchSession,
+        expectedSessionGeneration: Long,
+        runGeneration: Long,
+    ): Instant {
+        var validationFailures = 0
+        while (currentCoroutineContext().isActive) {
+            ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
+            awaitUsableNetwork()
+            val validation = runCatchingCancellable {
+                twitchApiClient.validateAccessToken(session.accessToken)
+            }
+            ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
+            if (validation.isSuccess) {
+                return now()
+            }
+            val error = validation.exceptionOrNull() ?: continue
+            error.throwIfInvalidToken()
+            validationFailures += 1
+            val retryDelay = RuntimeRetryBackoff.delayFor(validationFailures)
+            updateSnapshot(RuntimePhase.Error, "Unable to validate Twitch session") {
+                it.copy(
+                    error = "${error.message ?: "Twitch validation failed"} Retrying in ${retryDelay.runtimeLabel()}.",
+                )
+            }
+            delay(retryDelay.toMillis())
+        }
+        throw CancellationException("Mining stopped during Twitch session validation")
+    }
+
+    private suspend fun recheckCurrentChannel(
+        session: StoredTwitchSession,
+        currentChannel: Channel,
+        channels: List<Channel>,
+        currentCampaign: Campaign,
+        currentDropId: String?,
+        checkedAt: Instant,
+        unlinkedProgressProbe: UnlinkedProgressProbe?,
+    ): ChannelStatusApplication {
+        val channelStatus = runCatchingCancellable {
+            twitchApiClient.fetchChannel(
+                session,
+                currentChannel.login,
+                currentCampaign.gameName,
+            )
+        }
+        ensureCurrentOperation()
+        val refreshedChannel = channelStatus.getOrNull()
+        if (refreshedChannel == null) {
+            val error = channelStatus.exceptionOrNull()
+            error?.throwIfInvalidToken()
+            appendDebug(
+                "Unable to refresh live status for ${currentChannel.name}: " +
+                    (error?.message ?: "channel lookup failed"),
+            )
+            return ChannelStatusApplication(currentChannel, channels)
+        }
+        if (!refreshedChannel.online || !refreshedChannel.dropsEnabled) {
+            failedChannelSkips[currentChannel.id] = checkedAt
+            updateSnapshot(RuntimePhase.Idle, "Selecting another channel") {
+                it.copy(
+                    channels = channels.map { channel -> channel.copy(watching = false) },
+                    currentChannel = null,
+                    activeCampaign = currentCampaign,
+                    activeDrop = currentCampaign.watchableDrop(currentDropId, checkedAt),
+                    error = null,
+                )
+            }
+            if (!refreshedChannel.online) {
+                appendActivity(
+                    RuntimePhase.Idle,
+                    "Channel went offline",
+                    "${currentChannel.name} is no longer live; selecting another channel.",
+                )
+            } else {
+                appendActivity(
+                    RuntimePhase.Idle,
+                    "Channel changed category",
+                    "${currentChannel.name} is now streaming ${refreshedChannel.game ?: "another category"}; selecting another channel.",
+                )
+            }
+            return ChannelStatusApplication(currentChannel, channels, reselect = true)
+        }
+
+        val broadcastChanged = refreshedChannel.broadcastId != currentChannel.broadcastId
+        val updatedChannel = currentChannel.copy(
+            broadcastId = refreshedChannel.broadcastId,
+            viewers = refreshedChannel.viewers,
+            title = refreshedChannel.title,
+            game = refreshedChannel.game,
+            gameId = refreshedChannel.gameId,
+        )
+        if (updatedChannel == currentChannel) {
+            return ChannelStatusApplication(currentChannel, channels)
+        }
+        val updatedChannels = channels.map { channel ->
+            if (channel.id == updatedChannel.id) updatedChannel else channel
+        }
+        if (broadcastChanged) {
+            twitchApiClient.invalidateWatchConfiguration(updatedChannel.id)
+            appendDebug("Stream restarted for ${updatedChannel.name}; refreshed broadcast ID.")
+        }
+        updateSnapshot(RuntimePhase.Watching, currentCampaign.watchingTask(updatedChannel, unlinkedProgressProbe)) {
+            it.copy(
+                channels = updatedChannels.markWatching(updatedChannel.id),
+                currentChannel = updatedChannel,
+            )
+        }
+        return ChannelStatusApplication(updatedChannel, updatedChannels)
     }
 
     private suspend fun findCompatibleChannels(
@@ -2721,12 +2871,14 @@ internal object RuntimeTemporalSchedule {
     fun nextActiveDeadline(
         nextWatchAt: Instant,
         nextPromotionCheckAt: Instant,
+        nextChannelStatusCheckAt: Instant,
         refreshAt: Instant,
         activeCampaignEndsAt: Instant?,
         activeDropEndsAt: Instant?,
     ): Instant = listOfNotNull(
         nextWatchAt,
         nextPromotionCheckAt,
+        nextChannelStatusCheckAt,
         refreshAt,
         activeCampaignEndsAt,
         activeDropEndsAt,
@@ -3292,8 +3444,11 @@ private sealed interface RuntimeCommand {
         val authGeneration: Long,
         val session: StoredTwitchSession,
     ) : RuntimeCommand
-    data object StartMining : RuntimeCommand
+    data class StartMining(
+        val persistIntent: Boolean = false,
+    ) : RuntimeCommand
     data class StopMining(
+        val persistIntent: Boolean = false,
         val awaitCompletion: Boolean = false,
         val completed: CompletableDeferred<Unit>? = null,
     ) : RuntimeCommand
@@ -3312,7 +3467,7 @@ private val RuntimeCommand.label: String
         RuntimeCommand.StartAuthentication -> "start authentication"
         RuntimeCommand.ReplaceAuthentication -> "replace authentication"
         is RuntimeCommand.AuthenticationSucceeded -> "complete authentication"
-        RuntimeCommand.StartMining -> "start mining"
+        is RuntimeCommand.StartMining -> "start mining"
         is RuntimeCommand.StopMining -> "stop mining"
         RuntimeCommand.RefreshInventory -> "refresh inventory"
         is RuntimeCommand.ResetSession -> "reset session"
@@ -3323,7 +3478,7 @@ private val RuntimeCommand.coalescingKey: String?
     get() = when (this) {
         RuntimeCommand.StartAuthentication -> "start-authentication"
         RuntimeCommand.ReplaceAuthentication -> "replace-authentication"
-        RuntimeCommand.StartMining -> "start-mining"
+        is RuntimeCommand.StartMining -> "start-mining"
         is RuntimeCommand.StopMining -> if (completed == null) "stop-mining" else null
         RuntimeCommand.RefreshInventory -> "refresh-inventory"
         is RuntimeCommand.ResetSession -> if (completed == null) "reset-session" else null
@@ -3378,6 +3533,12 @@ private data class CompatibleChannelSearch(
 private data class ChannelControlRequest(
     val id: Long = 0L,
     val selectedChannelId: Long? = null,
+)
+
+private data class ChannelStatusApplication(
+    val currentChannel: Channel,
+    val channels: List<Channel>,
+    val reselect: Boolean = false,
 )
 
 private data class CampaignLoadResult(

@@ -13,6 +13,7 @@ private const val MaxSavedCampaignIdLength = 256
 
 data class AppSettings(
     val hasCompletedOnboarding: Boolean = false,
+    val miningRequested: Boolean = false,
     val watchIntervalSeconds: Int = DefaultWatchIntervalSeconds,
     val inventoryRefreshMinutes: Int = DefaultInventoryRefreshMinutes,
     val runInForeground: Boolean = true,

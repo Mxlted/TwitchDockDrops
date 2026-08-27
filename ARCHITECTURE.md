@@ -29,9 +29,11 @@ Compose runs this graph as one service. Splitting the static UI, API, and miner 
 containers would add synchronization and failure modes without improving isolation: they share one
 account session and one authoritative runtime state.
 
-At process startup, `LocalMinerRuntime` restores any encrypted Twitch session and schedules an
-inventory refresh on its application coroutine scope. The refresh is deliberately asynchronous so
-local process readiness does not depend on Twitch reachability.
+At process startup, `LocalMinerRuntime` restores any encrypted Twitch session and honors the persisted
+`miningRequested` intent: a previously running miner resumes, while a previously stopped miner only
+schedules an inventory refresh. Both paths run on the application coroutine scope so local process
+readiness does not depend on Twitch reachability. The same intent resumes mining after a successful
+re-login; process shutdown stops and joins work without changing it.
 
 ### Execution model
 
@@ -46,7 +48,10 @@ expiry, or newer refresh. Twitch side effects that completed remotely cannot be 
 Only one mining loop, authentication attempt, and standalone inventory refresh can be authoritative
 at a time. Repeated start commands are idempotent. Refresh commands received while mining are
 coalesced into the mining loop instead of creating a competing inventory job. The command channel is
-bounded and coalesces queued idempotent lifecycle requests. Device authorization parses
+bounded and coalesces queued idempotent lifecycle requests. User Start/Stop commands persist runtime
+intent inside that serialized command flow before idempotency checks; session reset clears the intent,
+while preference reset preserves it. Intent persistence is best-effort: a storage failure emits a safe
+warning but never prevents the requested Start or Stop lifecycle transition. Device authorization parses
 `authorization_pending`, increases its polling cadence for `slow_down`, surfaces `access_denied` and
 `expired_token` immediately without routing either terminal outcome through transient retry, and
 rejects malformed/unknown replies. It retries genuinely transient
@@ -56,11 +61,15 @@ prepared or a still-valid code is being polled. A separate replacement command c
 that attempt before requesting a new code. Mining and refresh commands received during authorization
 leave the displayed code, activation URL, and expiry intact.
 
-The mining loop waits on state changes rather than polling blindly. Settings changes, channel-control
-requests, refresh requests, higher-priority channel checks, and watch deadlines wake it through
-coroutine selection. Watch heartbeats retain their own cadence, so a settings change or priority check
-does not accidentally emit an extra heartbeat. Idle waits also include the earliest future campaign or
-drop start and pending claim-retry deadline; active waits include the current campaign and drop ends. A boundary wake
+The mining loop validates the access token at startup and at least hourly on the next inventory reload,
+using the same guarded retry/backoff path. It waits on state changes rather than polling blindly.
+Settings changes, channel-control requests, refresh requests, higher-priority channel checks,
+three-minute current-channel status checks, and watch deadlines wake it through coroutine selection.
+The live recheck abandons offline or category-mismatched streams immediately; a changed broadcast ID
+refreshes channel metadata and invalidates cached watch configuration before the next heartbeat. Watch
+heartbeats retain their own cadence, so a settings change, priority check, or live recheck does not
+accidentally emit an extra heartbeat. Idle waits also include the earliest future campaign or drop start
+and pending claim-retry deadline; active waits include the current campaign and drop ends. A boundary wake
 re-evaluates cached lifecycle dates and refreshes inventory as needed, so later scheduled drops do not
 wait for the hourly refresh and do not cause busy polling. Independent Twitch detail/channel lookups use
 a fixed-size sliding worker pool, so a slow early lookup does not hold all later candidates behind a
@@ -155,7 +164,8 @@ Reverse proxies must configure external trusted hosts and origins explicitly.
 
 The Compose volume at `/data` is the only mutable application filesystem:
 
-- settings are normalized before an atomic JSON replacement;
+- settings are normalized before an atomic JSON replacement, including the `miningRequested` runtime
+  intent that is outside the public settings-update schema;
 - saved game priorities and campaign exclusions are deduplicated, length-checked, and capped at 500
   entries each before persistence;
 - the Twitch session is encrypted using AES-256-GCM;
