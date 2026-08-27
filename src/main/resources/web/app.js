@@ -345,7 +345,7 @@ function renderLoginPreparingHero() {
 function renderWatchCard(campaign, drop, channel, channels = [], channelSearchInProgress = false) {
   const progress = percent(drop.progress);
   const campaignUrl = safeTwitchUrl(campaign.campaignUrl);
-  const channelUrl = channel ? twitchChannelUrl(channel.name) : null;
+  const channelUrl = channel ? twitchChannelUrl(channel.login || channel.name) : null;
   const dropName = campaignUrl
     ? `<a class="active-drop-link" href="${attr(campaignUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${attr(drop.name)} drop campaign on Twitch">${esc(drop.name)}<span class="external-mark" aria-hidden="true">↗</span></a>`
     : esc(drop.name);
@@ -931,7 +931,6 @@ function previewState() {
     excluded: false,
     priorityIndex: overrides.priorityIndex,
     earnable: true,
-    allowedChannels: [],
     drops: [
       { id: `${overrides.id}-1`, name: overrides.drop, currentMinutes: overrides.minutes, requiredMinutes: 120, remainingMinutes: 120 - overrides.minutes, progress: overrides.minutes / 120, claimed: false, canClaim: false, completed: false, startsAt: null, endsAt: null, rewards: [{ name: overrides.reward, type: "In-game", imageUrl: null }] },
       { id: `${overrides.id}-2`, name: "Afterglow Cache", currentMinutes: 0, requiredMinutes: 60, remainingMinutes: 60, progress: 0, claimed: false, canClaim: false, completed: false, startsAt: null, endsAt: null, rewards: [{ name: "Afterglow Emote", type: "Emote", imageUrl: null }] },
@@ -969,9 +968,9 @@ function previewState() {
       account: { state: "loggedin", statusText: "Logged in with Twitch", userId: "preview", oauthUrl: null, oauthCode: null, expiresAt: null, authenticated: true, actionRequired: false },
       campaigns,
       channels: [
-        { id: 1, name: "willowbyte", game: "No Man's Sky", viewers: 812, online: true, dropsEnabled: true, aclBased: false, watching: true, title: "Soft base building & expedition", statusLabel: "Watching" },
-        { id: 2, name: "fern_signal", game: "No Man's Sky", viewers: 426, online: true, dropsEnabled: true, aclBased: false, watching: false, title: "Expedition route and cozy bases", statusLabel: "Drops enabled" },
-        { id: 3, name: "quiet_orbit", game: "No Man's Sky", viewers: 97, online: true, dropsEnabled: true, aclBased: true, watching: false, title: "Community drop session", statusLabel: "Drops enabled" },
+        { id: 1, name: "WillowByte", login: "willowbyte", game: "No Man's Sky", viewers: 812, online: true, dropsEnabled: true, aclBased: false, watching: true, title: "Soft base building & expedition", statusLabel: "Watching" },
+        { id: 2, name: "Fern Signal", login: "fern_signal", game: "No Man's Sky", viewers: 426, online: true, dropsEnabled: true, aclBased: false, watching: false, title: "Expedition route and cozy bases", statusLabel: "Drops enabled" },
+        { id: 3, name: "Quiet Orbit", login: "quiet_orbit", game: "No Man's Sky", viewers: 97, online: true, dropsEnabled: true, aclBased: true, watching: false, title: "Community drop session", statusLabel: "Drops enabled" },
       ],
       // Chronological, like the server's appended activity list; views reverse it for display.
       activity: [
@@ -981,7 +980,7 @@ function previewState() {
         { timestamp: iso(-7), state: "findingchannel", title: "Compatible channel selected", detail: "willowbyte, 812 viewers" },
         { timestamp: iso(-1), state: "watching", title: "Watch heartbeat accepted", detail: "willowbyte · No Man's Sky" },
       ],
-      currentChannel: { id: 1, name: "willowbyte", game: "No Man's Sky", viewers: 812, online: true, dropsEnabled: true, watching: true, statusLabel: "Watching" },
+      currentChannel: { id: 1, name: "WillowByte", login: "willowbyte", game: "No Man's Sky", viewers: 812, online: true, dropsEnabled: true, watching: true, statusLabel: "Watching" },
       activeCampaign: campaigns[0],
       activeDrop: campaigns[0].drops[0],
       dropsClaimedThisSession: 2,

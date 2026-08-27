@@ -61,7 +61,35 @@ class LogRepositoryTest {
     }
 
     @Test
-    fun `log file is owner only where posix permissions are supported`() = runBlocking {
+    fun `append compacts entries and file to max lines`() = runBlocking {
+        val maxLines = 5
+        val repository = LogRepository(directory, maxLines = maxLines)
+
+        repeat(maxLines + 5) { index -> repository.append("INFO", "entry-$index") }
+
+        assertEquals(maxLines, repository.entries.value.size)
+        assertEquals(maxLines, Files.readAllLines(directory.resolve("runtime.log")).size)
+        assertEquals((5..9).map { "entry-$it" }, repository.entries.value.map { it.message })
+        assertTrue(Files.readString(directory.resolve("runtime.log")).endsWith('\n'))
+    }
+
+    @Test
+    fun `appended lines load back in order without a blank entry`() = runBlocking {
+        val repository = LogRepository(directory)
+        repository.append("INFO", "first")
+        repository.append("WARN", "second")
+        val appended = repository.entries.value
+
+        val loaded = LogRepository(directory)
+        loaded.load()
+
+        assertEquals(appended, loaded.entries.value)
+        assertEquals(2, Files.readAllLines(directory.resolve("runtime.log")).size)
+        assertTrue(Files.readString(directory.resolve("runtime.log")).endsWith('\n'))
+    }
+
+    @Test
+    fun `fresh log file created by append is owner only where posix permissions are supported`() = runBlocking {
         val repository = LogRepository(directory)
         repository.append("INFO", "permission check")
         val file = directory.resolve("runtime.log")

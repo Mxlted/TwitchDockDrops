@@ -136,7 +136,8 @@ Android sources.
 
 `GET /api/state` returns one redacted state document containing the runtime snapshot, settings, and
 local logs. `GET /api/events` is a server-sent event stream of the same document. The access token,
-device code secret, encryption key, and filesystem paths are never serialized.
+device code secret, encryption key, and filesystem paths are never serialized. Campaign ACL
+membership remains server-side for selection and is not included in campaign state payloads.
 
 Every route validates Host against `TWITCH_DROPS_TRUSTED_HOSTS` before routing. Mutations under
 `/api/*` additionally require a `TWITCH_DROPS_TRUSTED_ORIGINS` Origin, the exact route method,
@@ -176,7 +177,8 @@ Settings, session material, keys, and logs use owner-only permissions where POSI
 Readers enforce file-size limits and distinguish absent, loaded, corrupt, key-mismatched, and
 unreadable states. Corrupt settings and locally keyed sessions are quarantined; an externally keyed
 session is preserved on key mismatch. Startup exposes only bounded, redacted diagnostics. Log loading
-reads a bounded tail, then rewrites within line, per-entry, and physical-size limits.
+reads a bounded tail, then rewrites within line, per-entry, and physical-size limits. New records use
+single-line append writes until a line or physical-size bound requires an atomic compacting rewrite.
 
 The image runs as a non-root user with all Linux capabilities dropped and a read-only root
 filesystem. `/tmp` is a small in-memory filesystem. The default container JVM uses Serial GC with a
@@ -208,7 +210,8 @@ polling fallback rather than creating unbounded virtual threads. The browser use
 unavailable. State updates replace the current view only when its rendered markup changes, and the
 page entrance animation is reserved for initial load and explicit navigation so updates do not
 discard focus. Active drop and channel links are emitted only for validated HTTPS `twitch.tv`
-destinations, and linked/unlinked campaign filters remain browser-local presentation state. Priorities
+destinations; channel links use the serialized canonical login while visible labels retain Twitch's
+display name. Linked/unlinked campaign filters remain browser-local presentation state. Priorities
 missing from a partial/current inventory are displayed as unavailable without being deleted. Mutable
 HTML, JavaScript, and CSS use `no-cache`, preventing a stale client from crossing a state-schema upgrade.
 The active-watch card exposes compatible live channel alternatives through the existing serialized

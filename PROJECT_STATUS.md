@@ -58,6 +58,16 @@ changes.
 
 ## Verification record — 2026-08-27
 
+- Runtime logging now appends one sanitized, newline-terminated entry during normal operation and
+  uses an atomic bounded compaction only when the line or physical-size limit requires it; bounded
+  tail loading ignores blank lines and preserves the same on-disk format. Channel state now includes
+  the canonical Twitch login for link targets while retaining display names as labels, and campaign
+  ACL membership remains server-side instead of being repeated in state events. Focused regressions
+  cover line-count compaction, append/reload ordering without blank entries, fresh-file POSIX
+  permissions, canonical logins for current/alternative channels, and omitted campaign ACLs. The full
+  Gradle 9.5.1/JDK 21 Docker suite passed with 112 tests across 16 suites, 0 failures, 0 errors, and
+  0 skipped (`BUILD SUCCESSFUL in 31s`); the JavaScript syntax check and diff/isolation checks passed.
+  Live Twitch behavior was not exercised.
 - Persisted `miningRequested` runtime intent now resumes unattended mining after container restart and
   re-login, user Start/Stop commands update it through the serialized command channel, shutdown leaves
   it intact, session reset clears it, and preference reset preserves it. Failed intent writes emit a

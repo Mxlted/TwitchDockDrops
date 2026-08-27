@@ -120,7 +120,6 @@ private fun Campaign.toJson(settings: AppSettings): JsonObject = buildJsonObject
     put("priorityIndex", settings.gamePriorityIndex(gameName) ?: -1)
     put("earnable", canEarnLocally)
     put("drops", drops.toJsonArray(CampaignDrop::toJson))
-    put("allowedChannels", allowedChannels.toJsonArray(Channel::toJson))
 }
 
 private fun CampaignDrop.toJson(): JsonObject = buildJsonObject {
@@ -147,6 +146,7 @@ private fun DropReward.toJson(): JsonObject = buildJsonObject {
 private fun Channel.toJson(): JsonObject = buildJsonObject {
     put("id", id)
     put("name", name)
+    put("login", login)
     putNullable("game", game)
     viewers?.let { put("viewers", it) } ?: put("viewers", JsonNull)
     put("online", online)

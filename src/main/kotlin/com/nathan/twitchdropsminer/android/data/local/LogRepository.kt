@@ -35,7 +35,7 @@ class LogRepository(
                 val trimmed = trim(loaded)
                 AtomicFiles.writeString(
                     logFile,
-                    trimmed.joinToString("\n", transform = LocalLogEntry::toLine),
+                    trimmed.toFileText(),
                     ownerOnly = true,
                 )
                 trimmed
@@ -46,15 +46,28 @@ class LogRepository(
     }
 
     suspend fun append(level: String, message: String) = mutex.withLock {
-        val updated = trim(
-            mutableEntries.value + sanitize(LocalLogEntry(Instant.now(), level, message)),
-        )
+        val entry = sanitize(LocalLogEntry(Instant.now(), level, message))
+        val untrimmed = mutableEntries.value + entry
+        val updated = trim(untrimmed)
         withContext(Dispatchers.IO) {
-            AtomicFiles.writeString(
-                logFile,
-                updated.joinToString("\n", transform = LocalLogEntry::toLine),
-                ownerOnly = true,
-            )
+            val lineBytes = "${entry.toLine()}\n".toByteArray(StandardCharsets.UTF_8)
+            val fileExists = Files.exists(logFile)
+            val currentFileBytes = if (fileExists) Files.size(logFile) else 0L
+            val canAppend = untrimmed.size <= maxLines &&
+                currentFileBytes + lineBytes.size <= maxFileBytes.coerceAtLeast(0).toLong()
+            if (canAppend) {
+                Files.createDirectories(logFile.parent)
+                Files.write(
+                    logFile,
+                    lineBytes,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND,
+                    StandardOpenOption.WRITE,
+                )
+                if (!fileExists) AtomicFiles.restrictToOwner(logFile)
+            } else {
+                AtomicFiles.writeString(logFile, updated.toFileText(), ownerOnly = true)
+            }
         }
         mutableEntries.value = updated
     }
@@ -93,9 +106,14 @@ class LogRepository(
         }
         val decoded = String(buffer.array(), StandardCharsets.UTF_8)
         val completeTail = if (start > 0L) decoded.substringAfter('\n', "") else decoded
-        return completeTail.lineSequence().takeLastBounded(maxLines.coerceAtLeast(0))
+        return completeTail.lineSequence()
+            .filter(String::isNotBlank)
+            .takeLastBounded(maxLines.coerceAtLeast(0))
     }
 }
+
+private fun List<LocalLogEntry>.toFileText(): String =
+    joinToString(separator = "", transform = { "${it.toLine()}\n" })
 
 private fun Sequence<String>.takeLastBounded(maximumSize: Int): List<String> {
     if (maximumSize <= 0) return emptyList()
