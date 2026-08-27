@@ -53,6 +53,17 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
+## Verification record — 2026-08-27
+
+- Hardened the Twitch client against transient GraphQL authorization responses by re-validating the
+  saved token before session expiry, updated the Inventory and Viewer Drops Dashboard persisted-query
+  hashes, accepted both beacon and spade collector URL keys, made scalar JSON parsing tolerant of
+  object/array surprises, paged campaign ACL channel checks through at most 100 distinct logins, and
+  rejected live category-less streams for game-specific Drops while retaining lenient behavior when
+  broadcast settings are absent. Focused MockWebServer regressions cover each behavior. The full
+  Gradle 9.5.1/JDK 21 Docker suite passed with 100 tests across 16 suites, 0 failures, 0 errors, and
+  0 skipped (`BUILD SUCCESSFUL in 46s`). Live Twitch behavior was not exercised.
+
 ## Verification record — 2026-08-25
 
 - Restructured the web UI layout and moved the primary accent from mint to Twitch purple

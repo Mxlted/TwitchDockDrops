@@ -43,6 +43,26 @@ class TwitchCampaignMapperTest {
     }
 
     @Test
+    fun `structural surprise in drop name falls back without discarding drop`() {
+        val result = TwitchCampaignMapper.mapCampaign(
+            parse(
+                """{
+                  "id":"campaign-1","name":"Campaign","status":"ACTIVE",
+                  "game":{"displayName":"Game"},"self":{"isAccountConnected":true},
+                  "timeBasedDrops":[
+                    {"id":"drop-1","name":{"unexpected":"object"},"requiredMinutesWatched":60,"self":{"currentMinutesWatched":5},"benefitEdges":[]}
+                  ]
+                }""",
+            ),
+            emptyMap(),
+        )
+
+        val drop = assertNotNull(result.campaign).drops.single()
+        assertEquals("Drop", drop.name)
+        assertEquals(60, drop.requiredMinutes)
+    }
+
+    @Test
     fun `nonempty inventory with no safely parsed campaigns is not reported as empty`() {
         val server = MockWebServer()
         server.start()

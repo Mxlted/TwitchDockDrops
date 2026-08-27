@@ -46,6 +46,29 @@ class TwitchApiClientWatchTest {
     }
 
     @Test
+    fun `live channel without a category is not drops enabled for an expected game`() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(
+                MockResponse().setResponseCode(200).setBody(
+                    """{"data":{"user":{"id":"67890","login":"example_channel","displayName":"Example Display","stream":{"id":"24680","viewersCount":100},"broadcastSettings":{"game":null,"title":"No category"}}}}""",
+                ),
+            )
+
+            val channel = runBlocking {
+                client(server).fetchChannel(session(), "example_channel", "Example Game")
+            }
+
+            assertTrue(channel.online)
+            assertEquals(null, channel.game)
+            assertFalse(channel.dropsEnabled)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun `watch minute posts fresh complete attribution payload directly to spade`() {
         val server = MockWebServer()
         server.start()
@@ -99,6 +122,27 @@ class TwitchApiClientWatchTest {
             val secondTime = secondProperties["client_time"]!!.jsonPrimitive.content
             assertEquals("2026-08-13T12:34:56.123Z", firstTime)
             assertEquals("2026-08-13T12:35:55.456Z", secondTime)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `watch minute discovers spade URL key from settings bundle`() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val settingsUrl = server.url("/config/settings.00000000000000000000000000000000.js")
+            val spadeUrl = server.url("/spade").toString()
+            server.enqueue(htmlResponse("""<script src="$settingsUrl"></script>"""))
+            server.enqueue(htmlResponse("""{"spade_url":"$spadeUrl"}"""))
+            server.enqueue(MockResponse().setResponseCode(204))
+
+            assertTrue(runBlocking { client(server).sendWatchMinute(session(), channel()) })
+
+            assertEquals("/example_channel", server.takeRequest().path)
+            assertEquals("/config/settings.00000000000000000000000000000000.js", server.takeRequest().path)
+            assertEquals("/spade", server.takeRequest().path)
         } finally {
             server.shutdown()
         }

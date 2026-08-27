@@ -76,7 +76,8 @@ and Twitch's live, logged-in, location, player, mute, hidden, and minutes fields
 `sendSpadeEvents` GraphQL mutation or gzip wrapper participates in the watch path.
 The channel page and hashed settings bundle are fetched with the saved Twitch session. Production
 configuration bundles are accepted only from `assets.twitch.tv` or the legacy
-`static.twitchcdn.net` settings path; event delivery is restricted to the current
+`static.twitchcdn.net` settings path. Collector discovery accepts either the `beacon_url`/`beaconUrl`
+or legacy `spade_url`/`spadeUrl` key; event delivery is restricted to the current
 `https://beacon.twitch.tv/track` collector or the legacy `https://spade.twitch.tv` host.
 
 Automatic selection exhausts linked work before unlinked work by default: linked claimed-progress,
@@ -217,9 +218,10 @@ The responsive breakpoints are:
 
 ## Failure behavior
 
-- Invalid Twitch tokens delete the persisted credential only after token validation or an authoritative
-  Twitch GraphQL response confirms invalid credentials. Watch/configuration 401/403 results preserve
-  the session and trigger configuration recovery.
+- Invalid Twitch tokens delete the persisted credential only after token validation confirms invalid
+  credentials. A Twitch GraphQL 401/403 triggers that validation first; a still-valid session or an
+  inconclusive validation result is treated as a transient HTTP failure. Watch/configuration 401/403
+  results preserve the session and trigger configuration recovery.
 - Network failures are retried by the shared runtime with bounded backoff/channel failover. The JVM
   raw reachability probe is advisory because proxied OkHttp traffic can succeed when direct TCP does
   not; actual API outcomes remain authoritative. A stale

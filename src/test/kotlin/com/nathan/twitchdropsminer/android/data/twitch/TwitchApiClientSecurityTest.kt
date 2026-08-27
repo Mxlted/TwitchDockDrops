@@ -100,6 +100,74 @@ class TwitchApiClientSecurityTest {
     }
 
     @Test
+    fun `graphql rejection expires session only after validation confirms invalid token`() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(401))
+            server.enqueue(MockResponse().setResponseCode(401))
+
+            val error = assertFailsWith<TwitchApiException> {
+                runBlocking { client(server).fetchChannel(session(), "channel", "Game") }
+            }
+
+            assertEquals(TwitchApiErrorType.InvalidToken, error.type)
+            assertEquals("/gql", server.takeRequest().path)
+            assertEquals("/oauth2/validate", server.takeRequest().path)
+            assertFalse(error.message.orEmpty().contains("access-token-secret"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `graphql rejection remains transient when validation confirms session`() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(403))
+            server.enqueue(
+                MockResponse().setResponseCode(200).setBody(
+                    """{"user_id":"1","client_id":"kd1unb4b3q4t58fwlpcbzcbnm76a8fp"}""",
+                ),
+            )
+
+            val error = assertFailsWith<TwitchApiException> {
+                runBlocking { client(server).fetchChannel(session(), "channel", "Game") }
+            }
+
+            assertEquals(TwitchApiErrorType.Http, error.type)
+            assertEquals("/gql", server.takeRequest().path)
+            assertEquals("/oauth2/validate", server.takeRequest().path)
+            assertFalse(error.message.orEmpty().contains("access-token-secret"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `graphql rejection remains transient when validation cannot confirm it`() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(401))
+            server.enqueue(MockResponse().setResponseCode(503))
+
+            val error = assertFailsWith<TwitchApiException> {
+                runBlocking { client(server).fetchChannel(session(), "channel", "Game") }
+            }
+
+            assertEquals(TwitchApiErrorType.Http, error.type)
+            assertTrue(error.message.orEmpty().contains("could not be confirmed"))
+            assertEquals("/gql", server.takeRequest().path)
+            assertEquals("/oauth2/validate", server.takeRequest().path)
+            assertFalse(error.message.orEmpty().contains("access-token-secret"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
     fun `empty graphql error array allows safe data`() {
         val server = MockWebServer()
         server.start()

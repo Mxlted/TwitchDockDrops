@@ -35,9 +35,10 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
 - Session data is encrypted with AES-256-GCM before it is written to `/data/session.enc`.
 - When Twitch rejects a stored token as invalid, the runtime cancels session work and deletes the
   encrypted credential before exposing the expired state to the browser.
-- A 401/403 from the authoritative token-validation or Twitch GraphQL API can expire a session. A
-  watch beacon or HTML/JavaScript watch-configuration rejection cannot; those results invalidate or
-  retry watch configuration while preserving the stored OAuth session.
+- A 401/403 from authoritative token validation can expire a session. A Twitch GraphQL 401/403 first
+  re-validates the token and expires the session only when validation confirms it is invalid. A watch
+  beacon or HTML/JavaScript watch-configuration rejection cannot; those results invalidate or retry
+  watch configuration while preserving the stored OAuth session.
 - By default, a random key is stored alongside the encrypted session in the private named volume.
   This protects accidental disclosure of the session file alone, but not theft of the complete
   volume by a host administrator.

@@ -34,7 +34,6 @@ import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.FormBody
@@ -50,6 +49,7 @@ private const val TwitchClientId = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
 private const val TwitchClientUrl = "https://www.twitch.tv"
 private const val MaxSpadeUrlCacheEntries = 64
 private const val MaxConcurrentTwitchLookups = 4
+private const val MaxAclChannelChecks = 100
 private const val MaxOAuthResponseBytes = 64 * 1024
 private const val MaxGraphQlResponseBytes = 4 * 1024 * 1024
 private const val MaxWatchConfigurationBytes = 2 * 1024 * 1024
@@ -401,20 +401,24 @@ class TwitchApiClient(
     ): List<Channel> {
         val allowedChannels = campaign.allowedChannels
             .distinctBy { it.login.lowercase() }
-            .take(limit.coerceAtLeast(1))
+            .take(MaxAclChannelChecks)
         if (allowedChannels.isNotEmpty()) {
             // Campaign ACL membership is the strongest eligibility signal Twitch exposes here.
-            // Bound the live checks so large allow-lists do not become slow channel scans.
-            val attempts = allowedChannels.mapConcurrent(MaxConcurrentTwitchLookups) { channel ->
-                runCatchingCancellable {
-                    fetchChannel(session, channel.login, campaign.gameName)
+            // Page the live checks so large allow-lists remain bounded while later entries are reachable.
+            for (page in allowedChannels.chunked(limit.coerceAtLeast(1))) {
+                val attempts = page.mapConcurrent(MaxConcurrentTwitchLookups) { channel ->
+                    runCatchingCancellable {
+                        fetchChannel(session, channel.login, campaign.gameName)
+                    }
                 }
+                val resolved = attempts.mapNotNull { it.getOrNullUnlessInvalidToken() }
+                if (resolved.isEmpty() && attempts.all { it.isFailure }) {
+                    throw attempts.firstNotNullOf { it.exceptionOrNull() }
+                }
+                val eligible = resolved.filter { it.online && it.dropsEnabled }
+                if (eligible.isNotEmpty()) return eligible
             }
-            val resolved = attempts.mapNotNull { it.getOrNullUnlessInvalidToken() }
-            if (resolved.isEmpty() && attempts.all { it.isFailure }) {
-                throw attempts.firstNotNullOf { it.exceptionOrNull() }
-            }
-            return resolved.filter { it.online && it.dropsEnabled }
+            return emptyList()
         }
 
         val slugResponse = gql(
@@ -480,7 +484,11 @@ class TwitchApiClient(
             )
         val settings = user["broadcastSettings"].asObjectOrNull()
         val game = settings?.get("game").asObjectOrNull()
-        val actualGameName = game?.get("displayName").asStringOrNull() ?: expectedGame
+        val actualGameName = if (settings != null) {
+            game?.get("displayName").asStringOrNull()
+        } else {
+            expectedGame
+        }
         val matchesExpectedGame = expectedGame.isNullOrBlank() ||
             actualGameName?.equals(expectedGame, ignoreCase = true) == true
         return Channel(
@@ -684,9 +692,26 @@ class TwitchApiClient(
             )
         }.use { response ->
             if (response.code == 401 || response.code == 403) {
+                try {
+                    validateAccessToken(session.accessToken)
+                } catch (error: TwitchApiException) {
+                    when (error.type) {
+                        TwitchApiErrorType.InvalidToken -> throw error
+                        TwitchApiErrorType.Network,
+                        TwitchApiErrorType.Http
+                        -> throw TwitchApiException(
+                            TwitchApiErrorType.Http,
+                            "Twitch GraphQL rejected the request (HTTP ${response.code}), but the rejection " +
+                                "could not be confirmed because session validation failed.",
+                            error,
+                        )
+                        else -> throw error
+                    }
+                }
                 throw TwitchApiException(
-                    TwitchApiErrorType.InvalidToken,
-                    "Twitch session expired or is not authorized for this request.",
+                    TwitchApiErrorType.Http,
+                    "Twitch GraphQL rejected the request (HTTP ${response.code}) although the session is " +
+                        "still valid; retrying.",
                 )
             }
             if (!response.isSuccessful) {
@@ -782,16 +807,18 @@ class TwitchApiClient(
             .addPathSegment(channel.login)
             .build()
         val channelHtml = getWatchConfiguration(session, channelUrl.toString(), allowSettingsHost = false)
-        SpadeUrlPattern.find(channelHtml)?.groupValues?.get(1)?.let { candidate ->
-            return candidate.takeIf(::isAllowedSpadeUrl)
-        }
+        findAllowedSpadeUrl(channelHtml)?.let { return it }
         val settingsUrl = SettingsUrlPattern.find(channelHtml)?.groupValues?.get(1)
             ?.takeIf(::isAllowedSettingsUrl)
             ?: return null
         val settings = getWatchConfiguration(session, settingsUrl, allowSettingsHost = true)
-        return SpadeUrlPattern.find(settings)?.groupValues?.get(1)
-            ?.takeIf(::isAllowedSpadeUrl)
+        return findAllowedSpadeUrl(settings)
     }
+
+    private fun findAllowedSpadeUrl(configuration: String): String? =
+        sequenceOf(BeaconUrlPattern, SpadeUrlPattern)
+            .flatMap { pattern -> pattern.findAll(configuration).map { it.groupValues[1] } }
+            .firstOrNull(::isAllowedSpadeUrl)
 
     private fun getWatchConfiguration(
         session: StoredTwitchSession,
@@ -864,8 +891,10 @@ class TwitchApiClient(
         json.parseToJsonElement(this).jsonObject
 }
 
-private val SpadeUrlPattern =
+private val BeaconUrlPattern =
     Regex("\\\"beacon_?url\\\"\\s*:\\s*\\\"(https?://[^\\\"]+)\\\"", RegexOption.IGNORE_CASE)
+private val SpadeUrlPattern =
+    Regex("\\\"spade_?url\\\"\\s*:\\s*\\\"(https?://[^\\\"]+)\\\"", RegexOption.IGNORE_CASE)
 private val SettingsUrlPattern = Regex(
     "src=[\\\"'](https?://[^\\\"']+/config/settings\\.[0-9a-f]{32}\\.js)[\\\"']",
     RegexOption.IGNORE_CASE,
@@ -971,7 +1000,7 @@ enum class TwitchOperation(
     ),
     Inventory(
         "Inventory",
-        "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",
+        "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
         buildJsonObject { put("fetchRewardCampaigns", false) },
     ),
     CurrentDrop(
@@ -980,7 +1009,7 @@ enum class TwitchOperation(
     ),
     Campaigns(
         "ViewerDropsDashboard",
-        "5a4da2ab3d5b47c9f9ce864e727b2cb346af1e3ea8b897fe8f704a97ff017619",
+        "d9cae7761dafab85908c85e6683cb4201b449e66ac3bb5e894f15ff12aeafaa7",
         buildJsonObject { put("fetchRewardCampaigns", false) },
     ),
     CampaignDetails(
@@ -1195,7 +1224,7 @@ private fun JsonElement?.asString(default: String = ""): String =
     asStringOrNull() ?: default
 
 private fun JsonElement?.asStringOrNull(): String? =
-    this?.jsonPrimitive?.contentOrNull
+    (this as? JsonPrimitive)?.contentOrNull
 
 private fun JsonElement?.asRequiredNonBlank(fieldName: String): String =
     asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
@@ -1205,20 +1234,20 @@ private fun JsonElement?.asInt(default: Int): Int =
     asIntOrNull() ?: default
 
 private fun JsonElement?.asIntOrNull(): Int? =
-    this?.jsonPrimitive?.intOrNull
+    (this as? JsonPrimitive)?.intOrNull
 
 private fun JsonElement?.asLong(default: Long): Long =
     asStringOrNull()?.toLongOrNull() ?: default
 
 private fun JsonElement?.asBool(default: Boolean): Boolean =
-    this?.jsonPrimitive?.booleanOrNull ?: default
+    (this as? JsonPrimitive)?.booleanOrNull ?: default
 
 private fun JsonElement?.asInstantOrNull(): Instant? =
     asStringOrNull()?.let { value -> runCatching { Instant.parse(value) }.getOrNull() }
 
 @Suppress("unused")
 private fun JsonElement?.asFloat(default: Float): Float =
-    this?.jsonPrimitive?.floatOrNull ?: default
+    (this as? JsonPrimitive)?.floatOrNull ?: default
 
 private suspend inline fun <T> runCatchingCancellable(
     crossinline block: suspend () -> T,

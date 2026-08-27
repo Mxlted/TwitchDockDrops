@@ -64,5 +64,49 @@ class TwitchApiConcurrencyTest {
         }
     }
 
+    @Test
+    fun `allowed-channel lookup pages beyond first limit until an eligible stream is found`() = runBlocking {
+        val server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val body = request.body.readUtf8()
+                val stream = if (body.contains("\"channel\":\"channel-23\"")) {
+                    """{"id":"broadcast-23","viewersCount":1}"""
+                } else {
+                    "null"
+                }
+                return MockResponse().setBody(
+                    """{"data":{"user":{"id":"123","login":"channel-23","displayName":"Channel","stream":$stream,"broadcastSettings":{"game":{"id":"game","displayName":"Game"},"title":"Live"}}}}""",
+                )
+            }
+        }
+        server.start()
+        try {
+            val client = TwitchApiClient(
+                OkHttpClient(),
+                gqlEndpoint = server.url("/gql").toString(),
+                twitchWebBaseUrl = server.url("/").toString(),
+                oauthBaseUrl = server.url("/").toString(),
+            )
+            val campaign = Campaign(
+                id = "campaign",
+                name = "Campaign",
+                gameName = "Game",
+                linked = true,
+                active = true,
+                allowedChannels = (1..25).map { index ->
+                    Channel(index.toLong(), "channel-$index", aclBased = true)
+                },
+            )
+
+            val channels = client.fetchEligibleChannels(session(), campaign)
+
+            assertEquals(listOf("channel-23"), channels.map { it.login })
+            assertTrue(server.requestCount <= 25)
+        } finally {
+            server.shutdown()
+        }
+    }
+
     private fun session() = StoredTwitchSession("token", "123", "device", Instant.EPOCH)
 }
