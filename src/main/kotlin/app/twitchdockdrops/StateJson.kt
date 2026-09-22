@@ -11,7 +11,8 @@ import com.nathan.twitchdropsminer.android.data.model.LoginSession
 import com.nathan.twitchdropsminer.android.data.model.RuntimeActivity
 import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
 import com.nathan.twitchdropsminer.android.runtime.CampaignPrioritySelector
-import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategory
+import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategoryPage
+import com.nathan.twitchdropsminer.android.data.twitch.categorySearchLimit
 import java.time.Duration
 import java.time.Instant
 import kotlinx.serialization.json.Json
@@ -28,11 +29,12 @@ class StateJson(
 ) {
     private val json = Json { explicitNulls = true }
 
-    fun encodeCategories(query: String, categories: List<TwitchCategory>): String = buildJsonObject {
+    fun encodeCategories(query: String, page: TwitchCategoryPage): String = buildJsonObject {
         put("query", query)
-        put("categories", categories.take(12).toJsonArray { category ->
+        put("categories", page.categories.take(categorySearchLimit(query)).toJsonArray { category ->
             buildJsonObject { put("id", category.id); put("name", category.name) }
         })
+        put("nextCursor", if (query.length >= 4) page.nextCursor else null)
     }.toString()
 
     fun encode(

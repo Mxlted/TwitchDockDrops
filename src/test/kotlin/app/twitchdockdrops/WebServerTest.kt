@@ -16,6 +16,7 @@ import com.nathan.twitchdropsminer.android.data.twitch.ValidatedToken
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearch
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchException
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategory
+import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategoryPage
 import com.nathan.twitchdropsminer.android.runtime.LocalMinerRuntime
 import java.nio.file.Path
 import java.util.Base64
@@ -48,7 +49,7 @@ class WebServerTest {
     private lateinit var runtime: LocalMinerRuntime
     private lateinit var server: WebServer
     private val client = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
-    private var categoryLookup: suspend (String) -> List<TwitchCategory> = { listOf(TwitchCategory("42", "Future Game")) }
+    private var categoryLookup: suspend (String, String?) -> TwitchCategoryPage = { _, _ -> TwitchCategoryPage(listOf(TwitchCategory("42", "Future Game"))) }
 
     @BeforeTest
     fun startServer() {
@@ -68,7 +69,7 @@ class WebServerTest {
             logRepository = logs,
             trustedOrigins = setOf("http://127.0.0.1:*"),
             maxSseClients = 1,
-            categorySearch = CategorySearch { query -> categoryLookup(query) },
+            categorySearch = CategorySearch { query, after -> categoryLookup(query, after) },
         )
         server.start()
     }
@@ -93,10 +94,10 @@ class WebServerTest {
     @Test
     fun `public category search returns explicit fields without a session or campaign`() {
         var received = ""
-        categoryLookup = { query -> received = query; listOf(TwitchCategory("42", "Future Game")) }
+        categoryLookup = { query, _ -> received = query; TwitchCategoryPage(listOf(TwitchCategory("42", "Future Game"))) }
         execute("/api/categories/search?q=Future%20Game").use {
             assertEquals(200, it.code)
-            assertEquals("""{"query":"Future Game","categories":[{"id":"42","name":"Future Game"}]}""", it.body!!.string())
+            assertEquals("""{"query":"Future Game","categories":[{"id":"42","name":"Future Game"}],"nextCursor":null}""", it.body!!.string())
         }
         assertEquals("Future Game", received)
         assertTrue(runtime.snapshot.value.campaigns.isEmpty())
@@ -105,8 +106,10 @@ class WebServerTest {
 
     @Test
     fun `category search validates query and method before upstream work`() {
-        categoryLookup = { error("Must not query Twitch") }
-        listOf("", "?q=a", "?q=ab&q=cd", "?query=ab", "?q=ab%0Acd", "?q=${"a".repeat(101)}").forEach { suffix ->
+        categoryLookup = { _, _ -> error("Must not query Twitch") }
+        listOf("", "?q=a", "?q=ab&q=cd", "?query=ab", "?q=ab%0Acd", "?q=${"a".repeat(101)}",
+            "?q=abc&after=NTA%3D", "?q=star&after=", "?q=star&after=one&after=two",
+            "?q=star&after=%0A", "?q=star&after=${"a".repeat(513)}", "?q=star&limit=100").forEach { suffix ->
             execute("/api/categories/search$suffix").use { assertError(it, 400) }
         }
         execute("/api/categories/search?q=game", "POST", "{}").use { assertError(it, 405) }
@@ -114,10 +117,32 @@ class WebServerTest {
 
     @Test
     fun `category errors distinguish upstream failures from capacity and stay structured`() {
-        categoryLookup = { throw CategorySearchException() }
+        categoryLookup = { _, _ -> throw CategorySearchException() }
         execute("/api/categories/search?q=game").use { assertError(it, 502) }
-        categoryLookup = { throw CategorySearchException(busy = true) }
+        categoryLookup = { _, _ -> throw CategorySearchException(busy = true) }
         execute("/api/categories/search?q=game").use { assertError(it, 429) }
+    }
+
+    @Test
+    fun `category pages retain all fifty results and pass opaque cursors`() {
+        var received: String? = null
+        categoryLookup = { _, after ->
+            received = after
+            TwitchCategoryPage((1..50).map { TwitchCategory("$it", "Game $it") }, "MTAw")
+        }
+        execute("/api/categories/search?after=NTA%3D&q=star").use {
+            assertEquals(200, it.code)
+            val body = it.body!!.string()
+            assertTrue(body.contains("\"name\":\"Game 50\""))
+            assertTrue(body.contains("\"nextCursor\":\"MTAw\""))
+        }
+        assertEquals("NTA=", received)
+        execute("/api/categories/search?q=st").use {
+            val body = it.body!!.string()
+            assertTrue(body.contains("\"name\":\"Game 12\""))
+            assertFalse(body.contains("\"name\":\"Game 13\""))
+            assertTrue(body.contains("\"nextCursor\":null"))
+        }
     }
 
     @Test

@@ -9,6 +9,9 @@ const ui = {
   gameScope: "twitch",
   gameResults: [],
   gameResultQuery: "",
+  gamePage: 0,
+  gamePageCursors: [null],
+  gameNextCursor: null,
   gameSearchLoading: false,
   gameSearchError: "",
   gameSearchController: null,
@@ -173,6 +176,8 @@ function render() {
     ? [focused.selectionStart, focused.selectionEnd] : null;
   const draftValue = focused?.matches("[data-setting-range], [data-priority-game]") ? focused.value : null;
   const priorityScroll = app.querySelector(".priority-list")?.scrollTop || 0;
+  const oldResults = app.querySelector(".game-results");
+  const resultScroll = oldResults?.scrollTop || 0;
   app.innerHTML = markup;
   if (!viewChanged) {
     const restored = focusKey ? app.querySelector(focusKey) : null;
@@ -185,6 +190,8 @@ function render() {
     if (selection && restored?.setSelectionRange) restored.setSelectionRange(...selection);
     const list = app.querySelector(".priority-list");
     if (list) list.scrollTop = priorityScroll;
+    const results = app.querySelector(".game-results");
+    if (results && results.dataset.pageKey === oldResults?.dataset.pageKey) results.scrollTop = resultScroll;
   }
   app.setAttribute("aria-busy", "false");
   if (viewChanged) app.firstElementChild?.classList.add("is-entering");
@@ -490,11 +497,14 @@ function renderGamePriorities(data) {
   if (ui.gameScope === "all") priorities.forEach((name) => known.set(key(name), name));
   const matches = remote ? ui.gameResults.map((category) => category.name) : query.length >= 2 ? [...known.values()].filter((name) => key(name).includes(key(query)))
     .sort((a, b) => a.localeCompare(b)) : [];
-  const resultLimit = remote ? 12 : 8;
+  const resultLimit = remote ? query.length >= 4 ? 50 : 12 : 8;
   const resultMessage = remote
     ? ui.gameSearchLoading ? "Searching Twitch…"
       : ui.gameSearchError || (ui.gameResultQuery && ui.gameResultQuery === query
-        ? matches.length ? `${matches.length} Twitch categories. Add a game to save its place for future campaigns.` : "No Twitch categories found. Try a shorter or different name."
+        ? matches.length ? query.length < 4
+          ? `${matches.length} Twitch categories. Use 4+ characters to browse all matches.`
+          : `${matches.length} ${matches.length === 1 ? "category" : "categories"} on page ${ui.gamePage + 1}. ${ui.gameNextCursor ? "More matches available." : "End of results."}`
+          : ui.gamePage ? "No more categories on this page. Go back or refine your search." : "No Twitch categories found. Try a shorter or different name."
         : "Enter a name and select Search Twitch to load categories, even without Drops campaigns.")
     : matches.length ? `${Math.min(8, matches.length)} of ${matches.length} matches` : "No matches in this search scope. You can still save the exact name above.";
   const saved = priorities.some((name) => key(name) === key(query));
@@ -507,15 +517,16 @@ function renderGamePriorities(data) {
           <label for="gameSearch">Find or add a category</label>
           <div class="search-field">${searchIcon()}<input id="gameSearch" type="search" maxlength="${remote ? 100 : 200}" autocomplete="off" placeholder="${remote ? "Search games on Twitch" : "Exact Twitch category name"}" aria-describedby="gameSearchHint" value="${attr(ui.gameSearch)}"></div>
           <label class="sort-control" for="gameScope">Search within <select id="gameScope"><option value="twitch" ${remote ? "selected" : ""}>All Twitch categories</option><option value="all" ${ui.gameScope === "all" ? "selected" : ""}>Loaded & saved games</option><option value="active" ${ui.gameScope === "active" ? "selected" : ""}>Active campaigns</option><option value="linked" ${ui.gameScope === "linked" ? "selected" : ""}>Linked campaigns</option></select></label>
-          <p class="field-hint" id="gameSearchHint">${remote ? "Search 2–100 characters to load up to 12 Twitch categories. No active campaign or Twitch login is required. Refine the name for more specific results." : "Type 2+ characters to search up to 8 local matches, or save an exact Twitch category name manually."}</p>
+          <p class="field-hint" id="gameSearchHint">${remote ? "2–3 characters show up to 12 matches. Use 4+ characters to browse all matches, 50 per page. Pages load on request and are cached for 5 minutes. No campaign or Twitch login required." : "Type 2+ characters to search up to 8 local matches, or save an exact Twitch category name manually."}</p>
           ${remote ? `<button class="button button-primary" type="submit" ${query.length < 2 || query.length > 100 || ui.gameSearchLoading ? "disabled" : ""}>${ui.gameSearchLoading ? "Searching Twitch…" : "Search Twitch"}</button>`
             : `<button class="button button-primary" type="submit" ${!query || saved || full ? "disabled" : ""}>${saved ? "Already prioritized" : full ? "500-game limit reached" : "Save category at end"}</button>`}
         </form>
-        ${remote || query.length >= 2 ? `<div class="game-results" aria-label="Matching categories" aria-busy="${remote && ui.gameSearchLoading}"><p class="field-hint ${ui.gameSearchError ? "search-error" : ""}" role="status">${esc(resultMessage)}</p>${matches.slice(0, resultLimit).map((name) => {
+        ${remote || query.length >= 2 ? `<div class="game-results" data-page-key="${attr(`${ui.gameScope}:${ui.gameResultQuery}:${ui.gamePage}`)}" aria-label="Matching categories" aria-busy="${remote && ui.gameSearchLoading}"><p class="field-hint ${ui.gameSearchError ? "search-error" : ""}" role="status">${esc(resultMessage)}</p>${matches.slice(0, resultLimit).map((name) => {
           const index = priorities.findIndex((game) => key(game) === key(name));
           const hasCampaign = campaigns.some((campaign) => key(campaign.gameName) === key(name));
           return `<button class="game-result" type="button" data-action="add-priority" data-game="${attr(name)}" ${index >= 0 || full ? "disabled" : ""}><span>${esc(name)}${remote ? `<small>${hasCampaign ? "Campaign in your inventory" : "No campaign loaded"}</small>` : ""}</span><span>${index >= 0 ? `#${index + 1} saved` : full ? "List full" : "+ Add"}</span></button>`;
         }).join("")}</div>` : ""}
+        ${remote && query.length >= 4 && ui.gameResultQuery === query && (ui.gamePage > 0 || ui.gameNextCursor) ? `<nav class="pagination" aria-label="Category search pages"><button class="tiny-button" type="button" data-action="category-page" data-offset="-1" ${ui.gamePage === 0 || ui.gameSearchLoading ? "disabled" : ""}>Previous</button><span>Page ${ui.gamePage + 1}</span><button class="tiny-button" type="button" data-action="category-page" data-offset="1" ${!ui.gameNextCursor || ui.gameSearchLoading ? "disabled" : ""}>Next</button></nav>` : ""}
       </div>
       <div class="priority-order">
         <div class="priority-list-head"><strong>First available game wins</strong>${priorities.length ? '<button class="tiny-button" data-action="clear-priorities" type="button">Clear all</button>' : ""}</div>
@@ -866,6 +877,7 @@ async function handleClick(event) {
     if (action === "move-priority") await command("/api/priorities/move", { gameName: button.dataset.game, offset: Number(button.dataset.offset) });
     if (action === "clear-priorities" && await ask("Clear all game priorities?", "This removes your saved game order, including categories waiting for future campaigns. Auto Mode will choose the next game.", "Clear priorities")) await command("/api/priorities/clear");
     if (action === "campaign-page") { ui.campaignPage += Number(button.dataset.offset); render(); }
+    if (action === "category-page") await searchTwitchCategories(ui.gamePage + Number(button.dataset.offset));
     if (action === "toggle-exclusion") await command("/api/campaigns/exclusion", { campaignIds: [button.dataset.id], excluded: button.dataset.excluded !== "true" });
     if (action === "campaign-filter") {
       ui.campaignPage = 0;
@@ -964,12 +976,26 @@ function cancelGameSearch() {
   ui.gameSearchError = "";
   ui.gameResults = [];
   ui.gameResultQuery = "";
+  ui.gamePage = 0;
+  ui.gamePageCursors = [null];
+  ui.gameNextCursor = null;
 }
 
-async function searchTwitchCategories() {
+async function searchTwitchCategories(page = null) {
   const query = ui.gameSearch.trim();
   if (query.length < 2 || query.length > 100 || ui.gameSearchLoading) return;
-  cancelGameSearch();
+  let after = null;
+  if (page === null) {
+    cancelGameSearch();
+    page = 0;
+  } else {
+    if (ui.gameScope !== "twitch" || query.length < 4 || query !== ui.gameResultQuery ||
+      !Number.isInteger(page) || page < 0 || Math.abs(page - ui.gamePage) !== 1) return;
+    after = page > ui.gamePage ? ui.gameNextCursor : ui.gamePageCursors[page];
+    if (page > 0 && !after) return;
+    ui.gameSearchRequestId += 1;
+    ui.gameSearchError = "";
+  }
   const requestId = ui.gameSearchRequestId;
   const controller = new AbortController();
   ui.gameSearchController = controller;
@@ -978,21 +1004,31 @@ async function searchTwitchCategories() {
   const timeout = window.setTimeout(() => controller.abort(), 20000);
   try {
     let categories;
+    let nextCursor = null;
     if (ui.preview) {
       categories = [{id: "66170", name: "Warframe"}, {id: "490744", name: "Stardew Valley"}]
         .filter((category) => category.name.toLowerCase().includes(query.toLowerCase()));
     } else {
-      const response = await fetch(`/api/categories/search?q=${encodeURIComponent(query)}`, {
+      const response = await fetch(`/api/categories/search?q=${encodeURIComponent(query)}${after ? `&after=${encodeURIComponent(after)}` : ""}`, {
         headers: { Accept: "application/json" }, signal: controller.signal,
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Twitch category search failed. Try again.");
       if (!Array.isArray(payload.categories)) throw new Error("The category search response could not be read.");
       categories = payload.categories;
+      nextCursor = query.length >= 4 ? payload.nextCursor ?? null : null;
+      if (nextCursor !== null && (typeof nextCursor !== "string" || !/^[A-Za-z0-9+/=_-]{1,512}$/.test(nextCursor) ||
+        nextCursor === after || ui.gamePageCursors.slice(0, page + 1).includes(nextCursor))) {
+        throw new Error("Twitch returned a repeated or invalid page. Refine your search and try again.");
+      }
     }
     if (requestId !== ui.gameSearchRequestId) return;
-    ui.gameResults = categories.filter((category) => typeof category?.name === "string" && category.name.length <= 200).slice(0, 12);
+    ui.gameResults = categories.filter((category) => typeof category?.name === "string" && category.name.length <= 200).slice(0, query.length >= 4 ? 50 : 12);
     ui.gameResultQuery = query;
+    ui.gamePage = page;
+    ui.gamePageCursors = ui.gamePageCursors.slice(0, page);
+    ui.gamePageCursors[page] = after;
+    ui.gameNextCursor = nextCursor;
   } catch (error) {
     if (requestId !== ui.gameSearchRequestId) return;
     ui.gameSearchError = error.name === "AbortError" ? "Search timed out. Try again."

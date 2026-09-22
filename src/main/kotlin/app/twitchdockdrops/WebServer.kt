@@ -10,6 +10,7 @@ import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
 import com.nathan.twitchdropsminer.android.runtime.LocalMinerRuntime
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearch
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchException
+import com.nathan.twitchdropsminer.android.data.twitch.isCategorySearchCursor
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.IOException
@@ -107,20 +108,35 @@ class WebServer(
     private fun searchCategories(exchange: HttpExchange) {
         exchange.requireMethod("GET")
         val raw = exchange.requestURI.rawQuery.orEmpty()
-        if (raw.length > 1200 || !raw.startsWith("q=") || '&' in raw) {
-            throw RequestException(400, "Provide one category search parameter: q.")
+        if (raw.length > 3000) {
+            throw RequestException(400, "Category search parameters are too long.")
         }
-        val query = try {
-            URLDecoder.decode(raw.substring(2), StandardCharsets.UTF_8).trim()
+        val parameters = try {
+            val pairs = raw.split('&').map { part ->
+                val pair = part.split('=', limit = 2)
+                if (pair.size != 2 || pair[0] !in setOf("q", "after")) {
+                    throw RequestException(400, "Provide q and optionally after for category search.")
+                }
+                pair[0] to URLDecoder.decode(pair[1], StandardCharsets.UTF_8)
+            }
+            if (pairs.map { it.first }.distinct().size != pairs.size) {
+                throw RequestException(400, "Duplicate category search parameters.")
+            }
+            pairs.toMap()
         } catch (_: IllegalArgumentException) {
             throw RequestException(400, "Invalid category search encoding.")
         }
+        val query = parameters["q"].orEmpty().trim()
         if (query.length !in 2..100 || query.any(Char::isISOControl)) {
             throw RequestException(400, "Search must contain 2 to 100 characters without control characters.")
         }
+        val after = parameters["after"]
+        if (after != null && (query.length < 4 || !isCategorySearchCursor(after))) {
+            throw RequestException(400, "Paging requires at least 4 search characters and a valid cursor.")
+        }
         val search = categorySearch ?: throw RequestException(503, "Category search is unavailable.")
         val results = try {
-            runBlocking { search.search(query) }
+            runBlocking { search.search(query, after) }
         } catch (error: CategorySearchException) {
             throw RequestException(if (error.busy) 429 else 502, error.message ?: "Category search failed.")
         }

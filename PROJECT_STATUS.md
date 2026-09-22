@@ -6,6 +6,7 @@ changes.
 ## Implementation checklist
 
 - [x] On-demand public Twitch category search finds games without campaigns or a saved login
+- [x] Four-character category searches browse all available matches in cached pages; short searches retain 12 results
 - [x] Independent category priority editor supports exact-name entry, scoped search, and numeric reordering
 - [x] Returning campaigns inherit saved category order; known starts wake active promotion checks
 - [x] In-flight promotion lookups cannot busy-loop on an overdue timer
@@ -63,6 +64,24 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
+## Verification record — 2026-09-22 (expanded category search)
+
+- Searches of 2–3 characters retain the 12-result limit. Searches of 4–100 characters expose all
+  Twitch-provided matches through Previous/Next, up to 50 per page, without a total app result cutoff.
+  Each page loads on request and uses the existing five-minute/32-entry cache, now keyed by query and
+  cursor. No background refresh or full-catalog crawl was added.
+- Cursor validation, duplicate/unknown parameter rejection, safe failure on malformed pagination,
+  page retry, stale-query suppression, and result-scroll preservation cover the expanded flow.
+- Root Gradle 9.5.1/JDK 21: 131 JVM tests passed, zero failures/errors/skips; `installDist` built.
+  Ten JavaScript regressions and syntax checks passed, covering the short/long threshold, cursor pages,
+  cached requests, invalid continuations, failed-page retry, and stale responses after query changes.
+- Isolated built-host health returned `ok`. Anonymous public Twitch lookup verified short searches,
+  distinct first/second pages for `star`, and end-of-results for `Stardew Valley`. Browser checks at
+  1440px desktop and 390px mobile covered Previous/Next, both themes, adding Star Fox 2 from page two,
+  preserving result scroll after saving, resetting scroll on page changes, and hiding pagination for
+  short/exhausted searches. No horizontal overflow or browser warnings/errors were observed.
+- Android stayed clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. No live farming account was used.
+
 ## Verification record — 2026-09-22
 
 - Added All Twitch categories as the default priority search scope. Search submits explicitly with
@@ -107,8 +126,9 @@ changes.
 
 ### Current category-priority limitations
 
-- Twitch search returns the first 12 matches; refine the query for more specific results. The private
-  public-search endpoint may change or become unavailable. Saved priorities still match exact names
+- Two- or three-character Twitch searches return the first 12 matches. Four or more characters enable
+  paging through all results Twitch exposes; Twitch controls ranking, matching, and any upstream limits.
+  The private public-search endpoint may change or become unavailable. Saved priorities still match exact names
   without regard to case, so category renames require a manual update. Manual entries in local scopes
   are not validated against Twitch.
 - Newly published campaigns are discovered on inventory refresh. Cached scheduled campaigns can

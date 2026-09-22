@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -19,9 +20,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 data class TwitchCategory(val id: String, val name: String)
+data class TwitchCategoryPage(val categories: List<TwitchCategory>, val nextCursor: String? = null)
+
+fun categorySearchLimit(query: String): Int = if (query.trim().length >= 4) 50 else 12
+fun isCategorySearchCursor(value: String): Boolean = value.matches(Regex("[A-Za-z0-9+/=_-]{1,512}"))
 
 fun interface CategorySearch {
-    suspend fun search(query: String): List<TwitchCategory>
+    suspend fun search(query: String, after: String?): TwitchCategoryPage
 }
 
 class CategorySearchException(val busy: Boolean = false) : IllegalStateException(
@@ -46,18 +51,19 @@ class TwitchCategorySearch(
         .followSslRedirects(false)
         .build()
     private val permits = Semaphore(2)
-    private val cache = LinkedHashMap<String, CachedCategories>()
+    private val cache = LinkedHashMap<CacheKey, CachedCategories>()
 
-    override suspend fun search(query: String): List<TwitchCategory> {
+    override suspend fun search(query: String, after: String?): TwitchCategoryPage {
         val normalized = query.trim()
         require(normalized.length in 2..100 && normalized.none(Char::isISOControl))
-        val key = normalized.lowercase(Locale.ROOT)
+        require(after == null || (normalized.length >= 4 && isCategorySearchCursor(after)))
+        val key = CacheKey(normalized.lowercase(Locale.ROOT), after)
         synchronized(cache) {
             cache[key]?.takeIf { nanoTime() - it.savedAt < CacheNanos }?.let { return it.categories }
         }
         if (!permits.tryAcquire()) throw CategorySearchException(busy = true)
         try {
-            val categories = withContext(Dispatchers.IO) { fetch(normalized) }
+            val categories = withContext(Dispatchers.IO) { fetch(normalized, after) }
             synchronized(cache) {
                 cache.remove(key)
                 cache[key] = CachedCategories(nanoTime(), categories)
@@ -69,11 +75,12 @@ class TwitchCategorySearch(
         }
     }
 
-    private fun fetch(query: String): List<TwitchCategory> {
+    private fun fetch(query: String, after: String?): TwitchCategoryPage {
+        val limit = categorySearchLimit(query)
         val payload = buildJsonObject {
             put("operationName", "SearchCategories")
-            put("query", "query SearchCategories(\$query: String!) { searchCategories(query: \$query, first: 12) { edges { node { id name } } } }")
-            put("variables", buildJsonObject { put("query", query) })
+            put("query", "query SearchCategories(\$query: String!, \$first: Int!, \$after: Cursor) { searchCategories(query: \$query, first: \$first, after: \$after) { edges { cursor node { id name } } pageInfo { hasNextPage } } }")
+            put("variables", buildJsonObject { put("query", query); put("first", limit); put("after", after) })
         }
         val request = Request.Builder().url(url)
             .header("Client-ID", TwitchClientId)
@@ -91,6 +98,8 @@ class TwitchCategorySearch(
                 val data = root["data"] as? JsonObject
                 val result = data?.get("searchCategories") as? JsonObject
                 val edges = result?.get("edges") as? JsonArray ?: throw CategorySearchException()
+                // Never silently truncate a page and skip the omitted records via its cursor.
+                if (edges.size > limit) throw CategorySearchException()
                 val categories = edges.mapNotNull { edge ->
                     val node = (edge as? JsonObject)?.get("node") as? JsonObject ?: return@mapNotNull null
                     val id = (node["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
@@ -98,9 +107,19 @@ class TwitchCategorySearch(
                     if (id == null || !id.matches(Regex("[0-9]{1,30}")) || name.isNullOrEmpty() ||
                         name.length > 200 || name.any(Char::isISOControl)) return@mapNotNull null
                     TwitchCategory(id, name)
-                }.distinctBy { it.id }.distinctBy { it.name.lowercase(Locale.ROOT) }.take(12)
+                }.distinctBy { it.id }.distinctBy { it.name.lowercase(Locale.ROOT) }
                 if (edges.isNotEmpty() && categories.isEmpty()) throw CategorySearchException()
-                categories
+                val pageInfo = result["pageInfo"] as? JsonObject ?: throw CategorySearchException()
+                val hasNext = (pageInfo["hasNextPage"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+                    ?: throw CategorySearchException()
+                val nextCursor = if (query.length >= 4 && hasNext) {
+                    // Twitch returns a null pageInfo.endCursor; the continuation is on the last edge.
+                    val cursor = ((edges.lastOrNull() as? JsonObject)?.get("cursor") as? JsonPrimitive)
+                        ?.takeIf { it.isString }?.contentOrNull ?: throw CategorySearchException()
+                    if (!isCategorySearchCursor(cursor) || cursor == after) throw CategorySearchException()
+                    cursor
+                } else null
+                TwitchCategoryPage(categories, nextCursor)
             }
         } catch (error: java.io.IOException) {
             throw CategorySearchException()
@@ -109,7 +128,8 @@ class TwitchCategorySearch(
         }
     }
 
-    private data class CachedCategories(val savedAt: Long, val categories: List<TwitchCategory>)
+    private data class CacheKey(val query: String, val after: String?)
+    private data class CachedCategories(val savedAt: Long, val categories: TwitchCategoryPage)
     private companion object {
         const val MaxResponseBytes = 128 * 1024
         val CacheNanos: Long = Duration.ofMinutes(5).toNanos()

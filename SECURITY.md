@@ -66,8 +66,11 @@ it is sent only upstream and is never exposed through the browser API.
 Public category search uses an anonymous query to the fixed `https://gql.twitch.tv/gql` endpoint.
 It sends only the search text and public client identifier, never saved OAuth credentials or cookies,
 and does not affect authentication or mining state. Redirects are disabled. The Host-validated GET
-route accepts one bounded query; concurrency, timeout, response size, result count, and memory cache
-are capped. Upstream errors are replaced with fixed messages rather than exposing response bodies.
+route accepts one bounded query and an optional bounded opaque cursor for queries of four or more
+characters. Short queries return up to 12 results; longer queries return at most 50 per requested page.
+Concurrency, timeout, response size, page size, and the 32-page memory cache are capped. Pages are never
+automatically crawled. Duplicate/unknown parameters and invalid or repeated cursors are rejected.
+Upstream errors are replaced with fixed messages rather than exposing response bodies.
 
 Mutation endpoints require a trusted Origin, strict typed JSON, a 64 KiB maximum body, and reject
 unknown fields or wrong methods. Responses include a Content

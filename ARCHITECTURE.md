@@ -152,14 +152,20 @@ the miner and this redacted preview, including saved category ranks, exclusions,
 custom fallback order. This does not perform channel lookups or create another scheduler. The browser
 resolves these IDs against the serialized campaigns to render **Up next**.
 
-`GET /api/categories/search?q=...` performs a read-only public category lookup. It accepts one `q`
-parameter of 2–100 characters, validates Host and method, and returns explicitly serialized
-`{query, categories: [{id, name}]}` with at most 12 results. Missing/invalid queries return 400,
+`GET /api/categories/search?q=...&after=...` performs a read-only public category lookup. It accepts
+one `q` parameter of 2–100 characters and an optional opaque `after` cursor for queries of 4+ characters.
+It validates Host, method, duplicate/unknown parameters, and cursor size/characters, and returns
+explicitly serialized `{query, categories: [{id, name}], nextCursor}`. Two- or three-character searches
+return at most 12 results and a null cursor; 4+ characters return up to 50 per page and a nullable next
+cursor. Missing/invalid queries or paging on a short query return 400,
 capacity exhaustion returns 429, and upstream failures return a safe 502 error. It does not touch
 settings, credentials, `RuntimeSnapshot`, or the miner command queue.
 `TwitchCategorySearch` sends an anonymous `SearchCategories` GraphQL query with JSON variables to the
 fixed Twitch endpoint. Two semaphore slots, a 15-second whole-call timeout, a 128 KiB response limit,
-and a 32-entry/five-minute memory cache bound its cost independently of mining. Redirects are disabled.
+and a 32-entry/five-minute memory cache keyed by case-insensitive query plus cursor bound its cost
+independently of mining. Redirects are disabled. Each request fetches exactly one page. Continuations
+use the final edge cursor because Twitch's `pageInfo.endCursor` is null. Malformed, repeated, missing,
+or oversized cursors fail safely; oversized pages fail rather than silently skipping truncated entries.
 The private query was verified against Twitch on 2026-09-22; it can change independently of this app.
 
 Every route validates Host against `TWITCH_DROPS_TRUSTED_HOSTS` before routing. Mutations under
@@ -250,7 +256,11 @@ Category priorities are an independent ordered editor on Campaigns. They reuse t
 migration. Exact names can be added without an inventory entry; matching is case-insensitive and
 does not track Twitch category renames by ID. New additions to a full 500-game list return HTTP 409
 before persistence, instead of silently truncating another priority. The default All Twitch categories
-scope performs an explicit submitted search and renders up to 12 results. Editing the query or scope
+scope performs an explicit submitted search: 2–3 characters show at most 12 results, while 4+ characters
+enable Previous/Next navigation over all matches Twitch exposes, rendering up to 50 per page. There
+is no total result cutoff or automatic page crawling. Only the current result page and a cursor history
+are retained in the browser. Paging failures keep the current results/navigation available for retry;
+page changes reset result scroll, while priority saves and state updates preserve it. Editing the query or scope
 aborts the browser request, clears results, and invalidates stale completions; a 20-second browser
 timeout makes failures retryable. Loaded/saved, active, and linked scopes remain browser-local, require
 two characters, and render at most eight matches. Search selection saves Twitch's canonical name

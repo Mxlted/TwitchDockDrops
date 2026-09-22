@@ -179,11 +179,15 @@ games and promotes when a compatible channel becomes available.
 
 Use **Campaigns → Game & category priorities** to save games before they have an active campaign.
 Select **All Twitch categories**, enter 2–100 characters, and press Enter or **Search Twitch**.
-This loads at most 12 matching categories directly from Twitch, including games with no campaign.
+Two- or three-character searches load at most 12 matching categories. Four or more characters let you
+browse all matches available from Twitch using **Previous/Next**, with up to 50 per page, including
+games with no campaign. There is no app-imposed total result cutoff for these longer searches.
 Select **+ Add** to save the exact returned name. No Twitch login or additional API credentials are
-needed for this public lookup. Searches run only when submitted, not as you type. Refine the name if
-the desired category is outside the first 12 results. The server caches up to 32 searches for five
-minutes and permits two concurrent lookups, each limited to 15 seconds.
+needed for this public lookup. Searches run only when submitted, not as you type. Additional pages
+load only when requested; the app does not crawl the full catalog or poll for changes. The server
+caches up to 32 query/page combinations for five minutes and permits two concurrent lookups, each
+limited to 15 seconds. Repeated searches and navigation reuse those cached pages until they expire
+or are evicted; restarting the app clears the search cache. Refine the name to reduce broad results.
 Loaded/saved, active, and linked scopes still search locally (at most eight displayed matches) and
 allow manual exact-name entry if Twitch search is unavailable.
 Positions are one-based; arrows or a position number reorder the same persistent list. Missing games

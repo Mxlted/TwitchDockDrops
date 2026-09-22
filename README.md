@@ -87,8 +87,9 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
   category name, reorder with arrows or a rank number, and keep its place when a new campaign returns.
   **All Twitch categories** searches Twitch on demand, including games without Drops campaigns or
   a connected account. Enter at least two characters and select **Search Twitch**, then **+ Add**.
-  Up to 12 results load per search; refine the name to narrow results. Local loaded/saved, active,
-  and linked campaign search scopes are also available.
+  Two- or three-character searches show up to 12 results. Four or more characters unlock all matches
+  available from Twitch through **Previous/Next**, 50 per page. Pages load only on request and are
+  cached for five minutes. Local loaded/saved, active, and linked campaign scopes remain available.
 - Campaign lists support upcoming campaigns, sorting by priority/name/end date, and 24-row pages.
   **Up next** follows the server's eligibility and fallback order; live-channel availability still
   determines what can actually run.

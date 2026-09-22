@@ -105,6 +105,77 @@ test('remote errors are visible and allow retry without stale results', async ()
   assert.equal(offline.ui.gameSearchLoading, false);
 });
 
+test('short catalog searches stay capped while four characters expose fifty results and paging', async () => {
+  const categories = Array.from({length:50}, (_, i) => ({id:String(i),name:`Star ${i}`}));
+  const c = client(async () => ({ok:true, json:async () => ({categories,nextCursor:'NTA='})}));
+  c.ui.preview = false;
+  for (const query of ['st', 'sta', 'star']) {
+    c.ui.gameSearch = query;
+    await c.searchTwitchCategories();
+    assert.equal(c.ui.gameResults.length, query.length < 4 ? 12 : 50);
+    const html = c.renderGamePriorities(c.previewState());
+    assert.equal((html.match(/class="game-result"/g) || []).length, query.length < 4 ? 12 : 50);
+    assert.equal(html.includes('aria-label="Category search pages"'), query.length >= 4);
+    assert.equal(c.ui.gameNextCursor, query.length < 4 ? null : 'NTA=');
+  }
+});
+
+test('page navigation retains the previous page on failure and retries its cursor', async () => {
+  const requests = [];
+  let fail = false;
+  const c = client(async (url) => {
+    requests.push(url);
+    if (fail) return {ok:false,json:async () => ({error:'Try again'})};
+    const second = url.includes('&after=');
+    return {ok:true,json:async () => ({categories:[{id:second?'2':'1',name:second?'Last':'First'}],nextCursor:second?null:'NTA='})};
+  });
+  c.ui.preview = false;
+  c.ui.gameSearch = 'star';
+  await c.searchTwitchCategories();
+  fail = true;
+  await c.searchTwitchCategories(1);
+  assert.equal(c.ui.gamePage, 0);
+  assert.equal(c.ui.gameResults[0].name, 'First');
+  assert.equal(c.ui.gameNextCursor, 'NTA=');
+  fail = false;
+  await c.searchTwitchCategories(1);
+  assert.match(requests[2], /after=NTA%3D$/);
+  assert.equal(c.ui.gamePage, 1);
+  assert.equal(c.ui.gameResults[0].name, 'Last');
+  assert.equal(c.ui.gameNextCursor, null);
+  await c.searchTwitchCategories(0);
+  assert.equal(c.ui.gamePage, 0);
+  assert.equal(c.ui.gameResults[0].name, 'First');
+  assert.doesNotMatch(requests[3], /after=/);
+  c.cancelGameSearch();
+  assert.equal(c.ui.gameNextCursor, null);
+  assert.equal(c.ui.gamePageCursors.length, 1);
+});
+
+test('old page responses cannot overwrite a new query and cursor loops are rejected', async () => {
+  let resolvePage;
+  const c = client((url) => url.includes('&after=')
+    ? new Promise(resolve => { resolvePage = resolve; })
+    : Promise.resolve({ok:true,json:async () => ({categories:[{name:'First'}],nextCursor:'NTA='})}));
+  c.ui.preview = false;
+  c.ui.gameSearch = 'star';
+  await c.searchTwitchCategories();
+  const old = c.searchTwitchCategories(1);
+  c.cancelGameSearch();
+  c.ui.gameSearch = 'game';
+  await c.searchTwitchCategories();
+  resolvePage({ok:true,json:async () => ({categories:[{name:'Old page'}],nextCursor:null})});
+  await old;
+  assert.equal(c.ui.gameResultQuery, 'game');
+  assert.equal(c.ui.gamePage, 0);
+  assert.equal(c.ui.gameResults[0].name, 'First');
+  const loop = c.searchTwitchCategories(1);
+  resolvePage({ok:true,json:async () => ({categories:[{name:'Repeated'}],nextCursor:'NTA='})});
+  await loop;
+  assert.match(c.ui.gameSearchError, /repeated or invalid page/);
+  assert.equal(c.ui.gamePage, 0);
+});
+
 test('campaigns page renders at most 24 rows and clamps stale page positions', () => {
   const c = client();
   const data = c.previewState();
