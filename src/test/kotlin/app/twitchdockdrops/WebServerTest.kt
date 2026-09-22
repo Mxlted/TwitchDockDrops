@@ -220,6 +220,16 @@ class WebServerTest {
     }
 
     @Test
+    fun `full priority list reports conflict and preserves the saved order`() = runBlocking {
+        val names = (1..500).map { "Game $it" }
+        settings.update { it.copy(selectedGamePriority = names) }
+        execute("/api/priorities/set", "POST", """{"gameName":"New","priority":1}""").use {
+            assertError(it, 409)
+        }
+        assertEquals(names, SettingsRepository(directory).settings.value.selectedGamePriority)
+    }
+
+    @Test
     fun `channel selection command accepts a positive numeric identifier`() {
         execute(
             "/api/channels/select",

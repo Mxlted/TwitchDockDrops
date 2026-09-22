@@ -177,6 +177,19 @@ The order is configurable. Saved custom orders and priorities survive partial Tw
 responses. While a lower-ranked prioritized game is active, the miner periodically checks earlier
 games and promotes when a compatible channel becomes available.
 
+Use **Campaigns → Game & category priorities** to save games before they have an active campaign.
+Enter an exact Twitch category name or select a match from the loaded inventory. Search is local,
+starts after two characters, returns at most eight matches, and supports active/linked scopes.
+Positions are one-based; arrows or a position number reorder the same persistent list. Missing games
+remain saved and do not prevent later eligible priorities from running. New campaigns match the saved
+name case-insensitively. Twitch category renames require updating the saved name manually.
+The list allows up to 500 games. Adding to a full list returns an error without removing any saved
+game. Reset settings and reset session both clear this list, as before.
+
+Known campaign/drop start times also wake promotion checks while another game is being watched.
+Campaigns newly published by Twitch are discovered at the configured inventory refresh or by manual
+refresh. The **Up next** list previews server-ranked eligible campaigns, not a guaranteed live channel.
+
 The unattended scheduler wakes for campaign/drop starts and ends, settings changes, channel controls,
 inventory deadlines, heartbeat deadlines, and claim retries. A sustained confirmed progress stall
 renews watch configuration and then tries another channel or campaign. Progress endpoint failures are
@@ -198,6 +211,13 @@ The root project requires JDK 21 and Gradle 9.5.1 for local builds:
 
 ```bash
 gradle clean test installDist
+```
+
+Client rendering regressions use Node's built-in test runner (no package installation):
+
+```bash
+node --test src/test/js/app.test.cjs
+node --check src/main/resources/web/app.js
 ```
 
 The complete image build also runs the test and install-distribution tasks:

@@ -99,6 +99,13 @@ Within the prioritized-game group, promotion checks only games earlier than the 
 saved order; fallback work still checks every higher fallback group. Promotion results are revalidated
 against the latest settings before they commit.
 
+Active promotion deadlines also include the next known campaign/drop start boundary. After that
+instant, only future boundaries are considered, preventing a tight loop on the same start time.
+While a promotion lookup is in flight, its timer is omitted from the active wait: completion wakes
+the loop directly, and heartbeat/status deadlines remain active. Slow lookups cannot spin on an
+overdue promotion timer.
+This is a deliberate root-only enhancement; the optional Android reference is unchanged.
+
 Unlinked attempts use a short speculative validation window, but the first progress increase no longer
 disables supervision. Both linked and confirmed-unlinked work continue through a longer sustained-stall
 watchdog. Unavailable or mismatched progress data is not evidence of a stall. A confirmed stall first
@@ -138,6 +145,12 @@ Android sources.
 local logs. `GET /api/events` is a server-sent event stream of the same document. The access token,
 device code secret, encryption key, and filesystem paths are never serialized. Campaign ACL
 membership remains server-side for selection and is not included in campaign state payloads.
+
+`snapshot.selectionPreview` contains up to five campaign IDs, excluding the current campaign, in
+the order produced by `CampaignPrioritySelector.orderedCandidates`. The same selection stages power
+the miner and this redacted preview, including saved category ranks, exclusions, watch windows, and
+custom fallback order. This does not perform channel lookups or create another scheduler. The browser
+resolves these IDs against the serialized campaigns to render **Up next**.
 
 Every route validates Host against `TWITCH_DROPS_TRUSTED_HOSTS` before routing. Mutations under
 `/api/*` additionally require a `TWITCH_DROPS_TRUSTED_ORIGINS` Origin, the exact route method,
@@ -218,9 +231,19 @@ The active-watch card exposes compatible live channel alternatives through the e
 runtime command flow; the browser owns only the accessible loading, empty, and selection presentation.
 The header carries the miner status pill and the global Start/Stop, refresh, and theme controls; the
 current view is mirrored in the URL hash so refresh, back, and bookmarks restore it. Estimated finish
-times, relative campaign end dates, and the priority-queue preview are browser-side presentation of
-serialized snapshot fields, not a second scheduler. When the event stream and polling both fail, an
+times and relative campaign end dates are browser-side presentation of serialized snapshot fields;
+the queue uses the server selection preview, not a second scheduler. When the event stream and polling both fail, an
 offline banner is shown over the last known state.
+
+Category priorities are an independent ordered editor on Campaigns. They reuse the existing
+`selectedGamePriority` settings schema and priority mutation routes, so older saved settings need no
+migration. Exact names can be added without an inventory entry; matching is case-insensitive and
+does not track Twitch category renames by ID. New additions to a full 500-game list return HTTP 409
+before persistence, instead of silently truncating another priority. Search is browser-local over
+loaded/saved names, requires two characters, supports active/linked scopes, and renders at most eight
+matches. Campaign rendering is paged at 24 rows. View updates restore focused controls, text selection,
+in-progress numeric values, and priority-list scroll; successful mutations refresh state before their
+duplicate-command guard is released. Clearing the list requires a dialog confirmation.
 
 The responsive breakpoints are:
 

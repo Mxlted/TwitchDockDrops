@@ -4,6 +4,7 @@ import app.twitchdockdrops.storage.AtomicFiles
 import app.twitchdockdrops.security.SafeText
 import com.nathan.twitchdropsminer.android.data.model.AppSettings
 import com.nathan.twitchdropsminer.android.data.model.AutoModePriority
+import com.nathan.twitchdropsminer.android.data.model.MaxSelectedGamePriorities
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -211,6 +212,8 @@ class SettingsRepository(dataDirectory: Path) {
 
 private const val MaxSettingsBytes = 512L * 1_024L
 
+class GamePriorityLimitException : IllegalArgumentException("The saved game list is full (500 maximum). Remove a game before adding another.")
+
 private data class SettingsLoadResult(
     val settings: AppSettings,
     val status: PersistenceStatus,
@@ -227,6 +230,7 @@ private object GamePriorityOrder {
         val result = normalize(current).toMutableList()
         if (normalizedName.isEmpty()) return result
         val index = result.indexOfFirst { it.equals(normalizedName, ignoreCase = true) }
+        if (index < 0 && result.size >= MaxSelectedGamePriorities) throw GamePriorityLimitException()
         if (index >= 0) result.removeAt(index) else result.add(normalizedName)
         return result
     }
@@ -245,6 +249,7 @@ private object GamePriorityOrder {
         val result = normalize(current).toMutableList()
         if (normalizedName.isEmpty()) return result
         val index = result.indexOfFirst { it.equals(normalizedName, ignoreCase = true) }
+        if (index < 0 && result.size >= MaxSelectedGamePriorities) throw GamePriorityLimitException()
         val label = if (index >= 0) result.removeAt(index) else normalizedName
         result.add((priorityNumber.coerceAtLeast(1) - 1).coerceIn(0, result.size), label)
         return result

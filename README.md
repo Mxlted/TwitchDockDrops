@@ -83,6 +83,13 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
   every drop in the active campaign, recent activity, and the priority queue.
 - **Campaigns** lets you search and filter, pin games in order, expand each campaign to see its
   drops and rewards, check when campaigns end, open account-link pages, and exclude campaigns.
+- **Game & category priorities** saves favorites even without a current campaign. Add an exact Twitch
+  category name, reorder with arrows or a rank number, and keep its place when a new campaign returns.
+  Search starts at two characters, shows up to eight matches from loaded/saved games, and can be
+  limited to active or linked campaigns. It does not download Twitch's full category catalog.
+- Campaign lists support upcoming campaigns, sorting by priority/name/end date, and 24-row pages.
+  **Up next** follows the server's eligibility and fallback order; live-channel availability still
+  determines what can actually run.
 - **Activity** explains what the miner selected, refreshed, watched, or claimed, above the runtime log.
 - **Settings** controls timing, Auto Mode order, fallback behavior, and resets, and reports the
   service version, uptime, and Twitch connection.

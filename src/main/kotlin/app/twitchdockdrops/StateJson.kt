@@ -10,6 +10,7 @@ import com.nathan.twitchdropsminer.android.data.model.LocalLogEntry
 import com.nathan.twitchdropsminer.android.data.model.LoginSession
 import com.nathan.twitchdropsminer.android.data.model.RuntimeActivity
 import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
+import com.nathan.twitchdropsminer.android.runtime.CampaignPrioritySelector
 import java.time.Duration
 import java.time.Instant
 import kotlinx.serialization.json.Json
@@ -74,6 +75,10 @@ private fun RuntimeSnapshot.toJson(settings: AppSettings): JsonObject = buildJso
     putInstant("lastUpdate", lastUpdate)
     put("account", account.toJson())
     put("campaigns", campaigns.toJsonArray { it.toJson(settings) })
+    put("selectionPreview", CampaignPrioritySelector.orderedCandidates(settings, campaigns)
+        .filter { it.id != activeCampaign?.id }
+        .take(5)
+        .toJsonArray { buildStringJson(it.id) })
     put("channels", channels.toJsonArray(Channel::toJson))
     put("activity", activity.tailToJsonArray(100, RuntimeActivity::toJson))
     put("currentChannel", currentChannel?.toJson() ?: JsonNull)

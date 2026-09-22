@@ -93,12 +93,16 @@ class LocalMinerRuntimeStartupTest {
         val settings = SettingsRepository(directory)
         val runtime = runtime(sessionStore(), RecordingTwitchApi(), settings)
 
-        runtime.startMining()
-        withTimeout(2_000) { settings.settings.first { it.miningRequested } }
-        runtime.stopMining()
-        withTimeout(2_000) { settings.settings.first { !it.miningRequested } }
-
-        assertFalse(settings.settings.value.miningRequested)
+        try {
+            runtime.startMining()
+            withTimeout(2_000) { settings.settings.first { it.miningRequested } }
+            runtime.stopMining()
+            withTimeout(2_000) { settings.settings.first { !it.miningRequested } }
+            assertFalse(settings.settings.value.miningRequested)
+        } finally {
+            // Persistence precedes the remaining stop activity/log writes. Join before TempDir cleanup.
+            runtime.stopMiningAndJoin()
+        }
     }
 
     @Test

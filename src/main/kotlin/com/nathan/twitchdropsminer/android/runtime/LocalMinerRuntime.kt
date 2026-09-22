@@ -972,7 +972,9 @@ class LocalMinerRuntime(
             var consecutiveProgressFailures = 0
             var watchConfigurationRenewals = 0
             var nextWatchAt = now()
-            var nextHigherPriorityCheckAt = now().plus(higherPriorityCheckInterval)
+            var nextHigherPriorityCheckAt = RuntimeTemporalSchedule.nextPromotionDeadline(
+                campaignSnapshot, now(), higherPriorityCheckInterval,
+            )
             var nextChannelStatusCheckAt = now().plus(channelStatusCheckInterval)
             var higherPriorityCheck: Deferred<Result<SelectedCampaignWork?>>? = null
             while (
@@ -991,6 +993,7 @@ class LocalMinerRuntime(
                             campaigns = campaignSnapshot,
                             currentMode = currentMode,
                             currentCampaign = currentCampaign,
+                            now = now(),
                         ).any { decision ->
                             decision.mode == promotion.mode &&
                                 decision.candidates.any { candidate -> candidate.id == promotion.campaign.id }
@@ -1010,7 +1013,9 @@ class LocalMinerRuntime(
                         consecutiveProgressFailures = 0
                         watchConfigurationRenewals = 0
                         nextWatchAt = now()
-                        nextHigherPriorityCheckAt = now().plus(higherPriorityCheckInterval)
+                        nextHigherPriorityCheckAt = RuntimeTemporalSchedule.nextPromotionDeadline(
+                            campaignSnapshot, now(), higherPriorityCheckInterval,
+                        )
                         nextChannelStatusCheckAt = now().plus(channelStatusCheckInterval)
                         updateSnapshot(
                             RuntimePhase.Watching,
@@ -1217,6 +1222,7 @@ class LocalMinerRuntime(
                         campaigns = campaignSnapshot,
                         currentMode = currentMode,
                         currentCampaign = currentCampaign,
+                        now = schedulingNow,
                     )
                     if (higherPriorityDecisions.isNotEmpty()) {
                         val skippedChannelIds = failedChannelSkips.keys.toSet()
@@ -1230,7 +1236,9 @@ class LocalMinerRuntime(
                             }
                         }
                     }
-                    nextHigherPriorityCheckAt = schedulingNow.plus(higherPriorityCheckInterval)
+                    nextHigherPriorityCheckAt = RuntimeTemporalSchedule.nextPromotionDeadline(
+                        campaignSnapshot, schedulingNow, higherPriorityCheckInterval,
+                    )
                 }
                 if (!schedulingNow.isBefore(nextChannelStatusCheckAt)) {
                     nextChannelStatusCheckAt = schedulingNow.plus(channelStatusCheckInterval)
@@ -1274,7 +1282,7 @@ class LocalMinerRuntime(
                         higherPriorityCheck = higherPriorityCheck,
                         deadline = RuntimeTemporalSchedule.nextActiveDeadline(
                             nextWatchAt,
-                            nextHigherPriorityCheckAt,
+                            nextHigherPriorityCheckAt.takeIf { higherPriorityCheck == null },
                             nextChannelStatusCheckAt,
                             refreshAt,
                             currentCampaign.endsAt,
@@ -1653,7 +1661,7 @@ class LocalMinerRuntime(
                     higherPriorityCheck = higherPriorityCheck,
                     deadline = RuntimeTemporalSchedule.nextActiveDeadline(
                         nextWatchAt,
-                        nextHigherPriorityCheckAt,
+                        nextHigherPriorityCheckAt.takeIf { higherPriorityCheck == null },
                         nextChannelStatusCheckAt,
                         refreshAt,
                         currentCampaign.endsAt,
@@ -2852,6 +2860,9 @@ internal object CampaignTemporalPolicy {
 }
 
 internal object RuntimeTemporalSchedule {
+    fun nextPromotionDeadline(campaigns: List<Campaign>, now: Instant, interval: Duration): Instant =
+        earliest(now.plus(interval), CampaignTemporalPolicy.nextEligibilityBoundary(campaigns, now))
+
     fun earliest(required: Instant, optional: Instant?): Instant =
         optional?.let { minOf(required, it) } ?: required
 
@@ -2870,7 +2881,7 @@ internal object RuntimeTemporalSchedule {
 
     fun nextActiveDeadline(
         nextWatchAt: Instant,
-        nextPromotionCheckAt: Instant,
+        nextPromotionCheckAt: Instant?,
         nextChannelStatusCheckAt: Instant,
         refreshAt: Instant,
         activeCampaignEndsAt: Instant?,
@@ -2896,6 +2907,13 @@ internal object RuntimeIdleWait {
 }
 
 internal object CampaignPrioritySelector {
+    // Shared with the redacted dashboard preview; channel availability is still resolved by the miner.
+    fun orderedCandidates(
+        settings: AppSettings,
+        campaigns: List<Campaign>,
+        now: Instant = Instant.now(),
+    ): List<Campaign> = orderedDecisions(settings, campaigns, now).flatMap { it.candidates }
+
     fun select(
         settings: AppSettings,
         campaigns: List<Campaign>,

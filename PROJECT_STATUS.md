@@ -5,6 +5,12 @@ changes.
 
 ## Implementation checklist
 
+- [x] Independent category priority editor supports exact-name entry, scoped search, and numeric reordering
+- [x] Returning campaigns inherit saved category order; known starts wake active promotion checks
+- [x] In-flight promotion lookups cannot busy-loop on an overdue timer
+- [x] Server-ranked Up next respects exclusions, eligibility, and custom fallback settings
+- [x] Campaign sorting/paging, collapsible priority editor, and live-update focus preservation are available
+- [x] Full priority lists reject additions without silently displacing saved games
 - [x] Root Gradle JVM application compiles its own platform-neutral miner core
 - [x] Root Git history is initialized; the Android reference remains a separate, untracked repository
 - [x] Future-agent instructions require status/diff checks, focused commits, and Android-tree isolation
@@ -55,6 +61,38 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Verification record — 2026-09-21
+
+- Added a persistent game/category editor independent of campaign rows, with arrows and direct rank
+  entry, waiting/upcoming/excluded labels, and confirmation before clearing all. Scoped local search
+  requires two characters and renders at most eight matches. Exact-name entry supports absent games;
+  existing saved settings require no migration. The 500-game limit now returns HTTP 409 on additions.
+- Refined dark surfaces and text contrast, simplified campaign actions, added Upcoming and sorting
+  controls, paged campaigns at 24 rows, and preserved input focus/caret and list scroll during updates.
+- Moved Up next ranking to the runtime selector. Known start boundaries now trigger priority checks;
+  in-flight checks wait for completion without spinning on their old deadline.
+- Root Gradle 9.5.1/JDK 21 tests: 118 passed, zero failures/errors/skips. The local distribution builds.
+  Four Node rendering regressions and JavaScript syntax checks passed. A pre-existing startup test
+  teardown race was exposed by the clean build and fixed by joining stop work before TempDir cleanup;
+  the subsequent full suites passed.
+- Isolated local server: health and priority/settings mutations returned HTTP 200. Browser checks
+  exercised adding absent categories, arrow/numeric reordering, and retaining search text/focus while
+  a settings mutation arrived over SSE. Responsive checks covered 1440px desktop, 900px tablet, and
+  390px mobile, both themes, active/empty/logged-out/preparing/error states, and the collapsed editor.
+  No browser console warnings/errors were observed in these checks; tested layouts had no page overflow.
+- Android reference remained clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
+  Docker configuration/dependencies were unchanged; no image build was performed (no Docker CLI on
+  this host). Live Twitch login, earning, claims, and return-to-priority behavior were not exercised.
+
+### Current category-priority limitations
+
+- Search covers loaded campaign names and saved priorities, not Twitch's global category catalog.
+  Other games require the exact Twitch category name. Matching ignores case; renames require a manual
+  update, and arbitrary exact-name entries are not validated against Twitch.
+- Newly published campaigns are discovered on inventory refresh. Cached scheduled campaigns can
+  become eligible at their known start times. Live channel availability and account eligibility still
+  determine whether a saved priority can run; the queue is a preview, not a reservation.
 
 ## Verification record — 2026-08-27
 

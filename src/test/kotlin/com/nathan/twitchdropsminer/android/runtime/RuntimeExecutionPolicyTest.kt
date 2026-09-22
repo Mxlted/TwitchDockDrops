@@ -13,6 +13,45 @@ import kotlin.test.assertNull
 
 class RuntimeExecutionPolicyTest {
     @Test
+    fun `returning category inherits its saved rank ahead of connected fallback games`() {
+        val now = Instant.parse("2026-09-22T00:00:00Z")
+        val settings = AppSettings(selectedGamePriority = listOf("Absent", "Favorite", "Second")).normalized()
+        val second = campaign("second-campaign", linked = true).copy(gameName = "Second")
+        val fallback = campaign("fallback", linked = true, claimedDrop = true)
+        val returning = campaign("new-campaign-id", linked = true).copy(gameName = "FAVORITE")
+        assertEquals(listOf(second, fallback), CampaignPrioritySelector.orderedCandidates(settings, listOf(fallback, second), now))
+        assertEquals(listOf(returning, second, fallback), CampaignPrioritySelector.orderedCandidates(settings, listOf(second, fallback, returning), now))
+        assertEquals(listOf(returning), CampaignPrioritySelector.higherPriorityDecisions(
+            settings, listOf(second, fallback, returning), CampaignSelectionMode.Prioritized, second, now,
+        ).flatMap { it.candidates })
+        val excluded = settings.copy(excludedCampaignIds = setOf(returning.id), fallbackToOtherGames = false)
+        assertEquals(listOf(second), CampaignPrioritySelector.orderedCandidates(excluded, listOf(returning, fallback, second), now))
+    }
+
+    @Test
+    fun `promotion wakes at category or drop start without repeating a past boundary`() {
+        val now = Instant.parse("2026-09-22T00:00:00Z")
+        val start = now.plusSeconds(30)
+        val upcoming = campaign("returning", linked = true).copy(startsAt = start)
+        val interval = Duration.ofMinutes(3)
+        assertEquals(start, RuntimeTemporalSchedule.nextPromotionDeadline(listOf(upcoming), now, interval))
+        assertEquals(start.plus(interval), RuntimeTemporalSchedule.nextPromotionDeadline(listOf(upcoming), start, interval))
+        val laterDrop = upcoming.copy(startsAt = null, drops = listOf(drop("scheduled", startsAt = start)))
+        assertEquals(start, RuntimeTemporalSchedule.nextPromotionDeadline(listOf(laterDrop), now, interval))
+        assertEquals(now.plus(interval), RuntimeTemporalSchedule.nextPromotionDeadline(emptyList(), now, interval))
+    }
+
+    @Test
+    fun `in-flight promotion waits for its completion or a real watch deadline`() {
+        val now = Instant.parse("2026-09-22T00:00:00Z")
+        assertEquals(now.plusSeconds(59), RuntimeTemporalSchedule.nextActiveDeadline(
+            nextWatchAt = now.plusSeconds(59), nextPromotionCheckAt = null,
+            nextChannelStatusCheckAt = now.plusSeconds(180), refreshAt = now.plusSeconds(3600),
+            activeCampaignEndsAt = null, activeDropEndsAt = null,
+        ))
+    }
+
+    @Test
     fun `default fallback order exhausts linked groups before unlinked groups`() {
         assertEquals(
             listOf(

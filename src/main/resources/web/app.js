@@ -3,6 +3,11 @@ const ui = {
   data: null,
   campaignFilter: "all",
   campaignSearch: "",
+  campaignSort: "priority",
+  campaignPage: 0,
+  gameSearch: "",
+  gameScope: "all",
+  prioritiesExpanded: true,
   preview: new URLSearchParams(window.location.search).has("preview"),
   connected: false,
   eventSource: null,
@@ -42,6 +47,7 @@ document.addEventListener("DOMContentLoaded", boot);
 document.addEventListener("click", handleClick);
 document.addEventListener("input", handleInput);
 document.addEventListener("change", handleChange);
+document.addEventListener("submit", handleSubmit);
 window.addEventListener("hashchange", () => {
   const view = viewFromHash();
   if (view === ui.view) return;
@@ -153,7 +159,27 @@ function render() {
   const viewChanged = ui.renderedView !== ui.view;
   if (!viewChanged && ui.renderedMarkup === markup) return;
 
+  const focused = app.contains(document.activeElement) ? document.activeElement : null;
+  const focusKey = focused?.id ? `#${CSS.escape(focused.id)}` : focused?.dataset.action
+    ? ["action", "game", "offset", "id", "filter", "key"].filter((key) => focused.dataset[key] !== undefined)
+      .map((key) => `[data-${key}="${CSS.escape(focused.dataset[key])}"]`).join("") : null;
+  const selection = focused && typeof focused.selectionStart === "number"
+    ? [focused.selectionStart, focused.selectionEnd] : null;
+  const draftValue = focused?.matches("[data-setting-range], [data-priority-game]") ? focused.value : null;
+  const priorityScroll = app.querySelector(".priority-list")?.scrollTop || 0;
   app.innerHTML = markup;
+  if (!viewChanged) {
+    const restored = focusKey ? app.querySelector(focusKey) : null;
+    restored?.focus({ preventScroll: true });
+    if (restored && draftValue !== null && restored.dataset.priorityGame === focused.dataset.priorityGame) restored.value = draftValue;
+    if (restored?.dataset.settingRange && draftValue !== null) {
+      const output = document.querySelector(`#${restored.dataset.settingRange}Output`);
+      if (output) output.textContent = `${draftValue} ${restored.dataset.unit}`;
+    }
+    if (selection && restored?.setSelectionRange) restored.setSelectionRange(...selection);
+    const list = app.querySelector(".priority-list");
+    if (list) list.scrollTop = priorityScroll;
+  }
   app.setAttribute("aria-busy", "false");
   if (viewChanged) app.firstElementChild?.classList.add("is-entering");
   ui.renderedView = ui.view;
@@ -265,7 +291,7 @@ function renderOverview(data) {
       </div>
       <section class="soft-card section-card">
         <div class="section-head">
-          <div><h2>Priority queue</h2><p>Pinned games in order, then active linked campaigns. Auto Mode decides the exact route.</p></div>
+          <div><h2>Up next</h2><p>Eligible work in your saved order. The miner checks live channels before switching.</p></div>
           <button class="tiny-button" data-view="campaigns" type="button">Manage campaigns</button>
         </div>
         ${renderQueue(snapshot)}
@@ -421,12 +447,8 @@ function renderEmptyWatch(snapshot) {
 }
 
 function renderQueue(snapshot) {
-  const activeId = snapshot.activeCampaign?.id;
-  const candidates = snapshot.campaigns.filter((campaign) =>
-    campaign.id !== activeId && !campaign.excluded && !campaign.expired && campaign.claimedDrops < campaign.totalDrops);
-  const pinned = candidates.filter((campaign) => campaign.priorityIndex >= 0).sort((a, b) => a.priorityIndex - b.priorityIndex);
-  const auto = candidates.filter((campaign) => campaign.priorityIndex < 0 && campaign.active && campaign.linked);
-  const queue = [...pinned, ...auto].slice(0, 5);
+  const byId = new Map(snapshot.campaigns.map((campaign) => [campaign.id, campaign]));
+  const queue = (snapshot.selectionPreview || []).map((id) => byId.get(id)).filter(Boolean);
   if (!queue.length) {
     return `<div class="empty-state is-short"><div>${emptyIcon()}<h3>Nothing queued</h3><p>${snapshot.campaigns.length ? "Pin a game on the Campaigns page to shape what runs next." : "Campaigns appear here after the inventory loads."}</p></div></div>`;
   }
@@ -450,28 +472,81 @@ function renderQueue(snapshot) {
 
 /* Campaigns --------------------------------------------------------------- */
 
+function renderGamePriorities(data) {
+  const priorities = data.settings.selectedGamePriority;
+  const campaigns = data.snapshot.campaigns;
+  const query = ui.gameSearch.trim();
+  const key = (name) => name.toLowerCase();
+  const known = new Map();
+  campaigns.filter((c) => ui.gameScope === "all" || (ui.gameScope === "linked" ? c.linked : c.active && !c.excluded))
+    .forEach((c) => known.set(key(c.gameName), c.gameName));
+  if (ui.gameScope === "all") priorities.forEach((name) => known.set(key(name), name));
+  const matches = query.length >= 2 ? [...known.values()].filter((name) => key(name).includes(key(query)))
+    .sort((a, b) => a.localeCompare(b)) : [];
+  const saved = priorities.some((name) => key(name) === key(query));
+  const full = priorities.length >= 500;
+  return `<section class="soft-card section-card priority-panel">
+    <div class="section-head"><div><span class="eyebrow">Your farming order</span><h2>Game & category priorities</h2><p>Save a game once. Future campaigns inherit its place in this list.</p></div><div class="inline-actions"><span class="priority-chip">${priorities.length} saved</span><button class="tiny-button" type="button" data-action="toggle-priority-panel" aria-expanded="${ui.prioritiesExpanded}" aria-controls="priorityEditor">${ui.prioritiesExpanded ? "Collapse" : "Manage order"}</button></div></div>
+    <div class="priority-layout" id="priorityEditor" ${ui.prioritiesExpanded ? "" : "hidden"}>
+      <div class="priority-discovery">
+        <form id="gamePriorityForm" class="priority-form">
+          <label for="gameSearch">Find or add a category</label>
+          <div class="search-field">${searchIcon()}<input id="gameSearch" type="search" maxlength="200" autocomplete="off" placeholder="Exact Twitch category name" aria-describedby="gameSearchHint" value="${attr(ui.gameSearch)}"></div>
+          <label class="sort-control" for="gameScope">Search within <select id="gameScope"><option value="all" ${ui.gameScope === "all" ? "selected" : ""}>Loaded & saved games</option><option value="active" ${ui.gameScope === "active" ? "selected" : ""}>Active campaigns</option><option value="linked" ${ui.gameScope === "linked" ? "selected" : ""}>Linked campaigns</option></select></label>
+          <p class="field-hint" id="gameSearchHint">Type 2+ characters to search up to 8 matches. For a game outside this inventory, enter its exact Twitch category name. Names match without regard to case.</p>
+          <button class="button button-primary" type="submit" ${!query || saved || full ? "disabled" : ""}>${saved ? "Already prioritized" : full ? "500-game limit reached" : "Save category at end"}</button>
+        </form>
+        ${query.length >= 2 ? `<div class="game-results" aria-label="Matching categories"><p class="field-hint" role="status">${matches.length ? `${Math.min(8, matches.length)} of ${matches.length} matches` : "No matches in this search scope. You can still save the exact name above."}</p>${matches.slice(0, 8).map((name) => {
+          const index = priorities.findIndex((game) => key(game) === key(name));
+          return `<button class="game-result" type="button" data-action="add-priority" data-game="${attr(name)}" ${index >= 0 || full ? "disabled" : ""}><span>${esc(name)}</span><span>${index >= 0 ? `#${index + 1} saved` : "+ Add"}</span></button>`;
+        }).join("")}</div>` : ""}
+      </div>
+      <div class="priority-order">
+        <div class="priority-list-head"><strong>First available game wins</strong>${priorities.length ? '<button class="tiny-button" data-action="clear-priorities" type="button">Clear all</button>' : ""}</div>
+        ${priorities.length ? `<ol class="priority-list">${priorities.map((name, index) => {
+          const matching = campaigns.filter((c) => key(c.gameName) === key(name));
+          const active = matching.filter((c) => c.active && !c.excluded && c.claimedDrops < c.totalDrops);
+          const status = active.length ? `${active.length} active campaign${active.length === 1 ? "" : "s"}`
+            : matching.some((c) => c.upcoming && !c.excluded) ? "Upcoming campaign"
+            : matching.length && matching.every((c) => c.excluded) ? "Campaigns excluded"
+            : "Waiting for a campaign";
+          return `<li class="priority-row"><label class="priority-position"><span class="sr-only">Priority position for ${esc(name)}</span><input id="priorityPosition-${attr(encodeURIComponent(name))}" type="number" inputmode="numeric" min="1" max="${priorities.length}" value="${index + 1}" data-priority-game="${attr(name)}"></label><div class="priority-copy"><strong>${esc(name)}</strong><span class="${active.length ? "priority-available" : ""}">${status}</span></div><div class="priority-controls"><button class="tiny-button" type="button" data-action="move-priority" data-game="${attr(name)}" data-offset="-1" ${index === 0 ? "disabled" : ""} aria-label="Move ${attr(name)} earlier">↑</button><button class="tiny-button" type="button" data-action="move-priority" data-game="${attr(name)}" data-offset="1" ${index === priorities.length - 1 ? "disabled" : ""} aria-label="Move ${attr(name)} later">↓</button><button class="tiny-button" type="button" data-action="toggle-priority" data-game="${attr(name)}" aria-label="Remove ${attr(name)} priority">×</button></div></li>`;
+        }).join("")}</ol>` : '<div class="priority-empty"><strong>Auto Mode is choosing your games</strong><p>Add a favorite to put it first. You can change its position with the arrows or enter a rank.</p></div>'}
+        <p class="field-hint priority-footnote">${data.settings.fallbackToOtherGames ? "When saved games have no eligible live work, the miner uses your Auto Mode order." : "Fallback is off. With priorities saved, the miner waits when those games have no eligible linked work."} Exclusions still apply. <button class="text-button" type="button" data-view="settings">Adjust fallback</button></p>
+      </div>
+    </div>
+  </section>`;
+}
+
 function renderCampaigns(data) {
   const campaigns = data.snapshot.campaigns;
-  const availableGames = new Set(campaigns.map((campaign) => campaign.gameName.toLowerCase()));
-  const unavailablePriorities = data.settings.selectedGamePriority.filter(
-    (gameName) => !availableGames.has(gameName.toLowerCase()),
-  );
   const query = ui.campaignSearch.trim().toLowerCase();
   const filtered = campaigns.filter((campaign) => {
     const matchesQuery = !query || `${campaign.gameName} ${campaign.name}`.toLowerCase().includes(query);
     const matchesFilter = ui.campaignFilter === "all"
       || (ui.campaignFilter === "active" && campaign.active && !campaign.excluded)
+      || (ui.campaignFilter === "upcoming" && campaign.upcoming && !campaign.excluded)
       || (ui.campaignFilter === "linked" && campaign.linked)
       || (ui.campaignFilter === "unlinked" && campaign.linkStatusKnown && !campaign.linked)
       || (ui.campaignFilter === "priority" && campaign.priorityIndex >= 0)
       || (ui.campaignFilter === "excluded" && campaign.excluded);
     return matchesQuery && matchesFilter;
+  }).sort((a, b) => {
+    const ending = (c) => c.active && c.endsAt ? Date.parse(c.endsAt) || Infinity : Infinity;
+    const rank = (c) => c.priorityIndex < 0 ? Infinity : c.priorityIndex;
+    const order = ui.campaignSort === "ending" ? ending(a) - ending(b)
+      : ui.campaignSort === "priority" ? rank(a) - rank(b) : 0;
+    return order || a.gameName.localeCompare(b.gameName) || a.name.localeCompare(b.name);
   });
-  const filters = [["all", "All"], ["active", "Active"], ["linked", "Linked"], ["unlinked", "Unlinked"], ["priority", "Priority"], ["excluded", "Excluded"]];
+  const pageCount = Math.max(1, Math.ceil(filtered.length / 24));
+  ui.campaignPage = Math.min(ui.campaignPage, pageCount - 1);
+  const visible = filtered.slice(ui.campaignPage * 24, (ui.campaignPage + 1) * 24);
+  const filters = [["all", "All"], ["active", "Active"], ["upcoming", "Upcoming"], ["linked", "Linked"], ["unlinked", "Unlinked"], ["priority", "Priority"], ["excluded", "Excluded"]];
 
   return `
     <div class="page-stack">
       ${data.snapshot.error ? renderError(data.snapshot.error) : ""}
+      ${renderGamePriorities(data)}
       <section class="soft-card toolbar">
         <label class="search-field">
           ${searchIcon()}
@@ -482,23 +557,13 @@ function renderCampaigns(data) {
           ${filters.map(([filter, label]) => `<button class="filter-pill ${ui.campaignFilter === filter ? "is-active" : ""}" type="button" data-action="campaign-filter" data-filter="${filter}" aria-pressed="${ui.campaignFilter === filter}">${label}</button>`).join("")}
         </div>
       </section>
-      ${unavailablePriorities.length ? `
-        <div class="notice" role="status">
-          <div class="notice-icon">◇</div>
-          <div>
-            <h3>Pinned games without a current campaign</h3>
-            <p>These priorities stay saved through campaign gaps and partial Twitch responses.</p>
-            <div class="unavailable-priorities">
-              ${unavailablePriorities.map((gameName) => `<span class="soft-chip">${esc(gameName)} <button class="chip-action" type="button" data-action="toggle-priority" data-game="${attr(gameName)}" aria-label="Remove unavailable priority ${attr(gameName)}">×</button></span>`).join("")}
-            </div>
-          </div>
-        </div>` : ""}
       <section class="soft-card section-card">
         <div class="section-head">
           <div><h2>${filtered.length === campaigns.length ? `${campaigns.length} campaign${campaigns.length === 1 ? "" : "s"}` : `${filtered.length} of ${campaigns.length} campaigns`}</h2><p>Pinned games are mined first, in order. Excluded campaigns stay listed but are never mined.</p></div>
-          ${data.settings.selectedGamePriority.length ? '<button class="tiny-button" data-action="clear-priorities" type="button">Clear priorities</button>' : ""}
+          <label class="sort-control">Sort <select id="campaignSort">${[["priority", "Game priority"], ["ending", "Ending soon"], ["name", "Game name"]].map(([value, label]) => `<option value="${value}" ${ui.campaignSort === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
         </div>
-        ${filtered.length ? `<div class="campaign-list">${filtered.map((campaign) => renderCampaignRow(campaign, data.settings)).join("")}</div>` : renderFilteredEmpty(campaigns.length)}
+        ${filtered.length ? `<div class="campaign-list">${visible.map(renderCampaignRow).join("")}</div>` : renderFilteredEmpty(campaigns.length)}
+        ${pageCount > 1 ? `<div class="pagination"><button class="tiny-button" data-action="campaign-page" data-offset="-1" ${ui.campaignPage === 0 ? "disabled" : ""}>Previous</button><span role="status">Page ${ui.campaignPage + 1} of ${pageCount}</span><button class="tiny-button" data-action="campaign-page" data-offset="1" ${ui.campaignPage === pageCount - 1 ? "disabled" : ""}>Next</button></div>` : ""}
       </section>
     </div>`;
 }
@@ -509,7 +574,7 @@ function renderCampaignStatusChip(campaign) {
   return `<span class="status-chip ${statusClass}">${statusLabel}</span>`;
 }
 
-function renderCampaignRow(campaign, settings) {
+function renderCampaignRow(campaign) {
   const priority = campaign.priorityIndex;
   const linkLabel = campaign.linkStatusKnown ? (campaign.linked ? "Linked" : "Unlinked") : "Link unknown";
   const progress = percent(campaign.progress);
@@ -539,10 +604,6 @@ function renderCampaignRow(campaign, settings) {
         <div class="progress-line"><span>${progress}% watched</span><span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.remainingMinutes}m left</span></div>
       </div>
       <div class="campaign-actions">
-        ${priority >= 0 ? `
-          <button class="tiny-button" type="button" data-action="move-priority" data-game="${attr(campaign.gameName)}" data-offset="-1" ${priority === 0 ? "disabled" : ""} aria-label="Move ${attr(campaign.gameName)} earlier">↑</button>
-          <button class="tiny-button" type="button" data-action="move-priority" data-game="${attr(campaign.gameName)}" data-offset="1" ${priority === settings.selectedGamePriority.length - 1 ? "disabled" : ""} aria-label="Move ${attr(campaign.gameName)} later">↓</button>
-        ` : ""}
         <button class="tiny-button ${priority >= 0 ? "" : "is-accent"}" type="button" data-action="toggle-priority" data-game="${attr(campaign.gameName)}">${priority >= 0 ? "Unpin" : "Pin game"}</button>
         <button class="tiny-button" type="button" data-action="toggle-exclusion" data-id="${attr(campaign.id)}" data-excluded="${campaign.excluded}">${campaign.excluded ? "Restore" : "Exclude"}</button>
         ${linkUrl ? `<a class="tiny-button" href="${attr(linkUrl)}" target="_blank" rel="noopener noreferrer">Link account ↗</a>` : ""}
@@ -784,10 +845,14 @@ async function handleClick(event) {
       render();
     }
     if (action === "toggle-priority") await command("/api/priorities/toggle", { gameName: button.dataset.game });
+    if (action === "add-priority") await addGamePriority(button.dataset.game);
+    if (action === "toggle-priority-panel") { ui.prioritiesExpanded = !ui.prioritiesExpanded; render(); }
     if (action === "move-priority") await command("/api/priorities/move", { gameName: button.dataset.game, offset: Number(button.dataset.offset) });
-    if (action === "clear-priorities") await command("/api/priorities/clear");
+    if (action === "clear-priorities" && await ask("Clear all game priorities?", "This removes your saved game order, including categories waiting for future campaigns. Auto Mode will choose the next game.", "Clear priorities")) await command("/api/priorities/clear");
+    if (action === "campaign-page") { ui.campaignPage += Number(button.dataset.offset); render(); }
     if (action === "toggle-exclusion") await command("/api/campaigns/exclusion", { campaignIds: [button.dataset.id], excluded: button.dataset.excluded !== "true" });
     if (action === "campaign-filter") {
+      ui.campaignPage = 0;
       ui.campaignFilter = button.dataset.filter;
       render();
     }
@@ -819,17 +884,14 @@ function renderThemeToggle() {
   const label = useLight ? "Use light mode" : "Use dark mode";
   themeButton.setAttribute("aria-label", label);
   themeButton.title = label;
-  document.querySelector('meta[name="theme-color"]').content = ui.theme === "dark" ? "#141513" : "#f5f4f0";
+  document.querySelector('meta[name="theme-color"]').content = ui.theme === "dark" ? "#121214" : "#f5f4f0";
 }
 
 function handleInput(event) {
-  if (event.target.id === "campaignSearch") {
-    const cursor = event.target.selectionStart;
-    ui.campaignSearch = event.target.value;
+  if (["campaignSearch", "gameSearch"].includes(event.target.id)) {
+    ui[event.target.id] = event.target.value;
+    if (event.target.id === "campaignSearch") ui.campaignPage = 0;
     render();
-    const input = document.querySelector("#campaignSearch");
-    input?.focus();
-    input?.setSelectionRange(cursor, cursor);
   }
   if (event.target.matches("[data-setting-range]")) {
     const output = document.querySelector(`#${event.target.dataset.settingRange}Output`);
@@ -838,12 +900,39 @@ function handleInput(event) {
 }
 
 async function handleChange(event) {
+  if (["gameScope", "campaignSort"].includes(event.target.id)) {
+    ui[event.target.id] = event.target.value;
+    ui.campaignPage = 0;
+    render();
+    return;
+  }
+  if (event.target.matches("[data-priority-game]")) {
+    try {
+      if (!event.target.checkValidity() || !Number.isInteger(Number(event.target.value))) throw new Error("Enter a position within the saved list.");
+      await command("/api/priorities/set", { gameName: event.target.dataset.priorityGame, priority: Number(event.target.value) }, "Priority order saved");
+    } catch (error) { toast(error.message, true); }
+    return;
+  }
   if (!event.target.matches("[data-setting-range]")) return;
   try {
     await command("/api/settings", { [event.target.dataset.settingRange]: Number(event.target.value) }, "Timing saved");
   } catch (error) {
     toast(error.message, true);
   }
+}
+
+async function addGamePriority(gameName) {
+  const name = gameName.trim();
+  if (!name || name.length > 200) throw new Error("Enter a category name between 1 and 200 characters.");
+  if (ui.data.settings.selectedGamePriority.some((game) => game.toLowerCase() === name.toLowerCase())) return;
+  if (ui.data.settings.selectedGamePriority.length >= 500) throw new Error("Remove a saved game before adding another (500 maximum).");
+  await command("/api/priorities/set", { gameName: name, priority: ui.data.settings.selectedGamePriority.length + 1 }, "Game priority saved");
+}
+
+async function handleSubmit(event) {
+  if (event.target.id !== "gamePriorityForm") return;
+  event.preventDefault();
+  try { await addGamePriority(ui.gameSearch); } catch (error) { toast(error.message, true); }
 }
 
 async function command(path, body = {}, successMessage = "") {
@@ -863,7 +952,7 @@ async function command(path, body = {}, successMessage = "") {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
     if (successMessage) toast(successMessage);
-    window.setTimeout(loadState, 250);
+    await loadState();
   } finally {
     ui.pendingCommands.delete(commandKey);
   }
@@ -967,6 +1056,7 @@ function previewState() {
       lastUpdate: iso(-1),
       account: { state: "loggedin", statusText: "Logged in with Twitch", userId: "preview", oauthUrl: null, oauthCode: null, expiresAt: null, authenticated: true, actionRequired: false },
       campaigns,
+      selectionPreview: ["solstice-relay", "harbor-lights", "meadow-market"],
       channels: [
         { id: 1, name: "WillowByte", login: "willowbyte", game: "No Man's Sky", viewers: 812, online: true, dropsEnabled: true, aclBased: false, watching: true, title: "Soft base building & expedition", statusLabel: "Watching" },
         { id: 2, name: "Fern Signal", login: "fern_signal", game: "No Man's Sky", viewers: 426, online: true, dropsEnabled: true, aclBased: false, watching: false, title: "Expedition route and cozy bases", statusLabel: "Drops enabled" },

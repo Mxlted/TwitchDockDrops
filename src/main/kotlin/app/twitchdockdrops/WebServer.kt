@@ -1,6 +1,7 @@
 package app.twitchdockdrops
 
 import com.nathan.twitchdropsminer.android.data.local.LogRepository
+import com.nathan.twitchdropsminer.android.data.local.GamePriorityLimitException
 import com.nathan.twitchdropsminer.android.data.local.SettingsRepository
 import com.nathan.twitchdropsminer.android.data.model.AppSettings
 import com.nathan.twitchdropsminer.android.data.model.AutoModePriority
@@ -110,6 +111,8 @@ class WebServer(
             }
         } catch (error: RequestException) {
             throw error
+        } catch (error: GamePriorityLimitException) {
+            throw RequestException(409, error.message ?: "The saved game list is full.")
         } catch (_: IOException) {
             throw RequestException(
                 500,

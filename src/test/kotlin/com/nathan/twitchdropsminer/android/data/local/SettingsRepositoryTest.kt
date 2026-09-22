@@ -5,6 +5,7 @@ import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.io.TempDir
@@ -12,6 +13,22 @@ import org.junit.jupiter.api.io.TempDir
 class SettingsRepositoryTest {
     @TempDir
     lateinit var directory: Path
+
+    @Test
+    fun `full category list rejects additions without dropping saved games but allows reordering`() = runBlocking {
+        val repository = SettingsRepository(directory)
+        val names = (1..500).map { "Game $it" }
+        repository.update { it.copy(selectedGamePriority = names) }
+        assertFailsWith<GamePriorityLimitException> { repository.setGamePriority("New", 1) }
+        assertFailsWith<GamePriorityLimitException> { repository.toggleGamePriority("New") }
+        assertEquals(names, SettingsRepository(directory).settings.value.selectedGamePriority)
+        repository.setGamePriority("game 500", 1)
+        assertEquals("Game 500", repository.settings.value.selectedGamePriority.first())
+        repository.toggleGamePriority("GAME 500")
+        repository.setGamePriority("New", 1)
+        assertEquals(500, repository.settings.value.selectedGamePriority.size)
+        assertEquals("New", repository.settings.value.selectedGamePriority.first())
+    }
 
     @Test
     fun `new and reset settings enable fallback to other games by default`() = runBlocking {

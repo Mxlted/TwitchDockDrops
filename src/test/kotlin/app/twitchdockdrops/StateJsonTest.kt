@@ -2,6 +2,7 @@ package app.twitchdockdrops
 
 import com.nathan.twitchdropsminer.android.data.model.AppSettings
 import com.nathan.twitchdropsminer.android.data.model.Campaign
+import com.nathan.twitchdropsminer.android.data.model.CampaignDrop
 import com.nathan.twitchdropsminer.android.data.model.Channel
 import com.nathan.twitchdropsminer.android.data.model.LocalLogEntry
 import com.nathan.twitchdropsminer.android.data.model.LoginSession
@@ -20,6 +21,26 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class StateJsonTest {
+    @Test
+    fun `selection preview respects priorities exclusions fallback and active watch`() {
+        val campaigns = (1..8).map { index -> Campaign(
+            id = "campaign-$index", name = "Campaign $index", gameName = "Game $index", linked = true, active = true,
+            drops = listOf(CampaignDrop(id = "drop-$index", name = "Drop", requiredMinutes = 60,
+                currentMinutes = 0, progress = 0f, isClaimed = false, canClaim = false, rewards = emptyList())),
+        ) }
+        fun preview(settings: AppSettings): List<String> {
+            val encoded = StateJson().encode(RuntimeSnapshot(campaigns = campaigns, activeCampaign = campaigns[0]), settings.normalized(), emptyList())
+            return Json.parseToJsonElement(encoded).jsonObject.getValue("snapshot").jsonObject
+                .getValue("selectionPreview").jsonArray.map { it.jsonPrimitive.content }
+        }
+        assertEquals(listOf("campaign-3"), preview(AppSettings(
+            selectedGamePriority = listOf("Game 1", "Absent", "Game 2", "Game 3"),
+            excludedCampaignIds = setOf("campaign-2"), fallbackToOtherGames = false,
+        )))
+        assertEquals(5, preview(AppSettings()).size)
+        assertFalse(preview(AppSettings()).contains("campaign-1"))
+    }
+
     @Test
     fun `state serialization redacts credentials and omits device secrets`() {
         val secrets = listOf(
