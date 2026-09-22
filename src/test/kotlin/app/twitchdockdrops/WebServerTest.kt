@@ -69,7 +69,7 @@ class WebServerTest {
             logRepository = logs,
             trustedOrigins = setOf("http://127.0.0.1:*"),
             maxSseClients = 1,
-            categorySearch = CategorySearch { query, after -> categoryLookup(query, after) },
+            categorySearch = CategorySearch { request -> categoryLookup(request.query, request.after) },
         )
         server.start()
     }
@@ -95,7 +95,7 @@ class WebServerTest {
     fun `public category search returns explicit fields without a session or campaign`() {
         var received = ""
         categoryLookup = { query, _ -> received = query; TwitchCategoryPage(listOf(TwitchCategory("42", "Future Game"))) }
-        execute("/api/categories/search?q=Future%20Game").use {
+        execute("/api/categories/search?q=%20Future%20Game%20").use {
             assertEquals(200, it.code)
             assertEquals("""{"query":"Future Game","categories":[{"id":"42","name":"Future Game"}],"nextCursor":null}""", it.body!!.string())
         }
@@ -108,7 +108,7 @@ class WebServerTest {
     fun `category search validates query and method before upstream work`() {
         categoryLookup = { _, _ -> error("Must not query Twitch") }
         listOf("", "?q=a", "?q=ab&q=cd", "?query=ab", "?q=ab%0Acd", "?q=${"a".repeat(101)}",
-            "?q=abc&after=NTA%3D", "?q=star&after=", "?q=star&after=one&after=two",
+            "?q=abc&after=NTA%3D", "?q=%20abc%20&after=NTA%3D", "?q=star&after=", "?q=star&after=one&after=two",
             "?q=star&after=%0A", "?q=star&after=${"a".repeat(513)}", "?q=star&limit=100").forEach { suffix ->
             execute("/api/categories/search$suffix").use { assertError(it, 400) }
         }

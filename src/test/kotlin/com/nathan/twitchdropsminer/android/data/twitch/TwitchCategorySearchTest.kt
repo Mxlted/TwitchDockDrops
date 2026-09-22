@@ -27,6 +27,9 @@ class TwitchCategorySearchTest {
     private val search = TwitchCategorySearch(client, server.url("/gql").toString()) { clock }
     private val response = page("""{"node":{"id":"42","name":"Future Game"}}""")
 
+    private suspend fun lookup(query: String, after: String?): TwitchCategoryPage =
+        search.search(CategorySearchRequest(query, after))
+
     private fun page(edges: String, hasNext: Boolean = false): String =
         """{"data":{"searchCategories":{"edges":[$edges],"pageInfo":{"hasNextPage":$hasNext}}}}"""
 
@@ -40,7 +43,7 @@ class TwitchCategorySearchTest {
     @Test
     fun `search uses variables bounded results and no account credentials`() = runBlocking {
         server.enqueue(MockResponse().setBody(response))
-        assertEquals(TwitchCategoryPage(listOf(TwitchCategory("42", "Future Game"))), search.search(" Future \"Game\" ", null))
+        assertEquals(TwitchCategoryPage(listOf(TwitchCategory("42", "Future Game"))), lookup(" Future \"Game\" ", null))
         val request = server.takeRequest()
         assertEquals("/gql", request.path)
         assertNull(request.getHeader("Authorization"))
@@ -54,29 +57,64 @@ class TwitchCategorySearchTest {
     @Test
     fun `cache is case insensitive expires and does not cache failures`() = runBlocking {
         server.enqueue(MockResponse().setBody(response))
-        search.search("game", null)
-        search.search(" GAME ", null)
+        lookup("game", null)
+        lookup(" GAME ", null)
         assertEquals(1, server.requestCount)
         clock = TimeUnit.MINUTES.toNanos(6)
         server.enqueue(MockResponse().setResponseCode(503).setBody("private diagnostic"))
-        val error = assertFailsWith<CategorySearchException> { search.search("game", null) }
+        val error = assertFailsWith<CategorySearchException> { lookup("game", null) }
         assertTrue(!error.message.orEmpty().contains("private diagnostic"))
         server.enqueue(MockResponse().setBody(response))
-        search.search("game", null)
+        lookup("game", null)
         assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun `cache evicts the oldest page after thirty two entries`() = runBlocking {
+        repeat(33) { index ->
+            server.enqueue(MockResponse().setBody(response))
+            lookup("game", if (index == 0) null else "page$index")
+        }
+        lookup("GAME", "page1")
+        lookup("GAME", "page32")
+        assertEquals(33, server.requestCount)
+        server.enqueue(MockResponse().setBody(response))
+        lookup("game", null)
+        assertEquals(34, server.requestCount)
+    }
+
+    @Test
+    fun `invalid page shapes fail safely and release search capacity`() = runBlocking {
+        val result = """{"edges":[],"pageInfo":{"hasNextPage":false}}"""
+        val malformed = listOf(
+            "[]",
+            """{"errors":{},"data":{"searchCategories":$result}}""",
+            """{"data":{"searchCategories":{"edges":{},"pageInfo":{"hasNextPage":false}}}}""",
+            """{"data":{"searchCategories":{"edges":[],"pageInfo":{"hasNextPage":"false"}}}}""",
+            """{"data":{"searchCategories":{"edges":[],"pageInfo":{}}}}""",
+            page("""{"node":{"id":"not-numeric","name":"Game"}}"""),
+        )
+        for (body in malformed) {
+            server.enqueue(MockResponse().setBody(body))
+            val error = assertFailsWith<CategorySearchException> { lookup("game", null) }
+            assertTrue(!error.busy)
+        }
+        server.enqueue(MockResponse().setBody("""{"errors":[],"data":{"searchCategories":$result}}"""))
+        assertTrue(lookup("game", null).categories.isEmpty())
+        assertEquals(malformed.size + 1, server.requestCount)
     }
 
     @Test
     fun `malformed oversized and redirected replies fail safely and empty results are valid`() = runBlocking {
         for (body in listOf("not json", "{}", """{"errors":[{"message":"sensitive"}]}""", "x".repeat(128 * 1024 + 1))) {
             server.enqueue(MockResponse().setBody(body))
-            assertFailsWith<CategorySearchException> { search.search("game", null) }
+            assertFailsWith<CategorySearchException> { lookup("game", null) }
         }
         server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", server.url("/other")))
-        assertFailsWith<CategorySearchException> { search.search("game", null) }
+        assertFailsWith<CategorySearchException> { lookup("game", null) }
         assertEquals(5, server.requestCount)
         server.enqueue(MockResponse().setBody(page("")))
-        assertTrue(search.search("game", null).categories.isEmpty())
+        assertTrue(lookup("game", null).categories.isEmpty())
     }
 
     @Test
@@ -84,11 +122,11 @@ class TwitchCategorySearchTest {
         val nodes = (1..45).map { """{"node":{"id":"$it","name":"Game $it"}}""" }
         val edges = (listOf("null", """{"node":{"id":{},"name":[]}}""", nodes[0]) + nodes).joinToString(",")
         server.enqueue(MockResponse().setBody(page(edges)))
-        val found = search.search("game", null).categories
+        val found = lookup("game", null).categories
         assertEquals(45, found.size)
         assertEquals(45, found.map { it.id }.distinct().size)
         server.enqueue(MockResponse().setBody(page((nodes + nodes).joinToString(","))))
-        assertFailsWith<CategorySearchException> { search.search("other", null) }
+        assertFailsWith<CategorySearchException> { lookup("other", null) }
         Unit
     }
 
@@ -103,16 +141,16 @@ class TwitchCategorySearchTest {
                 return MockResponse().setBody(response)
             }
         }
-        val first = async(Dispatchers.IO) { search.search("first", null) }
-        val second = async(Dispatchers.IO) { search.search("second", null) }
+        val first = async(Dispatchers.IO) { lookup("first", null) }
+        val second = async(Dispatchers.IO) { lookup("second", null) }
         try {
             assertTrue(entered.await(3, TimeUnit.SECONDS))
-            assertTrue(assertFailsWith<CategorySearchException> { search.search("third", null) }.busy)
+            assertTrue(assertFailsWith<CategorySearchException> { lookup("third", null) }.busy)
         } finally {
             release.countDown()
         }
         first.await(); second.await()
-        assertEquals(1, search.search("third", null).categories.size)
+        assertEquals(1, lookup("third", null).categories.size)
     }
 
     @Test
@@ -120,26 +158,26 @@ class TwitchCategorySearchTest {
         for (query in listOf("st", "sta")) {
             val edges = (1..12).joinToString(",") { """{"cursor":"MTI=","node":{"id":"$it","name":"Star $it"}}""" }
             server.enqueue(MockResponse().setBody(page(edges, true)))
-            val found = search.search(query, null)
+            val found = lookup(query, null)
             assertEquals(12, found.categories.size)
             assertNull(found.nextCursor)
             val payload = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
             assertEquals("12", payload.getValue("variables").jsonObject.getValue("first").jsonPrimitive.content)
-            assertFailsWith<IllegalArgumentException> { search.search(query, "MTI=") }
+            assertFailsWith<IllegalArgumentException> { lookup(query, "MTI=") }
         }
     }
 
     @Test
     fun `four character searches expose subsequent pages and cache each cursor separately`() = runBlocking {
         server.enqueue(MockResponse().setBody(page("""{"cursor":"NTA=","node":{"id":"1","name":"Star First"}}""", true)))
-        val first = search.search("star", null)
+        val first = lookup("star", null)
         assertEquals("NTA=", first.nextCursor)
         server.enqueue(MockResponse().setBody(page("""{"node":{"id":"2","name":"Star Last"}}""")))
-        val second = search.search("star", first.nextCursor)
+        val second = lookup("star", first.nextCursor)
         assertEquals("Star Last", second.categories.single().name)
         assertNull(second.nextCursor)
-        assertEquals(first, search.search("STAR", null))
-        assertEquals(second, search.search("STAR", "NTA="))
+        assertEquals(first, lookup("STAR", null))
+        assertEquals(second, lookup("STAR", "NTA="))
         assertEquals(2, server.requestCount)
         server.takeRequest()
         val payload = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
@@ -150,19 +188,19 @@ class TwitchCategorySearchTest {
     fun `missing invalid and repeated continuation cursors fail without caching partial pages`() = runBlocking {
         for (cursor in listOf("", "NTA=", "bad cursor")) {
             server.enqueue(MockResponse().setBody(page("""{"cursor":"$cursor","node":{"id":"1","name":"Star"}}""", true)))
-            assertFailsWith<CategorySearchException> { search.search("star", "NTA=") }
+            assertFailsWith<CategorySearchException> { lookup("star", "NTA=") }
         }
         server.enqueue(MockResponse().setBody(page("", true)))
-        assertFailsWith<CategorySearchException> { search.search("star", "NTA=") }
+        assertFailsWith<CategorySearchException> { lookup("star", "NTA=") }
         server.enqueue(MockResponse().setBody(response))
-        assertEquals(1, search.search("star", "NTA=").categories.size)
+        assertEquals(1, lookup("star", "NTA=").categories.size)
         assertEquals(5, server.requestCount)
     }
 
     @Test
     fun `search rejects unbounded queries and non Twitch production endpoints`() = runBlocking<Unit> {
         for (query in listOf("", "a", "a".repeat(101), "ab\ncd")) {
-            assertFailsWith<IllegalArgumentException> { search.search(query, null) }
+            assertFailsWith<IllegalArgumentException> { lookup(query, null) }
         }
         assertEquals(0, server.requestCount)
         assertFailsWith<IllegalArgumentException> { TwitchCategorySearch(client, "https://example.com/gql") }

@@ -1,16 +1,16 @@
 package app.twitchdockdrops
 
-import com.nathan.twitchdropsminer.android.data.local.LogRepository
 import com.nathan.twitchdropsminer.android.data.local.GamePriorityLimitException
+import com.nathan.twitchdropsminer.android.data.local.LogRepository
 import com.nathan.twitchdropsminer.android.data.local.SettingsRepository
 import com.nathan.twitchdropsminer.android.data.model.AppSettings
 import com.nathan.twitchdropsminer.android.data.model.AutoModePriority
 import com.nathan.twitchdropsminer.android.data.model.LocalLogEntry
 import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
-import com.nathan.twitchdropsminer.android.runtime.LocalMinerRuntime
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearch
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchException
-import com.nathan.twitchdropsminer.android.data.twitch.isCategorySearchCursor
+import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchRequest
+import com.nathan.twitchdropsminer.android.runtime.LocalMinerRuntime
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.IOException
@@ -126,21 +126,18 @@ class WebServer(
         } catch (_: IllegalArgumentException) {
             throw RequestException(400, "Invalid category search encoding.")
         }
-        val query = parameters["q"].orEmpty().trim()
-        if (query.length !in 2..100 || query.any(Char::isISOControl)) {
-            throw RequestException(400, "Search must contain 2 to 100 characters without control characters.")
-        }
-        val after = parameters["after"]
-        if (after != null && (query.length < 4 || !isCategorySearchCursor(after))) {
-            throw RequestException(400, "Paging requires at least 4 search characters and a valid cursor.")
+        val request = try {
+            CategorySearchRequest(parameters["q"].orEmpty(), parameters["after"])
+        } catch (error: IllegalArgumentException) {
+            throw RequestException(400, error.message ?: "Invalid category search parameters.")
         }
         val search = categorySearch ?: throw RequestException(503, "Category search is unavailable.")
         val results = try {
-            runBlocking { search.search(query, after) }
+            runBlocking { search.search(request) }
         } catch (error: CategorySearchException) {
             throw RequestException(if (error.busy) 429 else 502, error.message ?: "Category search failed.")
         }
-        exchange.respondJson(200, stateJson.encodeCategories(query, results))
+        exchange.respondJson(200, stateJson.encodeCategories(request, results))
     }
 
     private fun handleApiMutation(exchange: HttpExchange) {

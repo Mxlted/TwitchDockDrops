@@ -5,6 +5,7 @@ changes.
 
 ## Implementation checklist
 
+- [x] Category search shares validated request rules across routing, transport, and serialization
 - [x] On-demand public Twitch category search finds games without campaigns or a saved login
 - [x] Four-character category searches browse all available matches in cached pages; short searches retain 12 results
 - [x] Independent category priority editor supports exact-name entry, scoped search, and numeric reordering
@@ -63,6 +64,26 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Verification record — 2026-09-22 (review and refactor)
+
+- Reviewed `246ba99` and `f097031` plus their late-September-21 prerequisite `616260f` against the
+  runtime, API, persistence, security, and UI conventions. Public search remains independent of
+  sessions/mining, queue previews reuse the runtime selector, and promotion changes remain root-only.
+- Extracted `CategorySearchRequest` to centralize normalized query validation, cursor rules, and
+  short/long page limits across the route, provider, and serializer. Split the Twitch response parser
+  into page, category, and continuation checks; reused compiled ID/cursor patterns. Public API fields,
+  search behavior, persistence, scheduling, and dependencies are unchanged.
+- Root Gradle 9.5.1 with the existing isolated JDK 21: `test installDist` passed with 135 JVM tests,
+  zero failures/errors/skips. New coverage checks request boundaries, 32-page cache eviction, malformed
+  response shapes, and capacity recovery after parsing failures. All 10 Node regressions and both
+  client JavaScript syntax checks passed.
+- Isolated packaged-host smoke at `127.0.0.1:18786`: health returned `ok`, a priority mutation returned
+  HTTP 200 and persisted in state, and a short-query cursor returned structured HTTP 400. Anonymous
+  live Twitch search returned 48 and 49 categories on distinct successive `star` pages.
+- No client/CSS, Docker, or dependency changes were made; browser visual QA and Docker builds were
+  not repeated. Live account authorization, mining, earning, and claims were not exercised.
+- Android reference remained clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
 
 ## Verification record — 2026-09-22 (expanded category search)
 

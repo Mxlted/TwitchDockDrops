@@ -161,7 +161,10 @@ cursor. Missing/invalid queries or paging on a short query return 400,
 capacity exhaustion returns 429, and upstream failures return a safe 502 error. It does not touch
 settings, credentials, `RuntimeSnapshot`, or the miner command queue.
 `TwitchCategorySearch` sends an anonymous `SearchCategories` GraphQL query with JSON variables to the
-fixed Twitch endpoint. Two semaphore slots, a 15-second whole-call timeout, a 128 KiB response limit,
+fixed Twitch endpoint. `CategorySearchRequest` owns query normalization, validation, cursor rules, and
+page limits; the route, search provider, and explicit serializer share the same validated request.
+The transport separates bounded HTTP reads from page, category, and continuation parsing.
+Two semaphore slots, a 15-second whole-call timeout, a 128 KiB response limit,
 and a 32-entry/five-minute memory cache keyed by case-insensitive query plus cursor bound its cost
 independently of mining. Redirects are disabled. Each request fetches exactly one page. Continuations
 use the final edge cursor because Twitch's `pageInfo.endCursor` is null. Malformed, repeated, missing,

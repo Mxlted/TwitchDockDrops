@@ -10,9 +10,9 @@ import com.nathan.twitchdropsminer.android.data.model.LocalLogEntry
 import com.nathan.twitchdropsminer.android.data.model.LoginSession
 import com.nathan.twitchdropsminer.android.data.model.RuntimeActivity
 import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
-import com.nathan.twitchdropsminer.android.runtime.CampaignPrioritySelector
+import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchRequest
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategoryPage
-import com.nathan.twitchdropsminer.android.data.twitch.categorySearchLimit
+import com.nathan.twitchdropsminer.android.runtime.CampaignPrioritySelector
 import java.time.Duration
 import java.time.Instant
 import kotlinx.serialization.json.Json
@@ -29,12 +29,12 @@ class StateJson(
 ) {
     private val json = Json { explicitNulls = true }
 
-    fun encodeCategories(query: String, page: TwitchCategoryPage): String = buildJsonObject {
-        put("query", query)
-        put("categories", page.categories.take(categorySearchLimit(query)).toJsonArray { category ->
+    fun encodeCategories(request: CategorySearchRequest, page: TwitchCategoryPage): String = buildJsonObject {
+        put("query", request.query)
+        put("categories", page.categories.take(request.limit).toJsonArray { category ->
             buildJsonObject { put("id", category.id); put("name", category.name) }
         })
-        put("nextCursor", if (query.length >= 4) page.nextCursor else null)
+        put("nextCursor", if (request.supportsPagination) page.nextCursor else null)
     }.toString()
 
     fun encode(
