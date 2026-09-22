@@ -65,6 +65,20 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
+## Verification record - 2026-09-22 (README refresh)
+
+- Replaced the cropped README screenshot with a full current Overview capture, including campaign
+  rewards, recent activity, and the server-ranked Up next queue. The image uses only the built-in
+  preview fixture and is explicitly labeled as illustrative in the README.
+- Removed README em dashes, clarified persistent category priorities and restart behavior, corrected
+  the channel-picker description, and documented the existing read-only preview entry point.
+- Captured the current root web assets from an isolated loopback static server. Desktop (1440px) and
+  mobile (390px) active previews had no horizontal overflow or browser warnings/errors. README local
+  links and image format were checked, and `git diff --check` passed.
+- Documentation and screenshot only; JVM tests and Docker builds were not rerun. No live Twitch
+  account, mining, or claims were exercised. Android remained clean at
+  `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
+
 ## Verification record — 2026-09-22 (review and refactor)
 
 - Reviewed `246ba99` and `f097031` plus their late-September-21 prerequisite `616260f` against the

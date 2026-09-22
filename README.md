@@ -4,7 +4,7 @@
   <p><strong>Set it once. Let your Drops grow.</strong></p>
   <p>
     A self-hosted Twitch Drops farmer with campaign tracking, channel failover, progress supervision,
-    and claiming—all from a calm web dashboard.
+    and automatic claiming from a single web dashboard.
   </p>
   <p>
     <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-JVM-8b7cf6?style=flat-square">
@@ -14,7 +14,9 @@
   </p>
 </div>
 
-![Twitch Dock Drops overview showing an active campaign and drop progress](docs/twitch-dock-drops-overview.png)
+![Twitch Dock Drops dark dashboard showing drop progress, campaign rewards, recent activity, and the Up next queue](docs/twitch-dock-drops-overview.jpg)
+
+*Current dashboard with built-in preview data. Campaigns, rewards, and activity are illustrative.*
 
 Twitch Dock Drops quietly farms timed Twitch Drops without playing or downloading the stream. Run it
 in Docker, connect your Twitch account through the official device-activation page, choose the games
@@ -26,17 +28,19 @@ you care about, and leave the miner to handle the rest.
 
 ## Why Twitch Dock Drops?
 
-- **No stream playback** — earns timed progress without downloading video or audio.
-- **Always aware of active Drops** — refreshes campaigns and keeps the inventory current.
-- **Channel hunting and recovery** — finds compatible live channels and moves on when progress stalls.
-- **Game priorities and fallbacks** — farm the games you want first, then let Auto Mode find useful work.
-- **Automatic claiming** — attempts to claim completed Drops and retries temporary failures.
-- **Pick up after restarts** — encrypted login, preferences, priorities, and activity remain available.
-- **A real dashboard** — watch progress, browse campaigns, switch channels, and review activity from
+- **No stream playback:** earns timed progress without downloading video or audio.
+- **Campaign tracking:** refreshes campaigns and keeps the inventory current.
+- **Channel hunting and recovery:** finds compatible live channels and moves on when progress stalls.
+- **Persistent game priorities:** save categories before their next campaign, set their order, and let
+  Auto Mode find useful fallback work.
+- **Automatic claiming:** attempts to claim completed Drops and retries temporary failures.
+- **Pick up after restarts:** restores your encrypted login, preferences, priorities, and saved
+  Start/Stop choice.
+- **A real dashboard:** watch progress, browse campaigns, switch channels, and review activity from
   one UI.
-- **Desktop and mobile friendly** — use the responsive dark or light dashboard from any trusted
+- **Desktop and mobile friendly:** use the responsive dark or light dashboard from any trusted
   LAN device.
-- **Built for Docker** — one hardened, non-root container with a read-only root filesystem and durable
+- **Built for Docker:** one hardened, non-root container with a read-only root filesystem and durable
   data volume.
 
 ## Quick start
@@ -67,7 +71,7 @@ the [Operator Guide](./OPERATIONS.md#network-access) for loopback-only and rever
 1. Select **Connect Twitch** in the dashboard.
 2. Approve the displayed code on Twitch's device-activation page. The app never asks for your Twitch
    password.
-3. Choose game priorities—or leave Auto Mode in charge—then start the miner.
+3. Choose game priorities or leave Auto Mode in charge, then start the miner.
 
 Twitch Dock Drops refreshes your campaigns, chooses an eligible live channel, reports watch progress,
 recovers from stalled channels, and claims completed Drops. Your saved session is restored after a
@@ -80,27 +84,31 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
 
 - **Header** shows the miner state on every page with Start/Stop, refresh, and theme controls.
 - **Overview** shows session stats, the current Drop with progress and an estimated finish time,
-  every drop in the active campaign, recent activity, and the priority queue.
-- **Campaigns** lets you search and filter, pin games in order, expand each campaign to see its
-  drops and rewards, check when campaigns end, open account-link pages, and exclude campaigns.
+  every drop in the active campaign, recent activity, and the server-ranked **Up next** queue.
+- **Campaigns** lets you search, filter, and sort active or upcoming campaigns, expand their drops and
+  rewards, check end dates, open account-link pages, and exclude campaigns. Lists use 24-row pages.
 - **Game & category priorities** saves favorites even without a current campaign. Add an exact Twitch
   category name, reorder with arrows or a rank number, and keep its place when a new campaign returns.
   **All Twitch categories** searches Twitch on demand, including games without Drops campaigns or
   a connected account. Enter at least two characters and select **Search Twitch**, then **+ Add**.
   Two- or three-character searches show up to 12 results. Four or more characters unlock all matches
   available from Twitch through **Previous/Next**, 50 per page. Pages load only on request and are
-  cached for five minutes. Local loaded/saved, active, and linked campaign scopes remain available.
-- Campaign lists support upcoming campaigns, sorting by priority/name/end date, and 24-row pages.
-  **Up next** follows the server's eligibility and fallback order; live-channel availability still
-  determines what can actually run.
+  cached for five minutes. You can also search loaded/saved categories or narrow to active or linked
+  campaigns.
 - **Activity** explains what the miner selected, refreshed, watched, or claimed, above the runtime log.
 - **Settings** controls timing, Auto Mode order, fallback behavior, and resets, and reports the
   service version, uptime, and Twitch connection.
-- **Switch channel** replaces the current stream with another compatible live channel.
+- **Switch channel** opens a compatible live-channel picker. The current channel keeps running until
+  you select an alternative.
 - Views are bookmarkable (`/#campaigns`), and an offline banner appears if the local host stops
   responding.
 
 The miner keeps lifecycle work on the server. Closing the browser does not stop farming.
+**Up next** follows your saved priorities, exclusions, campaign eligibility, and fallback order;
+live-channel availability determines what can actually run.
+
+To explore without connecting Twitch, select **Explore with preview data** on the welcome screen
+or open `/?preview=active` on your instance. Preview controls do not change the miner.
 
 ## Good to know
 
@@ -114,11 +122,11 @@ The miner keeps lifecycle work on the server. Closing the browser does not stop 
 
 ## Documentation
 
-- [Operator Guide](./OPERATIONS.md) — deployment, networking, environment variables, data, and commands
-- [Security](./SECURITY.md) — session storage, browser protections, and safe exposure
-- [Architecture](./ARCHITECTURE.md) — runtime, API, scheduling, and Twitch integration details
-- [Project Status](./PROJECT_STATUS.md) — completed work, verification history, and known limitations
-- [Android companion project](https://github.com/Mxlted/TwitchDropsMinerAndroid) — the separate mobile edition
+- [Operator Guide](./OPERATIONS.md): deployment, networking, environment variables, data, and commands
+- [Security](./SECURITY.md): session storage, browser protections, and safe exposure
+- [Architecture](./ARCHITECTURE.md): runtime, API, scheduling, and Twitch integration details
+- [Project Status](./PROJECT_STATUS.md): completed work, verification history, and known limitations
+- [Android companion project](https://github.com/Mxlted/TwitchDropsMinerAndroid): the separate mobile edition
 
 ## Credits
 
