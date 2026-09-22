@@ -45,7 +45,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.ResponseBody
 
-private const val TwitchClientId = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+internal const val TwitchClientId = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
 private const val TwitchClientUrl = "https://www.twitch.tv"
 private const val MaxSpadeUrlCacheEntries = 64
 private const val MaxConcurrentTwitchLookups = 4

@@ -5,6 +5,7 @@ import com.nathan.twitchdropsminer.android.data.local.SecureSessionStore
 import com.nathan.twitchdropsminer.android.data.local.SettingsRepository
 import com.nathan.twitchdropsminer.android.data.network.JvmNetworkStatusProvider
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApiClient
+import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategorySearch
 import com.nathan.twitchdropsminer.android.runtime.LocalMinerRuntime
 import java.nio.file.Files
 import java.time.Duration
@@ -43,6 +44,7 @@ fun main() {
     }
 
     val webServer = WebServer(
+        categorySearch = TwitchCategorySearch(httpClient),
         port = environment.port,
         listenHost = environment.listenHost,
         allowLanAccess = environment.allowLanAccess,

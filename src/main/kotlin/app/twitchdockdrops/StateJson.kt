@@ -11,6 +11,7 @@ import com.nathan.twitchdropsminer.android.data.model.LoginSession
 import com.nathan.twitchdropsminer.android.data.model.RuntimeActivity
 import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
 import com.nathan.twitchdropsminer.android.runtime.CampaignPrioritySelector
+import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategory
 import java.time.Duration
 import java.time.Instant
 import kotlinx.serialization.json.Json
@@ -26,6 +27,13 @@ class StateJson(
     private val startedAt: Instant = Instant.now(),
 ) {
     private val json = Json { explicitNulls = true }
+
+    fun encodeCategories(query: String, categories: List<TwitchCategory>): String = buildJsonObject {
+        put("query", query)
+        put("categories", categories.take(12).toJsonArray { category ->
+            buildJsonObject { put("id", category.id); put("name", category.name) }
+        })
+    }.toString()
 
     fun encode(
         snapshot: RuntimeSnapshot,

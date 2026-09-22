@@ -152,6 +152,16 @@ the miner and this redacted preview, including saved category ranks, exclusions,
 custom fallback order. This does not perform channel lookups or create another scheduler. The browser
 resolves these IDs against the serialized campaigns to render **Up next**.
 
+`GET /api/categories/search?q=...` performs a read-only public category lookup. It accepts one `q`
+parameter of 2–100 characters, validates Host and method, and returns explicitly serialized
+`{query, categories: [{id, name}]}` with at most 12 results. Missing/invalid queries return 400,
+capacity exhaustion returns 429, and upstream failures return a safe 502 error. It does not touch
+settings, credentials, `RuntimeSnapshot`, or the miner command queue.
+`TwitchCategorySearch` sends an anonymous `SearchCategories` GraphQL query with JSON variables to the
+fixed Twitch endpoint. Two semaphore slots, a 15-second whole-call timeout, a 128 KiB response limit,
+and a 32-entry/five-minute memory cache bound its cost independently of mining. Redirects are disabled.
+The private query was verified against Twitch on 2026-09-22; it can change independently of this app.
+
 Every route validates Host against `TWITCH_DROPS_TRUSTED_HOSTS` before routing. Mutations under
 `/api/*` additionally require a `TWITCH_DROPS_TRUSTED_ORIGINS` Origin, the exact route method,
 `application/json`, an object body no larger than 64 KiB, known fields, exact JSON primitive types,
@@ -239,9 +249,13 @@ Category priorities are an independent ordered editor on Campaigns. They reuse t
 `selectedGamePriority` settings schema and priority mutation routes, so older saved settings need no
 migration. Exact names can be added without an inventory entry; matching is case-insensitive and
 does not track Twitch category renames by ID. New additions to a full 500-game list return HTTP 409
-before persistence, instead of silently truncating another priority. Search is browser-local over
-loaded/saved names, requires two characters, supports active/linked scopes, and renders at most eight
-matches. Campaign rendering is paged at 24 rows. View updates restore focused controls, text selection,
+before persistence, instead of silently truncating another priority. The default All Twitch categories
+scope performs an explicit submitted search and renders up to 12 results. Editing the query or scope
+aborts the browser request, clears results, and invalidates stale completions; a 20-second browser
+timeout makes failures retryable. Loaded/saved, active, and linked scopes remain browser-local, require
+two characters, and render at most eight matches. Search selection saves Twitch's canonical name
+through the existing priority route; category IDs do not migrate the name-based settings format.
+Campaign rendering is paged at 24 rows. View updates restore focused controls, text selection,
 in-progress numeric values, and priority-list scroll; successful mutations refresh state before their
 duplicate-command guard is released. Clearing the list requires a dialog confirmation.
 

@@ -178,8 +178,14 @@ responses. While a lower-ranked prioritized game is active, the miner periodical
 games and promotes when a compatible channel becomes available.
 
 Use **Campaigns → Game & category priorities** to save games before they have an active campaign.
-Enter an exact Twitch category name or select a match from the loaded inventory. Search is local,
-starts after two characters, returns at most eight matches, and supports active/linked scopes.
+Select **All Twitch categories**, enter 2–100 characters, and press Enter or **Search Twitch**.
+This loads at most 12 matching categories directly from Twitch, including games with no campaign.
+Select **+ Add** to save the exact returned name. No Twitch login or additional API credentials are
+needed for this public lookup. Searches run only when submitted, not as you type. Refine the name if
+the desired category is outside the first 12 results. The server caches up to 32 searches for five
+minutes and permits two concurrent lookups, each limited to 15 seconds.
+Loaded/saved, active, and linked scopes still search locally (at most eight displayed matches) and
+allow manual exact-name entry if Twitch search is unavailable.
 Positions are one-based; arrows or a position number reorder the same persistent list. Missing games
 remain saved and do not prevent later eligible priorities from running. New campaigns match the saved
 name case-insensitively. Twitch category renames require updating the saved name manually.

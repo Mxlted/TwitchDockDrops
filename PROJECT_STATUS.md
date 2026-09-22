@@ -5,6 +5,7 @@ changes.
 
 ## Implementation checklist
 
+- [x] On-demand public Twitch category search finds games without campaigns or a saved login
 - [x] Independent category priority editor supports exact-name entry, scoped search, and numeric reordering
 - [x] Returning campaigns inherit saved category order; known starts wake active promotion checks
 - [x] In-flight promotion lookups cannot busy-loop on an overdue timer
@@ -62,6 +63,25 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
+## Verification record — 2026-09-22
+
+- Added All Twitch categories as the default priority search scope. Search submits explicitly with
+  2–100 characters, loads at most 12 public category matches, and lets users save a returned exact name
+  even without a loaded campaign. Local scopes and manual entry remain available.
+- Public catalog lookups use no OAuth session, run independently of farming, and have a 15-second
+  call timeout, two-request concurrency cap, 128 KiB response cap, and 32-entry/five-minute cache.
+  The UI cancels outdated searches, suppresses stale completions, and shows loading/empty/error states.
+- Root Gradle 9.5.1/JDK 21: 127 JVM tests passed with zero failures/errors/skips; `installDist` built.
+  Seven Node rendering/search regressions and JavaScript syntax checks passed, including stale request
+  cancellation, safe error display, malformed upstream replies, validation, cache expiry, and concurrency.
+- The built app returned real Twitch catalog results without a session or any campaigns. Health and
+  the browser-driven priority mutation succeeded; adding Stardew Valley persisted across server restart.
+  Desktop (1440px) and mobile (390px) checks covered results, saved state, empty results, disconnected
+  search errors, and both themes. Results scroll within a bounded panel with no horizontal page overflow.
+  No console warnings/errors appeared before the deliberate disconnected-server check. Loading and
+  stale completion behavior were checked by automated tests; no live farming account was exercised.
+- Android reference remained clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
+
 ## Verification record — 2026-09-21
 
 - Added a persistent game/category editor independent of campaign rows, with arrows and direct rank
@@ -87,9 +107,10 @@ changes.
 
 ### Current category-priority limitations
 
-- Search covers loaded campaign names and saved priorities, not Twitch's global category catalog.
-  Other games require the exact Twitch category name. Matching ignores case; renames require a manual
-  update, and arbitrary exact-name entries are not validated against Twitch.
+- Twitch search returns the first 12 matches; refine the query for more specific results. The private
+  public-search endpoint may change or become unavailable. Saved priorities still match exact names
+  without regard to case, so category renames require a manual update. Manual entries in local scopes
+  are not validated against Twitch.
 - Newly published campaigns are discovered on inventory refresh. Cached scheduled campaigns can
   become eligible at their known start times. Live channel availability and account eligibility still
   determine whether a saved priority can run; the queue is a preview, not a reservation.

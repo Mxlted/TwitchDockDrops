@@ -13,6 +13,9 @@ import com.nathan.twitchdropsminer.android.data.twitch.DeviceTokenPollResult
 import com.nathan.twitchdropsminer.android.data.twitch.DropClaimResult
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApi
 import com.nathan.twitchdropsminer.android.data.twitch.ValidatedToken
+import com.nathan.twitchdropsminer.android.data.twitch.CategorySearch
+import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchException
+import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategory
 import com.nathan.twitchdropsminer.android.runtime.LocalMinerRuntime
 import java.nio.file.Path
 import java.util.Base64
@@ -45,6 +48,7 @@ class WebServerTest {
     private lateinit var runtime: LocalMinerRuntime
     private lateinit var server: WebServer
     private val client = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
+    private var categoryLookup: suspend (String) -> List<TwitchCategory> = { listOf(TwitchCategory("42", "Future Game")) }
 
     @BeforeTest
     fun startServer() {
@@ -64,6 +68,7 @@ class WebServerTest {
             logRepository = logs,
             trustedOrigins = setOf("http://127.0.0.1:*"),
             maxSseClients = 1,
+            categorySearch = CategorySearch { query -> categoryLookup(query) },
         )
         server.start()
     }
@@ -77,12 +82,42 @@ class WebServerTest {
 
     @Test
     fun `host is validated for health state events and static files`() {
-        listOf("/api/health", "/api/state", "/api/events", "/app.js").forEach { path ->
+        listOf("/api/health", "/api/state", "/api/events", "/api/categories/search?q=game", "/app.js").forEach { path ->
             execute(path, host = "evil.example").use { response ->
                 assertEquals(403, response.code, path)
                 assertStructuredError(response)
             }
         }
+    }
+
+    @Test
+    fun `public category search returns explicit fields without a session or campaign`() {
+        var received = ""
+        categoryLookup = { query -> received = query; listOf(TwitchCategory("42", "Future Game")) }
+        execute("/api/categories/search?q=Future%20Game").use {
+            assertEquals(200, it.code)
+            assertEquals("""{"query":"Future Game","categories":[{"id":"42","name":"Future Game"}]}""", it.body!!.string())
+        }
+        assertEquals("Future Game", received)
+        assertTrue(runtime.snapshot.value.campaigns.isEmpty())
+        assertTrue(settings.settings.value.selectedGamePriority.isEmpty())
+    }
+
+    @Test
+    fun `category search validates query and method before upstream work`() {
+        categoryLookup = { error("Must not query Twitch") }
+        listOf("", "?q=a", "?q=ab&q=cd", "?query=ab", "?q=ab%0Acd", "?q=${"a".repeat(101)}").forEach { suffix ->
+            execute("/api/categories/search$suffix").use { assertError(it, 400) }
+        }
+        execute("/api/categories/search?q=game", "POST", "{}").use { assertError(it, 405) }
+    }
+
+    @Test
+    fun `category errors distinguish upstream failures from capacity and stay structured`() {
+        categoryLookup = { throw CategorySearchException() }
+        execute("/api/categories/search?q=game").use { assertError(it, 502) }
+        categoryLookup = { throw CategorySearchException(busy = true) }
+        execute("/api/categories/search?q=game").use { assertError(it, 429) }
     }
 
     @Test

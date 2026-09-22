@@ -8,6 +8,8 @@ import com.nathan.twitchdropsminer.android.data.model.AutoModePriority
 import com.nathan.twitchdropsminer.android.data.model.LocalLogEntry
 import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
 import com.nathan.twitchdropsminer.android.runtime.LocalMinerRuntime
+import com.nathan.twitchdropsminer.android.data.twitch.CategorySearch
+import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchException
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.IOException
@@ -15,6 +17,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -48,6 +51,7 @@ class WebServer(
         "http://[::1]:$port",
     ),
     private val maxSseClients: Int = DefaultMaxSseClients,
+    private val categorySearch: CategorySearch? = null,
 ) : AutoCloseable {
     private val stateJson = StateJson()
     private val requestTrust = TrustedRequestPolicy(trustedHosts, trustedOrigins, allowLanAccess)
@@ -78,6 +82,7 @@ class WebServer(
             when (exchange.requestURI.path) {
                 "/api/health" -> exchange.requireGetAndRespond("{\"status\":\"ok\"}")
                 "/api/state" -> exchange.requireGetAndRespond(currentState())
+                "/api/categories/search" -> searchCategories(exchange)
                 "/api/events" -> {
                     exchange.requireMethod("GET")
                     streamEvents(exchange)
@@ -97,6 +102,29 @@ class WebServer(
             System.err.println("HTTP request failed without exposing internal details.")
             exchange.respondError(500, "The request could not be completed.")
         }
+    }
+
+    private fun searchCategories(exchange: HttpExchange) {
+        exchange.requireMethod("GET")
+        val raw = exchange.requestURI.rawQuery.orEmpty()
+        if (raw.length > 1200 || !raw.startsWith("q=") || '&' in raw) {
+            throw RequestException(400, "Provide one category search parameter: q.")
+        }
+        val query = try {
+            URLDecoder.decode(raw.substring(2), StandardCharsets.UTF_8).trim()
+        } catch (_: IllegalArgumentException) {
+            throw RequestException(400, "Invalid category search encoding.")
+        }
+        if (query.length !in 2..100 || query.any(Char::isISOControl)) {
+            throw RequestException(400, "Search must contain 2 to 100 characters without control characters.")
+        }
+        val search = categorySearch ?: throw RequestException(503, "Category search is unavailable.")
+        val results = try {
+            runBlocking { search.search(query) }
+        } catch (error: CategorySearchException) {
+            throw RequestException(if (error.busy) 429 else 502, error.message ?: "Category search failed.")
+        }
+        exchange.respondJson(200, stateJson.encodeCategories(query, results))
     }
 
     private fun handleApiMutation(exchange: HttpExchange) {
