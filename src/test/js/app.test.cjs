@@ -6,6 +6,7 @@ const path = require('node:path');
 
 function client(fetch = () => { throw new Error('Unexpected request'); }) {
   const context = vm.createContext({
+    URL,
     URLSearchParams,
     AbortController,
     fetch,
@@ -13,9 +14,32 @@ function client(fetch = () => { throw new Error('Unexpected request'); }) {
     window: { location: { search: '?preview=active' }, addEventListener() {}, setTimeout, clearTimeout },
   });
   const source = fs.readFileSync(path.join(__dirname, '../../main/resources/web/app.js'), 'utf8');
-  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, searchTwitchCategories, cancelGameSearch };', context);
+  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch };', context);
   return context.client;
 }
+
+test('campaign names link to their own Twitch campaign across list, watch card and queue', () => {
+  const c = client();
+  const data = c.previewState();
+  const campaign = data.snapshot.campaigns[0];
+  campaign.name = 'Reward <week> & "friends"';
+  data.snapshot.selectionPreview = [campaign.id];
+  for (const html of [c.renderCampaigns(data), c.renderQueue(data.snapshot),
+    c.renderWatchCard(campaign, campaign.drops[0], null)]) {
+    assert.ok(html.includes(`class="campaign-link" href="${campaign.campaignUrl}"`));
+    assert.match(html, /target="_blank" rel="noopener noreferrer" aria-label="Open Reward &lt;week&gt; &amp; &quot;friends&quot; campaign on Twitch \(opens in a new tab\)"/);
+    assert.match(html, /<span>Reward &lt;week&gt; &amp; &quot;friends&quot;<\/span>/);
+    assert.doesNotMatch(html, /<week>/);
+  }
+});
+
+test('missing and unsafe campaign URLs leave escaped, noninteractive names', () => {
+  const c = client();
+  for (const campaignUrl of [null, '', '/relative', 'javascript:alert(1)',
+    'http://www.twitch.tv/drops/campaigns', 'https://twitch.tv.example.com/', 'https://example.com/']) {
+    assert.equal(c.renderCampaignLink({name:'<Campaign>', campaignUrl}), '&lt;Campaign&gt;');
+  }
+});
 
 test('category search waits for two characters, caps matches and honors linked scope', () => {
   const c = client();

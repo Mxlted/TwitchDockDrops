@@ -5,6 +5,7 @@ changes.
 
 ## Implementation checklist
 
+- [x] Campaign names link to their Twitch campaign from Campaigns, Now watching, and Up next
 - [x] Category search shares validated request rules across routing, transport, and serialization
 - [x] On-demand public Twitch category search finds games without campaigns or a saved login
 - [x] Four-character category searches browse all available matches in cached pages; short searches retain 12 results
@@ -64,6 +65,21 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Verification record - 2026-09-22 (campaign links)
+
+- Campaign names reuse the existing validated HTTPS Twitch campaign URL, with a subtle underline,
+  external-link arrow, and a labeled new-tab destination. Missing/unsafe URLs retain escaped text.
+- All 12 Node client tests and the JavaScript syntax check passed. New coverage checks all three
+  rendering locations, escaped names, safe new-tab attributes, and rejected/missing URL fallbacks.
+- Browser preview QA at 1440px desktop and 390px mobile covered Campaigns, Now watching, Up next,
+  expanded drops, dark/light themes, and keyboard navigation. Campaign links measured 44px high,
+  keyboard focus showed the 2px accent ring, and no horizontal overflow or console warnings/errors
+  appeared. Campaign destination URLs were checked against the preview data; live Twitch campaign
+  navigation and account flows were not exercised.
+- Client-only change; no API/state-schema, JVM, Docker, or dependency changes. JVM tests and image
+  builds were not repeated. Android remained clean at
+  `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
 
 ## Verification record - 2026-09-22 (README refresh)
 

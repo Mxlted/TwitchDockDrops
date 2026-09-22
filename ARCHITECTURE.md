@@ -243,7 +243,10 @@ unavailable. State updates replace the current view only when its rendered marku
 page entrance animation is reserved for initial load and explicit navigation so updates do not
 discard focus. Active drop and channel links are emitted only for validated HTTPS `twitch.tv`
 destinations; channel links use the serialized canonical login while visible labels retain Twitch's
-display name. Linked/unlinked campaign filters remain browser-local presentation state. Priorities
+display name. Campaign names in the campaign list, active watch card, and Up next reuse the serialized
+`campaignUrl` with the same HTTPS Twitch validation, a subtle external-link indicator, and a new tab.
+Missing or rejected URLs leave the campaign name as escaped plain text.
+Linked/unlinked campaign filters remain browser-local presentation state. Priorities
 missing from a partial/current inventory are displayed as unavailable without being deleted. Mutable
 HTML, JavaScript, and CSS use `no-cache`, preventing a stale client from crossing a state-schema upgrade.
 The active-watch card exposes compatible live channel alternatives through the existing serialized

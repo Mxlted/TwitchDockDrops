@@ -1018,12 +1018,14 @@ h1, h2, h3, h4 {
 }
 
 .active-drop-link,
+.campaign-link,
 .soft-chip.is-link {
   color: inherit;
   text-decoration: none;
 }
 
-.active-drop-link {
+.active-drop-link,
+.campaign-link {
   display: inline-flex;
   gap: 6px;
   align-items: center;
@@ -1036,9 +1038,26 @@ h1, h2, h3, h4 {
 }
 
 .active-drop-link:hover,
+.campaign-link:hover,
 .soft-chip.is-link:hover {
   color: var(--accent);
   text-decoration-color: currentColor;
+}
+
+.campaign-link {
+  max-width: 100%;
+  vertical-align: middle;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.campaign-link > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.campaign-link .external-mark {
+  flex-shrink: 0;
 }
 
 .soft-chip.is-link {
@@ -1208,7 +1227,7 @@ h1, h2, h3, h4 {
   font-weight: 600;
 }
 
-.queue-copy span {
+.queue-copy > span {
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;

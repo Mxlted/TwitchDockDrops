@@ -411,7 +411,7 @@ function renderWatchCard(campaign, drop, channel, channels = [], channelSearchIn
           ${viewersChip}
         </div>
         <h3>${dropName}</h3>
-        <p>${esc(campaign.gameName)} · ${esc(campaign.name)}${dropPosition}</p>
+        <p>${esc(campaign.gameName)} · ${renderCampaignLink(campaign)}${dropPosition}</p>
         <progress class="progress-track" max="100" value="${progress}" aria-label="${progress}% watched"></progress>
         <div class="progress-line"><span>${drop.currentMinutes} of ${drop.requiredMinutes} min</span><span>${drop.remainingMinutes}m left · done ${esc(formatEta(drop.remainingMinutes))}</span></div>
         ${channel ? `<div class="inline-actions"><button class="tiny-button" data-action="find-channel" type="button" aria-expanded="${showChannelPicker}" aria-controls="channelPicker" ${searching ? "disabled" : ""}>${searching ? "Finding channels…" : showChannelPicker ? "Refresh channel list" : "Switch channel"}</button></div>` : ""}
@@ -473,7 +473,8 @@ function renderQueue(snapshot) {
           ${renderArt(campaign)}
           <div class="queue-copy">
             <strong>${esc(campaign.gameName)}</strong>
-            <span>${esc(campaign.name)} · ${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.remainingMinutes}m left</span>
+            ${renderCampaignLink(campaign)}
+            <span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.remainingMinutes}m left</span>
           </div>
           <div class="campaign-tags">
             ${campaign.priorityIndex >= 0 ? `<span class="priority-chip">Priority ${campaign.priorityIndex + 1}</span>` : '<span class="soft-chip">Auto Mode</span>'}
@@ -601,6 +602,13 @@ function renderCampaignStatusChip(campaign) {
   return `<span class="status-chip ${statusClass}">${statusLabel}</span>`;
 }
 
+function renderCampaignLink(campaign) {
+  const url = safeTwitchUrl(campaign.campaignUrl);
+  return url
+    ? `<a class="campaign-link" href="${attr(url)}" target="_blank" rel="noopener noreferrer" aria-label="Open ${attr(campaign.name)} campaign on Twitch (opens in a new tab)"><span>${esc(campaign.name)}</span><span class="external-mark" aria-hidden="true">↗</span></a>`
+    : esc(campaign.name);
+}
+
 function renderCampaignRow(campaign) {
   const priority = campaign.priorityIndex;
   const linkLabel = campaign.linkStatusKnown ? (campaign.linked ? "Linked" : "Unlinked") : "Link unknown";
@@ -626,7 +634,7 @@ function renderCampaignRow(campaign) {
           ${timing ? `<span class="soft-chip is-plain">${esc(timing)}</span>` : ""}
         </div>
         <h3>${esc(campaign.gameName)}</h3>
-        <p>${esc(campaign.name)}</p>
+        <p>${renderCampaignLink(campaign)}</p>
         <progress class="progress-track" max="100" value="${progress}" aria-label="${progress}% watched"></progress>
         <div class="progress-line"><span>${progress}% watched</span><span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.remainingMinutes}m left</span></div>
       </div>

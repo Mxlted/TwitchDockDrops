@@ -86,7 +86,8 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
 - **Overview** shows session stats, the current Drop with progress and an estimated finish time,
   every drop in the active campaign, recent activity, and the server-ranked **Up next** queue.
 - **Campaigns** lets you search, filter, and sort active or upcoming campaigns, expand their drops and
-  rewards, check end dates, open account-link pages, and exclude campaigns. Lists use 24-row pages.
+  rewards, check end dates, open account-link pages, and exclude campaigns. Campaign names link to
+  their Twitch campaign in a new tab, including in Now watching and Up next. Lists use 24-row pages.
 - **Game & category priorities** saves favorites even without a current campaign. Add an exact Twitch
   category name, reorder with arrows or a rank number, and keep its place when a new campaign returns.
   **All Twitch categories** searches Twitch on demand, including games without Drops campaigns or
