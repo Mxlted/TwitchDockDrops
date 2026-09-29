@@ -160,7 +160,11 @@ The guarded runtime inventory path replaces complete lists and merges partial re
 details, marking them unavailable; failures retain prior details with the same stale indication.
 New sessions/reset clear reward data. Reward campaigns never enter `CampaignPrioritySelector`,
 watch heartbeats, claims, drop totals, or saved game priorities. The Campaigns view shows an independent
-Show/Hide panel, 24-row pages, and a fixed HTTPS Twitch campaigns link. Existing Drop filters apply
+Show/Hide panel, four-row pages, and a fixed HTTPS Twitch campaigns link. The compact reward panel sits
+beside the Drop list at viewport widths of 1280px and above and follows it in document order below
+that breakpoint. Reward summaries show two names; Details exposes the full description and reward
+list. Expanded details remain in browser presentation state across panel toggles and state updates.
+Existing Drop filters apply
 only to the Drop list. Watch-time reward automation and authenticated reward verification are outside
 this visibility feature.
 

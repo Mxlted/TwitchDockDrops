@@ -5,6 +5,7 @@ changes.
 
 ## Implementation checklist
 
+- [x] Compact reward companion panel sits beside desktop campaigns and below the list on smaller screens
 - [x] Open Reward Campaigns are visible in a separate Show/Hide panel with dates and reward names
 - [x] Reward listings refresh with inventory without entering the mining selector or claim runtime
 - [x] Campaign names link to their Twitch campaign from Campaigns, Now watching, and Up next
@@ -67,6 +68,23 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Verification record - 2026-09-29 (compact reward layout)
+
+- Moved Open Reward Campaigns beside the Drop list at 1280px and wider, and below it on smaller
+  screens. Reduced spacing and repeated labels, shortened the explanatory copy, added expandable
+  Details, and reduced reward pages to four entries. Main campaigns retain 24-row pages.
+- Reward controls have 44px targets, labeled pagination, 2px keyboard focus, and explicit expanded
+  states. Expanded reward details survive panel hide/show and ordinary view updates.
+- Browser QA covered 1440px and 1280px desktop, 1024px tablet, and 390px/320px mobile, light/dark
+  themes, long names/descriptions, pagination, keyboard activation, Show/Hide, and reward details.
+  Empty, loading, unavailable, and logged-out states were visually checked with local fixtures.
+- Fixed a pre-existing 320px horizontal overflow caused by the root minimum width and header flex
+  sizing. The status label now truncates while header buttons retain their size. Checked widths have
+  no page overflow, and no browser warnings/errors were observed.
+- All 14 Node tests, JavaScript syntax validation, and `git diff --check` passed. Client/CSS/docs only;
+  JVM tests and Docker builds were not repeated. No live Twitch account flow was exercised.
+- Android reference remained clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
 
 ## Verification record - 2026-09-29 (reward campaign visibility)
 

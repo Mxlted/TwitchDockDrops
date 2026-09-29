@@ -7,6 +7,7 @@ const ui = {
   campaignPage: 0,
   rewardPage: 0,
   rewardsExpanded: true,
+  expandedRewards: new Set(),
   gameSearch: "",
   gameScope: "twitch",
   gameResults: [],
@@ -577,7 +578,6 @@ function renderCampaigns(data) {
     <div class="page-stack">
       ${data.snapshot.error ? renderError(data.snapshot.error) : ""}
       ${renderGamePriorities(data)}
-      ${renderRewardCampaigns(data.snapshot)}
       <section class="soft-card toolbar">
         <label class="search-field">
           ${searchIcon()}
@@ -588,7 +588,8 @@ function renderCampaigns(data) {
           ${filters.map(([filter, label]) => `<button class="filter-pill ${ui.campaignFilter === filter ? "is-active" : ""}" type="button" data-action="campaign-filter" data-filter="${filter}" aria-pressed="${ui.campaignFilter === filter}">${label}</button>`).join("")}
         </div>
       </section>
-      <section class="soft-card section-card">
+      <div class="campaign-layout">
+      <section class="soft-card section-card campaign-results" aria-label="Drop campaigns">
         <div class="section-head">
           <div><h2>${filtered.length === campaigns.length ? `${campaigns.length} campaign${campaigns.length === 1 ? "" : "s"}` : `${filtered.length} of ${campaigns.length} campaigns`}</h2><p>Pinned games are mined first, in order. Excluded campaigns stay listed but are never mined.</p></div>
           <label class="sort-control">Sort <select id="campaignSort">${[["priority", "Game priority"], ["ending", "Ending soon"], ["name", "Game name"]].map(([value, label]) => `<option value="${value}" ${ui.campaignSort === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
@@ -596,6 +597,8 @@ function renderCampaigns(data) {
         ${filtered.length ? `<div class="campaign-list">${visible.map(renderCampaignRow).join("")}</div>` : renderFilteredEmpty(campaigns.length)}
         ${pageCount > 1 ? `<div class="pagination"><button class="tiny-button" data-action="campaign-page" data-offset="-1" ${ui.campaignPage === 0 ? "disabled" : ""}>Previous</button><span role="status">Page ${ui.campaignPage + 1} of ${pageCount}</span><button class="tiny-button" data-action="campaign-page" data-offset="1" ${ui.campaignPage === pageCount - 1 ? "disabled" : ""}>Next</button></div>` : ""}
       </section>
+      ${renderRewardCampaigns(data.snapshot)}
+      </div>
     </div>`;
 }
 
@@ -604,7 +607,8 @@ function renderRewardCampaigns(snapshot) {
   const campaigns = (snapshot.rewardCampaigns || []).filter((campaign) =>
     Date.parse(campaign.startsAt) <= now && Date.parse(campaign.endsAt) > now
   ).sort((a, b) => Date.parse(a.endsAt) - Date.parse(b.endsAt) || a.name.localeCompare(b.name));
-  const pages = Math.max(1, Math.ceil(campaigns.length / 24));
+  const pageSize = 4;
+  const pages = Math.max(1, Math.ceil(campaigns.length / pageSize));
   ui.rewardPage = Math.max(0, Math.min(ui.rewardPage, pages - 1));
   const authenticated = snapshot.account.authenticated;
   const loading = snapshot.phase === "loadinginventory";
@@ -614,24 +618,37 @@ function renderRewardCampaigns(snapshot) {
     : !available ? "Reward campaigns are unavailable or incomplete. Refresh to retry; any previous details may be out of date."
     : !campaigns.length ? "No open reward campaigns were returned for your account."
     : "";
-  return `<section class="soft-card section-card">
-    <div class="section-head">
-      <div><h2>Open Reward Campaigns${authenticated && available ? ` · ${campaigns.length}` : ""}</h2><p>Browse Twitch rewards and their requirements. These campaigns are view-only and are not automatically mined or claimed.</p></div>
-      <button class="tiny-button" type="button" data-action="toggle-rewards" aria-expanded="${ui.rewardsExpanded}" aria-controls="rewardCampaignList">${ui.rewardsExpanded ? "Hide" : "Show"}</button>
+  return `<aside class="soft-card reward-panel" aria-labelledby="rewardCampaignHeading">
+    <div class="reward-heading">
+      <h2 id="rewardCampaignHeading">Open Reward Campaigns${authenticated && available ? ` <span class="reward-count">${campaigns.length}</span>` : ""}</h2>
+      <button class="tiny-button" type="button" data-action="toggle-rewards" aria-label="${ui.rewardsExpanded ? "Hide" : "Show"} reward campaigns" aria-expanded="${ui.rewardsExpanded}" aria-controls="rewardCampaignList">${ui.rewardsExpanded ? "Hide" : "Show"}</button>
     </div>
-    ${ui.rewardsExpanded ? `<div id="rewardCampaignList">
+    <p class="reward-note">View-only. No automatic mining or claiming.</p>
+    <div id="rewardCampaignList" ${ui.rewardsExpanded ? "" : "hidden"}>
+    ${ui.rewardsExpanded ? `
       ${message ? `<p class="drop-empty" role="status">${message}</p>` : ""}
-      ${authenticated && campaigns.length ? `<div class="reward-list">${campaigns.slice(ui.rewardPage * 24, (ui.rewardPage + 1) * 24).map((campaign) => `<article class="reward-row">
-        <div class="campaign-tags"><span class="soft-chip">Reward campaign</span><span class="soft-chip is-plain">Ends ${esc(formatRelative(campaign.endsAt))}</span></div>
-        <h3>${esc(campaign.name)}</h3>
-        <p class="reward-context">${esc([campaign.brand, campaign.gameName || "Across Twitch"].filter(Boolean).join(" · "))}</p>
-        ${campaign.summary ? `<p>${esc(campaign.summary)}</p>` : ""}
-        ${campaign.rewardNames.length ? `<p><strong>Rewards:</strong> ${esc(campaign.rewardNames.join(", "))}</p>` : `<p>See Twitch for reward details and eligibility requirements.</p>`}
-      </article>`).join("")}</div>` : ""}
-      ${authenticated && pages > 1 ? `<div class="pagination"><button class="tiny-button" data-action="reward-page" data-offset="-1" ${ui.rewardPage === 0 ? "disabled" : ""}>Previous rewards</button><span role="status">Page ${ui.rewardPage + 1} of ${pages}</span><button class="tiny-button" data-action="reward-page" data-offset="1" ${ui.rewardPage === pages - 1 ? "disabled" : ""}>Next rewards</button></div>` : ""}
-      <a class="tiny-button" href="https://www.twitch.tv/drops/campaigns" target="_blank" rel="noopener noreferrer">View campaigns on Twitch ↗</a>
-    </div>` : ""}
-  </section>`;
+      ${authenticated && campaigns.length ? `<div class="reward-list">${campaigns.slice(ui.rewardPage * pageSize, (ui.rewardPage + 1) * pageSize).map(renderRewardRow).join("")}</div>` : ""}
+      ${authenticated && pages > 1 ? `<nav class="reward-pagination" aria-label="Reward campaign pages"><button class="tiny-button" type="button" data-action="reward-page" data-offset="-1" aria-label="Previous rewards" ${ui.rewardPage === 0 ? "disabled" : ""}>←</button><span role="status">${ui.rewardPage + 1} / ${pages}</span><button class="tiny-button" type="button" data-action="reward-page" data-offset="1" aria-label="Next rewards" ${ui.rewardPage === pages - 1 ? "disabled" : ""}>→</button></nav>` : ""}
+      <a class="reward-twitch-link" href="https://www.twitch.tv/drops/campaigns" target="_blank" rel="noopener noreferrer">View on Twitch <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></a>
+    ` : ""}</div>
+  </aside>`;
+}
+
+function renderRewardRow(campaign) {
+  const expanded = ui.expandedRewards.has(campaign.id);
+  const detailsId = `reward-details-${cssId(campaign.id)}`;
+  const names = campaign.rewardNames;
+  return `<article class="reward-row">
+    <h3>${esc(campaign.name)}</h3>
+    <p class="reward-context">${esc([campaign.brand, campaign.gameName || "Across Twitch"].filter(Boolean).join(" · "))}</p>
+    <p class="reward-preview">${names.length ? `${esc(names.slice(0, 2).join(", "))}${names.length > 2 ? ` · +${names.length - 2} more` : ""}` : "Reward details on Twitch"}</p>
+    <div class="reward-row-footer"><span>Ends ${esc(formatRelative(campaign.endsAt))}</span><button class="text-button" type="button" data-action="toggle-reward-details" data-id="${attr(campaign.id)}" aria-label="${expanded ? "Hide" : "Show"} details for ${attr(campaign.name)}" aria-expanded="${expanded}" aria-controls="${detailsId}">${expanded ? "Less" : "Details"} <span aria-hidden="true">${expanded ? "▴" : "▾"}</span></button></div>
+    <div class="reward-details" id="${detailsId}" ${expanded ? "" : "hidden"}>
+      ${campaign.summary ? `<p>${esc(campaign.summary)}</p>` : ""}
+      ${names.length ? `<p><strong>Rewards:</strong> ${esc(names.join(", "))}</p>` : ""}
+      <p class="reward-context">Check Twitch for full requirements and eligibility.</p>
+    </div>
+  </article>`;
 }
 
 function renderCampaignStatusChip(campaign) {
@@ -925,6 +942,12 @@ async function handleClick(event) {
     if (action === "campaign-page") { ui.campaignPage += Number(button.dataset.offset); render(); }
     if (action === "reward-page") { ui.rewardPage += Number(button.dataset.offset); render(); }
     if (action === "toggle-rewards") { ui.rewardsExpanded = !ui.rewardsExpanded; render(); }
+    if (action === "toggle-reward-details") {
+      const id = button.dataset.id;
+      if (ui.expandedRewards.has(id)) ui.expandedRewards.delete(id);
+      else ui.expandedRewards.add(id);
+      render();
+    }
     if (action === "category-page") await searchTwitchCategories(ui.gamePage + Number(button.dataset.offset));
     if (action === "toggle-exclusion") await command("/api/campaigns/exclusion", { campaignIds: [button.dataset.id], excluded: button.dataset.excluded !== "true" });
     if (action === "campaign-filter") {

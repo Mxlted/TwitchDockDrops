@@ -232,26 +232,31 @@ test('open rewards are visible, escaped, collapsible and never shown as mining c
   data.snapshot.rewardCampaigns[0].summary = '<script>unsafe</script>';
   data.snapshot.rewardCampaigns[0].rewardNames = ['<badge>'];
   const html = c.renderCampaigns(data);
-  assert.match(html, /Open Reward Campaigns · 1/);
+  assert.match(html, /Open Reward Campaigns <span class="reward-count">1<\/span>/);
   assert.match(html, /&lt;img onerror=alert\(1\)&gt;/);
   assert.match(html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
   assert.match(html, /&lt;badge&gt;/);
+  assert.match(html, /id="reward-details-preview-reward" hidden/);
+  c.ui.expandedRewards.add('preview-reward');
+  assert.match(c.renderCampaigns(data), /id="reward-details-preview-reward" >/);
+  assert.match(c.renderCampaigns(data), /aria-label="Hide details for &lt;img onerror=alert\(1\)&gt;" aria-expanded="true"/);
   assert.doesNotMatch(html, /data-action="toggle-priority"|data-action="toggle-exclusion"|<script>|% watched/);
   assert.match(html, /href="https:\/\/www.twitch.tv\/drops\/campaigns" target="_blank" rel="noopener noreferrer"/);
   c.ui.rewardsExpanded = false;
   assert.doesNotMatch(c.renderCampaigns(data), /class="reward-row"/);
   assert.match(c.renderCampaigns(data), /aria-expanded="false" aria-controls="rewardCampaignList"/);
+  assert.match(c.renderCampaigns(data), /id="rewardCampaignList" hidden/);
 });
 
 test('reward dates, pagination and unavailable states remain separate from drop filters', () => {
   const c = client();
   const data = c.previewState();
   const reward = data.snapshot.rewardCampaigns[0];
-  data.snapshot.rewardCampaigns = Array.from({length: 25}, (_, i) => ({...reward, id: `r${i}`}));
+  data.snapshot.rewardCampaigns = Array.from({length: 5}, (_, i) => ({...reward, id: `r${i}`}));
   data.snapshot.rewardCampaigns.push({...reward, name: 'Expired reward', endsAt: '2000-01-01T00:00:00Z'});
   data.snapshot.rewardCampaigns.push({...reward, name: 'Future reward', startsAt: '2100-01-01T00:00:00Z'});
   c.ui.campaignFilter = 'excluded';
-  assert.equal((c.renderCampaigns(data).match(/class="reward-row"/g) || []).length, 24);
+  assert.equal((c.renderCampaigns(data).match(/class="reward-row"/g) || []).length, 4);
   assert.doesNotMatch(c.renderCampaigns(data), /Expired reward|Future reward/);
   c.ui.rewardPage = 1;
   assert.equal((c.renderCampaigns(data).match(/class="reward-row"/g) || []).length, 1);
