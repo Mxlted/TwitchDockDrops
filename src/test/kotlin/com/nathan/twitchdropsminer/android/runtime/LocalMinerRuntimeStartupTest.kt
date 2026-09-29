@@ -4,6 +4,8 @@ import com.nathan.twitchdropsminer.android.data.local.LogRepository
 import com.nathan.twitchdropsminer.android.data.local.SecureSessionStore
 import com.nathan.twitchdropsminer.android.data.local.SettingsRepository
 import com.nathan.twitchdropsminer.android.data.model.Campaign
+import com.nathan.twitchdropsminer.android.data.model.RewardCampaign
+import com.nathan.twitchdropsminer.android.data.twitch.CampaignInventory
 import com.nathan.twitchdropsminer.android.data.model.Channel
 import com.nathan.twitchdropsminer.android.data.model.LoginState
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
@@ -36,6 +38,35 @@ import org.junit.jupiter.api.io.TempDir
 class LocalMinerRuntimeStartupTest {
     @TempDir
     lateinit var directory: Path
+
+    @Test
+    fun `reward inventory survives partial refresh and clears with session reset`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(StoredTwitchSession("test-token", "user", "device", Instant.EPOCH))
+        val reward = RewardCampaign("reward", "Event", null, null, null, Instant.EPOCH,
+            Instant.parse("2027-01-01T00:00:00Z"), listOf("Badge"))
+        val api = RecordingTwitchApi()
+        api.rewardInventory = CampaignInventory(emptyList(), rewardCampaigns = listOf(reward), rewardCampaignsAvailable = true)
+        val runtime = runtime(store, api)
+        try {
+            runtime.bootstrap()
+            withTimeout(2_000) { runtime.snapshot.first { it.currentTask == "Inventory refreshed" && it.rewardCampaignsAvailable } }
+            assertEquals(listOf(reward), runtime.snapshot.value.rewardCampaigns)
+            api.rewardInventory = CampaignInventory(emptyList())
+            runtime.refreshInventory()
+            withTimeout(2_000) { runtime.snapshot.first { !it.rewardCampaignsAvailable && it.currentTask == "Inventory refreshed" } }
+            assertEquals(listOf(reward), runtime.snapshot.value.rewardCampaigns)
+            api.rewardInventory = CampaignInventory(emptyList(), rewardCampaignsAvailable = true)
+            runtime.refreshInventory()
+            withTimeout(2_000) { runtime.snapshot.first { it.rewardCampaignsAvailable && it.rewardCampaigns.isEmpty() } }
+            runtime.resetSession()
+            withTimeout(2_000) { runtime.snapshot.first { it.account.state == LoginState.LoggedOut } }
+            assertTrue(runtime.snapshot.value.rewardCampaigns.isEmpty())
+            assertFalse(runtime.snapshot.value.rewardCampaignsAvailable)
+        } finally {
+            runtime.stopMiningAndJoin()
+        }
+    }
 
     @Test
     fun `bootstrap refreshes inventory when a stored Twitch session exists`() = runBlocking {
@@ -186,6 +217,9 @@ private class RecordingTwitchApi(
         ),
     ),
 ) : TwitchApi {
+    var rewardInventory: CampaignInventory? = null
+    override suspend fun fetchCampaignInventory(session: StoredTwitchSession): CampaignInventory =
+        rewardInventory ?: CampaignInventory(fetchCampaigns(session))
     val inventoryRequest = CompletableDeferred<StoredTwitchSession>()
     val validationRequest = CompletableDeferred<String>()
 

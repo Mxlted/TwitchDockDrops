@@ -22,6 +22,22 @@ import kotlinx.serialization.json.jsonPrimitive
 
 class StateJsonTest {
     @Test
+    fun `display rewards serialize independently of selection and drop counters`() {
+        val reward = com.nathan.twitchdropsminer.android.data.model.RewardCampaign(
+            "reward", "Celebration", "Twitch", null, "Watch participating channels",
+            Instant.parse("2026-01-01T00:00:00Z"), Instant.parse("2027-01-01T00:00:00Z"), listOf("Badge"),
+        )
+        val encoded = StateJson().encode(RuntimeSnapshot(rewardCampaigns = listOf(reward),
+            rewardCampaignsAvailable = true), AppSettings(), emptyList())
+        val snapshot = Json.parseToJsonElement(encoded).jsonObject.getValue("snapshot").jsonObject
+        assertEquals("true", snapshot.getValue("rewardCampaignsAvailable").toString())
+        assertEquals("Celebration", snapshot.getValue("rewardCampaigns").jsonArray.single().jsonObject.getValue("name").jsonPrimitive.content)
+        assertTrue(snapshot.getValue("campaigns").jsonArray.isEmpty())
+        assertTrue(snapshot.getValue("selectionPreview").jsonArray.isEmpty())
+        assertEquals("0", snapshot.getValue("activeCampaignCount").toString())
+    }
+
+    @Test
     fun `selection preview respects priorities exclusions fallback and active watch`() {
         val campaigns = (1..8).map { index -> Campaign(
             id = "campaign-$index", name = "Campaign $index", gameName = "Game $index", linked = true, active = true,

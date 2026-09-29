@@ -146,6 +146,24 @@ local logs. `GET /api/events` is a server-sent event stream of the same document
 device code secret, encryption key, and filesystem paths are never serialized. Campaign ACL
 membership remains server-side for selection and is not included in campaign state payloads.
 
+`snapshot.rewardCampaigns` is a separate, display-only list of reward promotions, with explicit
+`id`, `name`, nullable `brand`, `gameName`, `summary`, `startsAt`, `endsAt`, and `rewardNames` fields.
+`snapshot.rewardCampaignsAvailable` distinguishes a complete empty list from unavailable/partial data.
+The existing `ViewerDropsDashboard` request now sets `fetchRewardCampaigns=true` and reads
+`data.rewardCampaignsAvailableToUser`; the Inventory operation and its claim data remain unchanged.
+The mapper bounds listings to 500 campaigns, validates IDs/names/date windows, and deduplicates names
+from `rewardGroups[].rewards` and the legacy `rewards` array. Dates, rather than the reward `status`
+enum, determine which campaigns are open. Fields were checked against Twitch's public Drops client
+bundle on 2026-09-29; the existing persisted query hash is retained. No private redemption values,
+codes, instructions URLs, or raw upstream objects enter the state document.
+The guarded runtime inventory path replaces complete lists and merges partial results with prior
+details, marking them unavailable; failures retain prior details with the same stale indication.
+New sessions/reset clear reward data. Reward campaigns never enter `CampaignPrioritySelector`,
+watch heartbeats, claims, drop totals, or saved game priorities. The Campaigns view shows an independent
+Show/Hide panel, 24-row pages, and a fixed HTTPS Twitch campaigns link. Existing Drop filters apply
+only to the Drop list. Watch-time reward automation and authenticated reward verification are outside
+this visibility feature.
+
 `snapshot.selectionPreview` contains up to five campaign IDs, excluding the current campaign, in
 the order produced by `CampaignPrioritySelector.orderedCandidates`. The same selection stages power
 the miner and this redacted preview, including saved category ranks, exclusions, watch windows, and

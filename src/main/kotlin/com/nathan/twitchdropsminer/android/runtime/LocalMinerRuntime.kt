@@ -243,6 +243,8 @@ class LocalMinerRuntime(
                 currentTask = "Twitch login complete",
                 progressSummary = "Loading drops inventory.",
                 campaigns = emptyList(),
+                rewardCampaigns = emptyList(),
+                rewardCampaignsAvailable = false,
                 channels = emptyList(),
                 currentChannel = null,
                 activeCampaign = null,
@@ -2070,6 +2072,7 @@ class LocalMinerRuntime(
             }
             error.throwIfInvalidToken()
             val message = error.message ?: "Unable to load Twitch inventory."
+            _snapshot.update { it.copy(rewardCampaignsAvailable = false) }
             appendActivity(RuntimePhase.Error, "Inventory fetch failed", message)
             return CampaignLoadResult(
                 campaigns = previousCampaigns,
@@ -2084,6 +2087,15 @@ class LocalMinerRuntime(
             mergePartialInventory(previousCampaigns, loaded.campaigns)
         } else {
             loaded.campaigns
+        }
+        // This guarded inventory operation is the only source of display-only rewards.
+        // A partial/missing rewards field preserves prior details and marks them stale.
+        _snapshot.update {
+            it.copy(
+                rewardCampaigns = if (loaded.rewardCampaignsAvailable) loaded.rewardCampaigns else
+                    (loaded.rewardCampaigns + it.rewardCampaigns).distinctBy { campaign -> campaign.id }.take(500),
+                rewardCampaignsAvailable = loaded.rewardCampaignsAvailable,
+            )
         }
         val warning = loaded.diagnostics.takeIf(List<String>::isNotEmpty)?.let { diagnostics ->
             "Twitch inventory was only partially parsed; retained safe prior data. " +

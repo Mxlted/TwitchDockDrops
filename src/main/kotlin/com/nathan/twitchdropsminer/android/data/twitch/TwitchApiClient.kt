@@ -4,6 +4,7 @@ import com.nathan.twitchdropsminer.android.data.model.Campaign
 import com.nathan.twitchdropsminer.android.data.model.CampaignDrop
 import com.nathan.twitchdropsminer.android.data.model.Channel
 import com.nathan.twitchdropsminer.android.data.model.DropReward
+import com.nathan.twitchdropsminer.android.data.model.RewardCampaign
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
 import com.nathan.twitchdropsminer.android.data.model.inEarningOrder
 import java.io.IOException
@@ -132,6 +133,8 @@ data class CampaignInventory(
     val campaigns: List<Campaign>,
     val sourceRecordCount: Int = campaigns.size,
     val diagnostics: List<String> = emptyList(),
+    val rewardCampaigns: List<RewardCampaign> = emptyList(),
+    val rewardCampaignsAvailable: Boolean = false,
 ) {
     val isPartial: Boolean
         get() = diagnostics.isNotEmpty()
@@ -329,6 +332,7 @@ class TwitchApiClient(
             .toMap()
 
         val campaignsResponse = gql(session, TwitchOperation.Campaigns.request())
+        val rewardListing = mapRewardCampaigns(campaignsResponse.path("data")["rewardCampaignsAvailableToUser"])
         val campaignDiagnostics = campaignsResponse.graphQlDiagnostics("Campaign list")
         val availableSummaries = campaignsResponse.path("data", "currentUser")["dropCampaigns"].asArray()
             .mapNotNull { it.asObjectOrNull() }
@@ -371,6 +375,8 @@ class TwitchApiClient(
             campaigns = parsed,
             sourceRecordCount = merged.size,
             diagnostics = diagnostics,
+            rewardCampaigns = rewardListing.campaigns,
+            rewardCampaignsAvailable = rewardListing.available && campaignDiagnostics.isEmpty(),
         )
     }
 
@@ -1010,7 +1016,7 @@ enum class TwitchOperation(
     Campaigns(
         "ViewerDropsDashboard",
         "d9cae7761dafab85908c85e6683cb4201b449e66ac3bb5e894f15ff12aeafaa7",
-        buildJsonObject { put("fetchRewardCampaigns", false) },
+        buildJsonObject { put("fetchRewardCampaigns", true) },
     ),
     CampaignDetails(
         "DropCampaignDetails",

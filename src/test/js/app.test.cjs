@@ -204,9 +204,9 @@ test('campaigns page renders at most 24 rows and clamps stale page positions', (
   const c = client();
   const data = c.previewState();
   data.snapshot.campaigns = Array.from({length: 70}, (_, i) => ({...data.snapshot.campaigns[0], id: `c${i}`}));
-  assert.equal((c.renderCampaigns(data).match(/<article/g) || []).length, 24);
+  assert.equal((c.renderCampaigns(data).match(/<article class="campaign-row/g) || []).length, 24);
   c.ui.campaignPage = 2;
-  assert.equal((c.renderCampaigns(data).match(/<article/g) || []).length, 22);
+  assert.equal((c.renderCampaigns(data).match(/<article class="campaign-row/g) || []).length, 22);
   c.ui.campaignSearch = 'nothing matches';
   assert.match(c.renderCampaigns(data), /No campaigns match/);
   assert.equal(c.ui.campaignPage, 0);
@@ -221,4 +221,51 @@ test('queue uses only the server selection preview in its supplied order', () =>
   assert.doesNotMatch(html, /No Man|Palia/);
   data.snapshot.selectionPreview = [];
   assert.match(c.renderQueue(data.snapshot), /Nothing queued/);
+});
+
+test('open rewards are visible, escaped, collapsible and never shown as mining controls', () => {
+  const c = client();
+  const data = c.previewState();
+  data.snapshot.campaigns = [];
+  data.settings.selectedGamePriority = [];
+  data.snapshot.rewardCampaigns[0].name = '<img onerror=alert(1)>';
+  data.snapshot.rewardCampaigns[0].summary = '<script>unsafe</script>';
+  data.snapshot.rewardCampaigns[0].rewardNames = ['<badge>'];
+  const html = c.renderCampaigns(data);
+  assert.match(html, /Open Reward Campaigns · 1/);
+  assert.match(html, /&lt;img onerror=alert\(1\)&gt;/);
+  assert.match(html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
+  assert.match(html, /&lt;badge&gt;/);
+  assert.doesNotMatch(html, /data-action="toggle-priority"|data-action="toggle-exclusion"|<script>|% watched/);
+  assert.match(html, /href="https:\/\/www.twitch.tv\/drops\/campaigns" target="_blank" rel="noopener noreferrer"/);
+  c.ui.rewardsExpanded = false;
+  assert.doesNotMatch(c.renderCampaigns(data), /class="reward-row"/);
+  assert.match(c.renderCampaigns(data), /aria-expanded="false" aria-controls="rewardCampaignList"/);
+});
+
+test('reward dates, pagination and unavailable states remain separate from drop filters', () => {
+  const c = client();
+  const data = c.previewState();
+  const reward = data.snapshot.rewardCampaigns[0];
+  data.snapshot.rewardCampaigns = Array.from({length: 25}, (_, i) => ({...reward, id: `r${i}`}));
+  data.snapshot.rewardCampaigns.push({...reward, name: 'Expired reward', endsAt: '2000-01-01T00:00:00Z'});
+  data.snapshot.rewardCampaigns.push({...reward, name: 'Future reward', startsAt: '2100-01-01T00:00:00Z'});
+  c.ui.campaignFilter = 'excluded';
+  assert.equal((c.renderCampaigns(data).match(/class="reward-row"/g) || []).length, 24);
+  assert.doesNotMatch(c.renderCampaigns(data), /Expired reward|Future reward/);
+  c.ui.rewardPage = 1;
+  assert.equal((c.renderCampaigns(data).match(/class="reward-row"/g) || []).length, 1);
+  data.snapshot.rewardCampaignsAvailable = false;
+  assert.match(c.renderCampaigns(data), /unavailable or incomplete/);
+  data.snapshot.phase = 'loadinginventory';
+  assert.match(c.renderCampaigns(data), /Refreshing reward campaigns/);
+  data.snapshot.account.authenticated = false;
+  assert.match(c.renderCampaigns(data), /Connect Twitch to load/);
+  assert.doesNotMatch(c.renderCampaigns(data), /class="reward-row"/);
+  data.snapshot.account.authenticated = true;
+  data.snapshot.phase = 'idle';
+  data.snapshot.rewardCampaignsAvailable = true;
+  data.snapshot.rewardCampaigns = [];
+  assert.match(c.renderCampaigns(data), /No open reward campaigns/);
+  assert.equal(c.ui.rewardPage, 0);
 });

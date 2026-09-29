@@ -88,6 +88,9 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
 - **Campaigns** lets you search, filter, and sort active or upcoming campaigns, expand their drops and
   rewards, check end dates, open account-link pages, and exclude campaigns. Campaign names link to
   their Twitch campaign in a new tab, including in Now watching and Up next. Lists use 24-row pages.
+  **Open Reward Campaigns** is visible by default with a Show/Hide control, dates, descriptions, and
+  reward names. These separate Twitch promotions are view-only; check their requirements and complete
+  any earning or redemption steps on Twitch.
 - **Game & category priorities** saves favorites even without a current campaign. Add an exact Twitch
   category name, reorder with arrows or a rank number, and keep its place when a new campaign returns.
   **All Twitch categories** searches Twitch on demand, including games without Drops campaigns or

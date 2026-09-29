@@ -85,6 +85,19 @@ private fun RuntimeSnapshot.toJson(settings: AppSettings): JsonObject = buildJso
     putInstant("lastUpdate", lastUpdate)
     put("account", account.toJson())
     put("campaigns", campaigns.toJsonArray { it.toJson(settings) })
+    put("rewardCampaignsAvailable", rewardCampaignsAvailable)
+    put("rewardCampaigns", rewardCampaigns.toJsonArray { campaign ->
+        buildJsonObject {
+            put("id", campaign.id)
+            put("name", campaign.name)
+            putNullable("brand", campaign.brand)
+            putNullable("gameName", campaign.gameName)
+            putNullable("summary", campaign.summary)
+            putInstant("startsAt", campaign.startsAt)
+            putInstant("endsAt", campaign.endsAt)
+            put("rewardNames", campaign.rewardNames.toJsonArray { buildStringJson(it) })
+        }
+    })
     put("selectionPreview", CampaignPrioritySelector.orderedCandidates(settings, campaigns)
         .filter { it.id != activeCampaign?.id }
         .take(5)

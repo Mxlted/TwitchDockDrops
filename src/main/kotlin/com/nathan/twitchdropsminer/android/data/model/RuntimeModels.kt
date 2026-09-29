@@ -22,6 +22,8 @@ data class RuntimeSnapshot(
     val progressSummary: String = "No campaign data",
     val lastUpdate: Instant? = null,
     val campaigns: List<Campaign> = emptyList(),
+    val rewardCampaigns: List<RewardCampaign> = emptyList(),
+    val rewardCampaignsAvailable: Boolean = false,
     val channels: List<Channel> = emptyList(),
     val backendConsole: List<String> = emptyList(),
     val activity: List<RuntimeActivity> = emptyList(),

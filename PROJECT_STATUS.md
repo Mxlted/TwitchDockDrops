@@ -5,6 +5,8 @@ changes.
 
 ## Implementation checklist
 
+- [x] Open Reward Campaigns are visible in a separate Show/Hide panel with dates and reward names
+- [x] Reward listings refresh with inventory without entering the mining selector or claim runtime
 - [x] Campaign names link to their Twitch campaign from Campaigns, Now watching, and Up next
 - [x] Category search shares validated request rules across routing, transport, and serialization
 - [x] On-demand public Twitch category search finds games without campaigns or a saved login
@@ -65,6 +67,24 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Verification record - 2026-09-29 (reward campaign visibility)
+
+- Added a default-visible Open Reward Campaigns panel with Show/Hide, descriptions, end dates,
+  reward names, 24-row pagination, and a fixed Twitch campaigns link. Date windows determine open
+  promotions, including sitewide rewards without a game. Drop filters and mining controls stay separate.
+- Root Gradle 9.5.1/JDK 21 `test installDist`: 140 tests passed. Coverage includes reward request
+  variables, mapping, missing/partial/empty inventories, serialization, refresh preservation, and reset.
+- All 14 Node regressions and the JavaScript syntax check passed. Rendering tests cover escaping,
+  date filtering, pagination, Show/Hide, loading, unavailable, empty, and logged-out states.
+- Visual QA covered 1440px desktop, 390px mobile, dark/light themes, active preview and real logged-out
+  states, plus 390px fixtures for empty/loading/unavailable panels. No horizontal overflow or browser
+  warnings/errors were observed in the active mobile preview. Show/Hide worked in the browser.
+- Isolated packaged host: `/api/health` returned `ok`; inventory refresh returned HTTP 202 and the
+  logged-out state exposed an empty unavailable reward list. No real Twitch login or reward earning
+  was exercised. Public Twitch client assets were inspected without account credentials.
+- Android remained clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. No Docker, dependency,
+  deployment, or persistence changes; no image rebuild was needed.
 
 ## Verification record - 2026-09-22 (campaign links)
 
@@ -446,6 +466,11 @@ root build.
 
 ## Known external risks
 
+- Reward-campaign visibility has fixture coverage and public Twitch client schema inspection, but
+  has not been verified with an authenticated real-account reward listing. Twitch's private persisted
+  query can change. These campaigns are view-only: reward progress, automatic earning/claiming, and
+  redemption are not implemented. Summaries are not a complete eligibility or requirement breakdown;
+  the panel links to Twitch for authoritative details.
 - Twitch device login, private GraphQL hashes, watch telemetry, or claim response formats may change.
 - Live behavior cannot be fully exercised without a real eligible Twitch account and active Drops
   campaign.

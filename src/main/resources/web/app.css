@@ -2228,3 +2228,8 @@ input[type="range"]::-moz-range-thumb {
     transition-duration: 0.01ms !important;
   }
 }
+.reward-row { padding: 18px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.reward-row h3 { margin: 10px 0 4px; }
+.reward-row p { margin: 6px 0; }
+.reward-context { color: var(--muted); }
+.reward-list { margin-bottom: 16px; }
