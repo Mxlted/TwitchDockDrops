@@ -6,7 +6,6 @@ out/
 *.iml
 .env
 .env.*
-!.env.example
 /data/
 *.log
 *.key
