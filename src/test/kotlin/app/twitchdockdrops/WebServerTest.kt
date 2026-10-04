@@ -46,6 +46,35 @@ import okhttp3.Response
 import org.junit.jupiter.api.io.TempDir
 
 class WebServerTest {
+    @Test fun `dashboard login routes enforce origin method body and input boundaries even when disabled`() {
+        execute("/api/auth/options").use { assertEquals("{\"dashboard\":false}", it.body!!.string()) }
+        execute("/api/auth/dashboard/status").use {
+            assertEquals(200, it.code); assertEquals("no-store", it.header("Cache-Control"))
+            assertTrue(it.body!!.string().contains("unavailable"))
+        }
+        for (action in listOf("start", "cancel", "finish", "input")) {
+            val path = "/api/auth/dashboard/$action"
+            execute(path).use { assertError(it, 405) }
+            execute(path, "POST", "{}", origin = "https://evil.example").use { assertError(it, 403) }
+            execute(path, "POST", "{}", contentType = "text/plain").use { assertError(it, 415) }
+            execute(path, "POST", "{\"padding\":\"${"x".repeat(66000)}\"}").use { assertError(it, 413) }
+        }
+        execute("/api/auth/dashboard/start", "POST", "{}").use { assertError(it, 503) }
+        for (body in listOf(
+            """{"id":"view","kind":"key","key":"F12","shift":false}""",
+            """{"id":"view","kind":"click","x":1100,"y":0}""",
+            """{"id":"view","kind":"click","x":1.5,"y":0}""",
+            """{"id":"view","kind":"text","text":"secret\n"}""",
+            """{"id":"view","kind":"text","text":42}""",
+            """{"id":"view","kind":"key","key":"Tab","shift":"true"}""",
+        )) execute("/api/auth/dashboard/input", "POST", body).use { assertError(it, 400) }
+        // Whitespace is meaningful inside credentials and must never be trimmed.
+        execute("/api/auth/dashboard/input", "POST", """{"id":"view","kind":"text","text":" "}""").use { assertError(it, 503) }
+        for (path in listOf("/browser-login.html", "/browser-login.js", "/browser-login.css")) {
+            execute(path).use { assertEquals(200, it.code) }
+        }
+    }
+
     @Test fun `helper routes require trusted origin bounded strict JSON and one pairing owner`() = runBlocking {
         for (path in listOf("/api/auth/browser/start","/api/auth/browser/claim","/api/auth/browser/submit","/api/auth/browser/status")) {
             execute(path,"POST","{}",origin="https://evil.example").use { assertError(it,403) }

@@ -15,7 +15,7 @@ class BrowserSessionContext private constructor(
     val accessToken: String get() = headers.getValue("authorization").removePrefix("OAuth ")
     val deviceId: String get() = headers["x-device-id"] ?: headers.getValue("device-id")
     fun requireFresh(now: Instant = Instant.now()) {
-        require(expiresAt.isAfter(now.plusSeconds(15))) { "Browser session proof expired; keep the login helper running or reconnect Twitch." }
+        require(expiresAt.isAfter(now.plusSeconds(15))) { "Browser session proof expired; keep the browser service or desktop helper running, or reconnect Twitch." }
     }
     fun toJson(): JsonObject = buildJsonObject {
         put("version", 1)

@@ -3,6 +3,9 @@
 The request-context capture and validation design in `login-helper.mjs` and
 `BrowserSessionContext.kt` is adapted from rangermix/TwitchDropsMiner at commit
 `1182d0172458`, particularly `src/auth/session_helper.py` and `src/auth/session_bundle.py`.
+The optional browser companion also follows the separation of interactive login and headless renewal
+described in `src/auth/container_login.py` and `src/auth/server_renewal.py` at that commit. Its Node/JVM
+transport and screenshot viewer are independent implementations, not upstream protocol compatibility.
 
 MIT License
 

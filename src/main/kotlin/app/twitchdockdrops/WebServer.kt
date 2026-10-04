@@ -54,6 +54,7 @@ class WebServer(
     ),
     private val maxSseClients: Int = DefaultMaxSseClients,
     private val categorySearch: CategorySearch? = null,
+    private val dashboardLogin: DashboardLogin? = null,
 ) : AutoCloseable {
     private val stateJson = StateJson()
     private val requestTrust = TrustedRequestPolicy(trustedHosts, trustedOrigins, allowLanAccess)
@@ -89,11 +90,15 @@ class WebServer(
                     exchange.requireMethod("GET")
                     streamEvents(exchange)
                 }
+                "/api/auth/options" -> exchange.requireGetAndRespond("{\"dashboard\":${dashboardLogin != null}}")
+                "/api/auth/dashboard/status", "/api/auth/dashboard/frame", "/api/auth/dashboard/start",
+                "/api/auth/dashboard/finish", "/api/auth/dashboard/input", "/api/auth/dashboard/cancel" -> handleDashboardLogin(exchange)
                 "/api/auth/browser/claim", "/api/auth/browser/submit", "/api/auth/browser/status" ->
                     handleBrowserHelper(exchange)
 
                 in MutationRoutes -> handleApiMutation(exchange)
-                "/", "/index.html", "/app.css", "/app.js", "/theme-init.js", "/favicon.svg", "/login-helper.mjs" ->
+                "/", "/index.html", "/app.css", "/app.js", "/theme-init.js", "/favicon.svg", "/login-helper.mjs",
+                "/browser-login.html", "/browser-login.js", "/browser-login.css" ->
                     serveStatic(exchange)
 
                 else -> throw RequestException(404, "Route not found.")
@@ -105,6 +110,63 @@ class WebServer(
         } catch (_: Throwable) {
             System.err.println("HTTP request failed without exposing internal details.")
             exchange.respondError(500, "The request could not be completed.")
+        }
+    }
+
+    private fun handleDashboardLogin(exchange: HttpExchange) {
+        val action = exchange.requestURI.path.substringAfterLast('/')
+        exchange.responseHeaders.set("Cache-Control", "no-store")
+        if (action in setOf("status", "frame")) exchange.requireMethod("GET") else {
+            exchange.requireMethod("POST")
+            verifyMutationRequest(exchange)
+        }
+        val body = if (action in setOf("status", "frame")) null else exchange.readJsonBody()
+        if (action == "status") {
+            exchange.respondJson(200, dashboardLogin?.view()?.toString() ?: "{\"id\":\"\",\"state\":\"unavailable\",\"error\":\"Enable the optional Docker browser service to use dashboard login.\"}")
+            return
+        }
+        if (action == "start" || action == "cancel") body!!.noFields()
+        if (action == "finish") { body!!.onlyFields("id"); body.requiredString("id", 36) }
+        if (action == "input") validateBrowserInput(body!!)
+        val login = dashboardLogin ?: throw RequestException(503, "Dashboard login requires the optional Docker browser service.")
+        try {
+            when (action) {
+                "frame" -> {
+                    val query = exchange.requestURI.rawQuery.orEmpty()
+                    if (!query.matches(Regex("id=[0-9a-f-]{36}"))) throw RequestException(400, "Invalid login view.")
+                    exchange.respondJson(200, buildJsonObject { put("image", login.frame(query.removePrefix("id="))) }.toString())
+                    return
+                }
+                "start" -> runBlocking { mutationMutex.withLock { login.start(runtime.startManagedBrowserAuthentication()) } }
+                "cancel" -> runBlocking { mutationMutex.withLock { login.cancel(); runtime.startBrowserAuthentication() } }
+                else -> login.command(action, body!!)
+            }
+            exchange.respondJson(202, "{\"ok\":true}")
+        } catch (_: IllegalArgumentException) {
+            throw RequestException(409, "Login view expired or is not ready. Open it again.")
+        } catch (_: IllegalStateException) {
+            throw RequestException(503, "Browser service is unavailable. Retry or use the desktop helper.")
+        } catch (_: IOException) {
+            throw RequestException(503, "Browser service is unavailable. Retry or use the desktop helper.")
+        }
+    }
+
+    private fun validateBrowserInput(body: JsonObject) {
+        body.requiredString("id", 36)
+        when (body.requiredString("kind", 10)) {
+            "click" -> { body.onlyFields("id", "kind", "x", "y"); body.requiredLong("x", 0L..1099L); body.requiredLong("y", 0L..759L) }
+            "wheel" -> { body.onlyFields("id", "kind", "delta"); body.requiredLong("delta", -760L..760L) }
+            "text" -> {
+                body.onlyFields("id", "kind", "text")
+                val value = body["text"] as? JsonPrimitive
+                if (value == null || !value.isString || value.content.length !in 1..256 || value.content.any { it.code < 32 || it.code == 127 }) throw RequestException(400, "Invalid browser input.")
+            }
+            "key" -> {
+                body.onlyFields("id", "kind", "key", "shift")
+                if (body.requiredString("key", 12) !in setOf("Tab", "Enter", "Backspace", "Delete", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End")) throw RequestException(400, "Invalid browser key.")
+                if (body["shift"] !is JsonPrimitive || body["shift"]!!.jsonPrimitive.isString || body["shift"]!!.jsonPrimitive.booleanOrNull == null) throw RequestException(400, "Invalid browser modifier.")
+            }
+            else -> throw RequestException(400, "Invalid browser input.")
         }
     }
 
@@ -210,13 +272,13 @@ class WebServer(
             throw RequestException(405, "Method not allowed.")
         }
         return when (path) {
-            "/api/auth/start" -> body.noFields().let { runtime.startAuthentication(); true }
-            "/api/auth/browser/start" -> body.noFields().let { runtime.startBrowserAuthentication(); true }
-            "/api/auth/replace" -> body.noFields().let { runtime.replaceAuthentication(); true }
+            "/api/auth/start" -> body.noFields().let { dashboardLogin?.cancel(); runtime.startAuthentication(); true }
+            "/api/auth/browser/start" -> body.noFields().let { dashboardLogin?.cancel(); runtime.startBrowserAuthentication(); true }
+            "/api/auth/replace" -> body.noFields().let { dashboardLogin?.cancel(); runtime.replaceAuthentication(); true }
             "/api/miner/start" -> body.noFields().let { runtime.startMining(); true }
             "/api/miner/stop" -> body.noFields().let { runtime.stopMining(); true }
             "/api/inventory/refresh" -> body.noFields().let { runtime.refreshInventory(); true }
-            "/api/session/reset" -> body.noFields().let { runtime.resetSessionAndJoin(); false }
+            "/api/session/reset" -> body.noFields().let { dashboardLogin?.cancel(); runtime.resetSessionAndJoin(); false }
             "/api/logs/clear" -> body.noFields().let { logRepository.clear(); false }
             "/api/channels/find" -> body.noFields().let { runtime.findNewChannel(); true }
             "/api/channels/select" -> {
@@ -386,6 +448,9 @@ class WebServer(
             "/theme-init.js" -> "/web/theme-init.js"
             "/favicon.svg" -> "/web/favicon.svg"
             "/login-helper.mjs" -> "/web/login-helper.mjs"
+            "/browser-login.html" -> "/web/browser-login.html"
+            "/browser-login.js" -> "/web/browser-login.js"
+            "/browser-login.css" -> "/web/browser-login.css"
             else -> throw RequestException(404, "Static resource not found.")
         }
         val bytes = javaClass.getResourceAsStream(resource)?.use { it.readBytes() }

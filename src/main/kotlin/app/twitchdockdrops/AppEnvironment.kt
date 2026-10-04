@@ -11,6 +11,7 @@ data class AppEnvironment(
     val trustedHosts: Set<String>,
     val trustedOrigins: Set<String>,
     val sessionKey: String?,
+    val dashboardLogin: Boolean = false,
 ) {
     companion object {
         fun fromEnvironment(environment: Map<String, String> = System.getenv()): AppEnvironment {
@@ -55,6 +56,7 @@ data class AppEnvironment(
                 sessionKey = environment["TWITCH_DROPS_SESSION_KEY"]
                     ?.trim()
                     ?.takeIf(String::isNotEmpty),
+                dashboardLogin = environment.boolean("TWITCH_DROPS_DASHBOARD_LOGIN"),
             )
         }
     }

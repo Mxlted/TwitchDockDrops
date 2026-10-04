@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Twitch sign-in · DockDrops</title><link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <script src="/theme-init.js"></script><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/browser-login.css">
+  <script src="/browser-login.js" defer></script>
+</head>
+<body class="login-page"><main class="login-main">
+  <a class="button button-quiet" href="/">← Dashboard</a>
+  <section class="soft-card section-card login-heading">
+    <p class="hero-kicker">Dashboard login</p><h1>Connect your Twitch account</h1>
+    <p>This is the browser running in your Docker service. Sign in on Twitch below and finish any verification, then select <strong>Finish sign-in</strong>.</p>
+    <p id="status" role="status" aria-live="polite">Checking browser service…</p>
+    <div class="hero-actions"><button id="start" class="button button-primary" type="button" disabled>Start sign-in</button>
+      <button id="finish" class="button button-primary" type="button" hidden>Finish sign-in</button>
+      <button id="cancel" class="button button-quiet" type="button" hidden>Cancel login</button></div>
+    <p id="error" role="alert" hidden></p>
+  </section>
+  <section id="viewerPanel" class="soft-card section-card" hidden aria-label="Twitch browser">
+    <div class="login-toolbar"><p>Click a Twitch field, then type. Tab moves between fields; Escape releases keyboard focus.</p>
+      <label>Zoom <select id="zoom"><option value="1">100%</option><option value=".75">75%</option><option value=".5">50%</option></select></label></div>
+    <div id="viewport" class="login-viewport"><img id="screen" width="1100" height="760" alt="Interactive Twitch sign-in browser" tabindex="0" draggable="false"></div>
+    <label class="login-typing">Mobile keyboard / paste into selected Twitch field
+      <input id="typing" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type into the selected Twitch field"></label>
+    <div class="hero-actions"><button class="button button-quiet" data-key="Tab" type="button">Next field</button><button class="button button-quiet" data-key="Backspace" type="button">Backspace</button><button class="button button-quiet" data-key="Enter" type="button">Enter</button><button class="button button-quiet" data-scroll="-500" type="button">Scroll up</button><button class="button button-quiet" data-scroll="500" type="button">Scroll down</button></div>
+  </section>
+  <p class="login-note">The browser service renews the session automatically after verification. You can close this page once connected. Reconnect after restarting the server or browser service. A desktop helper is also available from <a href="/">Connect Twitch</a>.</p>
+</main></body></html>

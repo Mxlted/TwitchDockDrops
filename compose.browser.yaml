@@ -1,0 +1,29 @@
+# Opt-in dashboard login: docker compose -f compose.yaml -f compose.browser.yaml up --build -d
+services:
+  app:
+    environment:
+      TWITCH_DROPS_DASHBOARD_LOGIN: "true"
+  browser:
+    build:
+      context: .
+      dockerfile: browser/Dockerfile
+    image: dockdrops-browser:local
+    init: true
+    restart: unless-stopped
+    network_mode: service:app
+    depends_on:
+      app:
+        condition: service_healthy
+        restart: true
+    environment:
+      TZ: "${TZ:-America/New_York}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    shm_size: 256m
+    mem_limit: 1g
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

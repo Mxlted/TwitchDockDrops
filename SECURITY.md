@@ -30,8 +30,10 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
 
 ## Twitch credentials
 
-- Fresh login uses an isolated desktop browser helper. Passwords are entered only on Twitch in that
-  browser, never in the dashboard or JVM. Existing device-authorized sessions remain supported.
+- Fresh login uses either the optional Docker browser or an isolated desktop helper. With the desktop
+  helper, passwords are entered directly on Twitch and never pass through the JVM. With dashboard
+  login, input and browser screenshots pass through the same-origin JVM relay to the Docker browser;
+  they are not logged or persisted. Existing device-authorized sessions remain supported.
 - API responses never include the OAuth access token or encryption key.
 - Session data is encrypted with AES-256-GCM before it is written to `/data/session.enc`.
 - Replacement login keeps the old encrypted credential until the new session is validated and
@@ -48,7 +50,7 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
   beacon or HTML/JavaScript watch-configuration rejection cannot; those results invalidate or retry
   watch configuration while preserving the stored OAuth session.
 - Device OAuth errors and JSON parsing failures use fixed diagnostics, never raw upstream text.
-  Only the helper downloaded from this instance uses its pairing protocol; upstream helper credentials
+  Only this repository's helper uses its pairing protocol; upstream helper credentials
   are incompatible. Never paste raw cookies, tokens, or captured headers into the dashboard.
 - Browser context is strictly bounded and encrypted with the session; state, events, logs, and errors
   exclude it. The server checks OAuth identity and both private Drops queries before accepting it.
@@ -114,6 +116,32 @@ to other machines.
 The service runs as a dedicated non-root user, drops all Linux capabilities, enables
 `no-new-privileges`, uses a read-only root filesystem, and keeps only `/data` and an in-memory `/tmp`
 writable.
+
+The optional `compose.browser.yaml` service has its own non-root UID, read-only root, dropped
+capabilities, and `no-new-privileges`. It receives no miner environment secrets, data volume, Docker
+socket, or host directories. It shares the app's network namespace so its control server binds only
+to `127.0.0.1:8091`, with no new published ports. The browser control protocol and CDP remain internal.
+The companion permits only an exact loopback Host, an internal request header, no Origin header, and
+no CORS, including on read routes. A page cannot issue these requests without a rejected preflight.
+Other processes in that namespace are trusted; these controls are not authentication against native
+code already running there.
+
+Chromium alone uses `--no-sandbox` inside this isolated companion because the retained
+`no-new-privileges`/capability restrictions prevent its setuid sandbox from starting on common Docker
+hosts. This is an explicit browser-only tradeoff: container isolation replaces the inner Chromium
+sandbox, while the JVM hardening is unchanged. A compromised browser still has that container's
+network reach and its own temporary login material; it does not gain filesystem access to the miner's
+encrypted session or key. Keep the optional image current and use the desktop fallback if this tradeoff
+does not fit the deployment. Do not grant privileged mode or mount the miner volume to fix startup.
+
+The temporary profile is on a 512 MiB tmpfs and is removed on normal cancellation/exit; container removal
+also discards it. Memory, shared memory, and process counts are bounded. Downloads are denied, arbitrary
+CDP/navigation commands are not relayed, and credentials are not included in browser process arguments.
+The public viewer returns only fixed status fields and bounded JPEG frames with `no-store`; its
+mutation routes retain normal Host/Origin, JSON, and size checks. Passwords entered into this viewer
+traverse the dashboard connection, so trusted-LAN HTTP has the same local-network exposure as other
+unencrypted traffic; use the documented authenticated HTTPS proxy on shared networks. Do not enable
+request-body logging at a proxy. The viewer has access to the same Twitch account as the dashboard.
 
 ## Reporting and logs
 

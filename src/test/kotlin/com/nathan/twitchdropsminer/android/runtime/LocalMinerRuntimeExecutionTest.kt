@@ -48,6 +48,68 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test fun `dashboard bridge validates renewals redacts view and stops a revoked lease`(): Unit = runBlocking {
+        val store = sessionStore()
+        val validations = AtomicInteger()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateBrowserContext(context: BrowserSessionContext): StoredTwitchSession {
+                validations.incrementAndGet()
+                return storedSession().copy(browserContext = context)
+            }
+            override suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign> = emptyList()
+        }
+        val runtime = runtime(store, api)
+        val phase = AtomicReference("capturing")
+        val sequence = AtomicInteger(1)
+        val withContext = AtomicBoolean(true)
+        val cancelled = AtomicBoolean()
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): okhttp3.mockwebserver.MockResponse {
+                assertEquals("1", request.getHeader("X-DockDrops-Internal"))
+                val body = when (request.path) {
+                    "/status" -> """{"state":"${phase.get()}","sequence":${sequence.get()}${if (withContext.get()) ",\"context\":${browserContext().toJson()}" else ""}}"""
+                    "/accepted" -> { assertTrue(withContext.get()); phase.set("ready"); withContext.set(false); "{}" }
+                    "/cancel" -> { cancelled.set(true); "{}" }
+                    else -> "{}"
+                }
+                return okhttp3.mockwebserver.MockResponse().setBody(body)
+            }
+        }
+        server.start()
+        val bridge = app.twitchdockdrops.DashboardLogin(runtime, server.port)
+        try {
+            val ticket = runtime.startManagedBrowserAuthentication()
+            bridge.start(ticket)
+            withTimeout(5000) { while (!bridge.view().toString().contains("ready")) delay(20) }
+            assertEquals(1, validations.get())
+            assertFalse(bridge.view().toString().contains("test-token"))
+            assertFalse(bridge.view().toString().contains(ticket))
+            // A renewal capture starts without a new context. Do not acknowledge the old sequence.
+            phase.set("capturing")
+            delay(1000)
+            sequence.incrementAndGet(); withContext.set(true)
+            withTimeout(8000) { while (validations.get() < 2 || phase.get() != "ready") delay(20) }
+            assertEquals(2, validations.get())
+            runtime.resetSessionAndJoin()
+            withTimeout(8000) { while (!cancelled.get()) delay(20) }
+            assertNull(store.twitchSession())
+        } finally { bridge.close(); server.close() }
+    }
+
+    @Test fun `managed login atomically owns its ticket and reset or replacement revokes it`(): Unit = runBlocking {
+        val runtime = runtime(sessionStore(), AuthenticationTwitchApi())
+        val first = runtime.startManagedBrowserAuthentication()
+        assertEquals("connected", runtime.browserLoginStatus(first))
+        assertEquals("dashboard", runtime.snapshot.value.account.method)
+        assertNull(runtime.snapshot.value.account.oauthCode)
+        val second = runtime.startManagedBrowserAuthentication()
+        kotlin.test.assertFailsWith<IllegalArgumentException> { runtime.browserLoginStatus(first) }
+        assertEquals("connected", runtime.browserLoginStatus(second))
+        runtime.resetSessionAndJoin()
+        kotlin.test.assertFailsWith<IllegalArgumentException> { runtime.browserLoginStatus(second) }
+    }
+
     private fun browserContext(): BrowserSessionContext = BrowserSessionContext.parse(
         kotlinx.serialization.json.Json.parseToJsonElement("""{
           "version":1,"captured_at":${Instant.now().epochSecond},"expires_at":${Instant.now().plusSeconds(3600).epochSecond},

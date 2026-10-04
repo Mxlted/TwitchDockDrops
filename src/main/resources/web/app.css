@@ -72,6 +72,8 @@
   text-rendering: optimizeLegibility;
 }
 
+.hero-copy code { overflow-wrap: anywhere; }
+
 :root[data-theme="light"] {
   color-scheme: light;
 

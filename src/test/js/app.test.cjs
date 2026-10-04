@@ -14,7 +14,7 @@ function client(fetch = () => { throw new Error('Unexpected request'); }) {
     window: { location: { search: '?preview=active' }, addEventListener() {}, setTimeout, clearTimeout },
   });
   const source = fs.readFileSync(path.join(__dirname, '../../main/resources/web/app.js'), 'utf8');
-  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch, renderBrowserLoginHero, renderLoginPreparingHero };', context);
+  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch, renderBrowserLoginHero, renderLoginPreparingHero, renderLoginOptions };', context);
   return context.client;
 }
 
@@ -26,6 +26,16 @@ test('browser pairing explains helper renewal and safely renders the code', () =
   assert.match(html,/&lt;code&gt;&amp;&quot;/);
   assert.doesNotMatch(html,/<code>&/);
   assert.match(c.renderLoginPreparingHero({method:'browser'}),/Verifying your/);
+});
+
+test('login choices explain optional Docker setup and retain desktop fallback', () => {
+  const c = client();
+  assert.match(c.renderLoginOptions(), /compose.browser.yaml/);
+  assert.match(c.renderLoginOptions(), /Use desktop helper/);
+  c.ui.dashboardLoginAvailable = true;
+  assert.match(c.renderLoginOptions(), /href="\/browser-login.html"/);
+  assert.match(c.renderLoginOptions(), /No desktop download/);
+  assert.doesNotMatch(c.renderLoginOptions(), /docker compose/);
 });
 
 test('campaign names link to their own Twitch campaign across list, watch card and queue', () => {

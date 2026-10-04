@@ -152,6 +152,9 @@ class LocalMinerRuntime(
                     RuntimeCommand.StartAuthentication -> handleStartAuthentication(replace = false)
                     RuntimeCommand.ReplaceAuthentication -> handleStartAuthentication(replace = true)
                     RuntimeCommand.StartBrowserAuthentication -> handleStartBrowserAuthentication()
+                    is RuntimeCommand.StartManagedBrowserAuthentication -> {
+                        command.completed.complete(handleStartBrowserAuthentication(managed = true)!!)
+                    }
                     is RuntimeCommand.SubmitBrowserSession -> handleSubmitBrowserSession(command)
                     is RuntimeCommand.AuthenticationSucceeded -> handleAuthenticationSucceeded(command)
                     is RuntimeCommand.StartMining -> handleStartMining(command)
@@ -519,6 +522,11 @@ class LocalMinerRuntime(
     }
 
     fun startBrowserAuthentication() { enqueueCoalesced(RuntimeCommand.StartBrowserAuthentication) }
+    suspend fun startManagedBrowserAuthentication(): String {
+        val completed = CompletableDeferred<String>()
+        runtimeCommands.send(RuntimeCommand.StartManagedBrowserAuthentication(completed))
+        return completed.await()
+    }
     fun claimBrowserLogin(code: String): String = browserAdmission.claim(code)
     fun browserLoginStatus(ticket: String): String = browserAdmission.status(ticket)
     suspend fun submitBrowserSession(ticket: String, context: BrowserSessionContext) {
@@ -537,15 +545,17 @@ class LocalMinerRuntime(
         waitingForNetwork = false
     }
 
-    private suspend fun handleStartBrowserAuthentication() {
+    private suspend fun handleStartBrowserAuthentication(managed: Boolean = false): String? {
         cancelForBrowserAuthentication()
         val (code, expiry) = browserAdmission.open()
-        updateSnapshot(RuntimePhase.Authenticating, "Connect the browser login helper") {
-            it.copy(account = LoginSession(LoginState.LoginRequired, "Waiting for browser helper",
-                oauthCode = code, expiresAt = expiry, method = "browser"),
+        val ticket = if (managed) browserAdmission.claim(code) else null
+        updateSnapshot(RuntimePhase.Authenticating, if (managed) "Open dashboard login" else "Connect the browser login helper") {
+            it.copy(account = LoginSession(LoginState.LoginRequired, if (managed) "Waiting for dashboard login" else "Waiting for browser helper",
+                oauthCode = if (managed) null else code, expiresAt = expiry, method = if (managed) "dashboard" else "browser"),
                 miningActive = false, currentChannel = null, activeCampaign = null, activeDrop = null,
                 channelSearchInProgress = false, error = null)
         }
+        return ticket
     }
 
     private suspend fun handleSubmitBrowserSession(command: RuntimeCommand.SubmitBrowserSession) {
@@ -3548,6 +3558,7 @@ private fun Duration.runtimeLabel(): String {
 
 private sealed interface RuntimeCommand {
     data object StartBrowserAuthentication : RuntimeCommand
+    data class StartManagedBrowserAuthentication(val completed: CompletableDeferred<String>) : RuntimeCommand
     data class SubmitBrowserSession(val ticket: String, val context: BrowserSessionContext,
         val completed: CompletableDeferred<Unit>) : RuntimeCommand
     data object StartAuthentication : RuntimeCommand
@@ -3578,6 +3589,7 @@ private sealed interface RuntimeCommand {
 private val RuntimeCommand.label: String
     get() = when (this) {
         RuntimeCommand.StartBrowserAuthentication -> "start browser login"
+        is RuntimeCommand.StartManagedBrowserAuthentication -> "start dashboard login"
         is RuntimeCommand.SubmitBrowserSession -> "verify browser login"
         RuntimeCommand.StartAuthentication -> "start authentication"
         RuntimeCommand.ReplaceAuthentication -> "replace authentication"
@@ -3592,6 +3604,7 @@ private val RuntimeCommand.label: String
 private val RuntimeCommand.coalescingKey: String?
     get() = when (this) {
         RuntimeCommand.StartBrowserAuthentication -> "start-browser-login"
+        is RuntimeCommand.StartManagedBrowserAuthentication -> null
         is RuntimeCommand.SubmitBrowserSession -> null
         RuntimeCommand.StartAuthentication -> "start-authentication"
         RuntimeCommand.ReplaceAuthentication -> "replace-authentication"
@@ -3605,6 +3618,7 @@ private val RuntimeCommand.coalescingKey: String?
 
 private fun RuntimeCommand.completeExceptionally(error: Throwable) {
     when (this) {
+        is RuntimeCommand.StartManagedBrowserAuthentication -> completed.completeExceptionally(error)
         is RuntimeCommand.SubmitBrowserSession -> completed.completeExceptionally(error)
         is RuntimeCommand.StopMining -> completed?.completeExceptionally(error)
         is RuntimeCommand.ResetSession -> completed?.completeExceptionally(error)

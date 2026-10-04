@@ -30,6 +30,8 @@ const ui = {
   theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
   channelPickerOpen: false,
   channelPickerLoading: false,
+  loginOptionsOpen: false,
+  dashboardLoginAvailable: false,
   expandedCampaigns: new Set(),
 };
 
@@ -93,6 +95,7 @@ async function boot() {
     return;
   }
 
+  try { ui.dashboardLoginAvailable = (await (await fetch('/api/auth/options')).json()).dashboard === true; } catch {}
   await loadState();
   connectEvents();
 }
@@ -247,6 +250,7 @@ function renderConnection() {
 /* Overview ---------------------------------------------------------------- */
 
 function renderOverview(data) {
+  if (ui.loginOptionsOpen) return renderLoginOptions();
   const snapshot = data.snapshot;
   const account = snapshot.account;
   const authenticated = account.authenticated;
@@ -321,7 +325,7 @@ function renderWelcomeHero() {
       <div class="hero-copy">
         <p class="hero-kicker">Container ready</p>
         <h2>Connect Twitch to <em>start farming.</em></h2>
-        <p>Sign in with the desktop browser helper. Your session stays encrypted in this container; the helper keeps it renewed while the miner farms.</p>
+        <p>Choose dashboard login or the desktop browser helper. Your verified Twitch session stays encrypted in this container.</p>
         <div class="hero-actions">
           <button class="button button-primary" data-action="connect" type="button">${linkIcon()} Connect Twitch</button>
           <a class="button button-quiet" href="/?preview=active">Explore with preview data</a>
@@ -330,12 +334,26 @@ function renderWelcomeHero() {
       <aside class="hero-aside" aria-label="How it works">
         <p class="hero-aside-title">How it works</p>
         <ol class="step-list">
-          ${renderStep(1, "Connect Twitch", "Pair the helper and sign in with Chrome, Edge, or Chromium.")}
+          ${renderStep(1, "Connect Twitch", "Choose a login method and sign in on Twitch.")}
           ${renderStep(2, "Choose priorities", "Pin the games you want first, or let Auto Mode find useful work.")}
-          ${renderStep(3, "Let it run", "Keep the helper open for session renewal. Mining and claims run on the server.")}
+          ${renderStep(3, "Let it run", "The browser service or desktop helper renews your session. Mining runs on the server.")}
         </ol>
       </aside>
     </section>`;
+}
+
+function renderLoginOptions() {
+  return `<section class="hero"><div class="hero-copy">
+    <p class="hero-kicker">Twitch sign-in</p><h2>Choose how to <em>connect.</em></h2>
+    <h3>In this dashboard</h3>
+    <p>Sign in using the Docker browser. No desktop download or Node.js installation. Keep the browser service running for automatic renewal.</p>
+    ${ui.dashboardLoginAvailable ? '<a class="button button-primary" href="/browser-login.html">Open dashboard login</a>' : '<p class="field-hint">Enable the optional browser service on the Docker host:</p><p><code>docker compose -f compose.yaml -f compose.browser.yaml up --build -d</code></p>'}
+    <h3>On your desktop</h3>
+    <p>Use Chrome, Edge, or Chromium in a separate temporary profile. Requires Node.js 22.4 or newer and the helper running on your computer.</p>
+    <div class="hero-actions"><button class="button button-quiet" data-action="connect-helper" type="button">Use desktop helper</button><button class="button button-quiet" data-action="close-login-options" type="button">Back</button></div>
+  </div><aside class="hero-aside"><p class="hero-aside-title">Your session</p>
+    <ol class="step-list">${renderStep(1,'Sign in on Twitch','Complete password, email, or two-factor verification in the selected browser.')}${renderStep(2,'Verify Drops access','The miner checks your account and Drops access before saving the session.')}${renderStep(3,'Keep renewal available','Reconnect after restarting the server or the login browser service.')}</ol>
+  </aside></section>`;
 }
 
 function renderStep(index, title, detail) {
@@ -375,7 +393,8 @@ function renderBrowserLoginHero(account) {
       <p>Keep the helper running for renewal. Your everyday browser profile is untouched.</p>
       <div class="hero-actions">
         <a class="button button-primary" href="/login-helper.mjs" download="login-helper.mjs">Download login helper</a>
-        <button class="button button-quiet" data-action="connect" type="button">New pairing code</button>
+        <button class="button button-quiet" data-action="connect-helper" type="button">New pairing code</button>
+        <button class="button button-quiet" data-action="connect" type="button">Other login options</button>
       </div>
     </div>
     <aside class="hero-aside" aria-label="Helper pairing code">
@@ -389,9 +408,14 @@ function renderBrowserLoginHero(account) {
 }
 
 function renderLoginPreparingHero(account = {}) {
+  if (account.method === "dashboard") return `<section class="hero"><div class="hero-copy">
+    <p class="hero-kicker">Dashboard sign-in</p><h2>Continue in the <em>login browser.</em></h2>
+    <p>Complete Twitch verification in the Docker browser, then select Finish sign-in. No desktop helper is needed.</p>
+    <div class="hero-actions"><a class="button button-primary" href="/browser-login.html">Open login browser</a><button class="button button-quiet" data-action="connect" type="button">Other login options</button></div>
+    </div><aside class="hero-aside"><p>The login page shows browser startup, verification, and any errors. Your session is saved only after the miner verifies Drops access.</p></aside></section>`;
   if (account.method === "browser") return `<section class="hero" aria-busy="true">
     <div class="hero-copy"><p class="hero-kicker">Browser sign-in</p><h2>Verifying your <em>Twitch session.</em></h2>
-      <p>The server is checking your account and Drops access. Keep the helper open.</p>
+      <p>The server is checking your account and Drops access. Keep your selected login browser service or helper running.</p>
       <div class="hero-actions"><button class="button button-quiet" data-action="connect" type="button">Restart pairing</button></div>
     </div><aside class="hero-aside"><div class="spinner-block"><span class="spinner" aria-hidden="true"></span><span>Verifying with Twitch…</span></div></aside>
   </section>`;
@@ -816,7 +840,7 @@ function renderSettings(data) {
             ${renderFactRow("Pinned games", String(settings.selectedGamePriority.length))}
             ${renderFactRow("Excluded campaigns", String(settings.excludedCampaignIds.length))}
           </div>
-          ${authenticated && snapshot.account.method === "browser" ? `<p class="field-hint">Keep the desktop helper running for renewal. Reconnect after restarting this server or closing the helper.</p>` : ""}
+          ${authenticated && snapshot.account.method === "browser" ? `<p class="field-hint">Keep your selected browser service or desktop helper running for renewal. Reconnect after restarting this server or the login service.</p>` : ""}
           <div class="card-actions actions-spaced"><button class="button button-primary" data-action="connect" type="button">${linkIcon()} ${authenticated ? "Reconnect Twitch" : "Connect Twitch"}</button></div>
         </section>
       </div>
@@ -934,7 +958,9 @@ async function handleClick(event) {
   const action = button.dataset.action;
   try {
     if (action === "toggle-theme") toggleTheme();
-    if (action === "connect") { await command("/api/auth/browser/start"); showView("overview"); }
+    if (action === "connect") { ui.loginOptionsOpen = true; showView("overview"); }
+    if (action === "close-login-options") { ui.loginOptionsOpen = false; render(); }
+    if (action === "connect-helper") { await command("/api/auth/browser/start"); ui.loginOptionsOpen = false; showView("overview"); }
     if (action === "replace-code") await command("/api/auth/replace");
     if (action === "start") await command("/api/miner/start");
     if (action === "stop") await command("/api/miner/stop");

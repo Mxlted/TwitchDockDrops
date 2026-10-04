@@ -10,6 +10,8 @@ changes.
 - [x] Pure GraphQL authentication/integrity errors trigger validation without replaying claims
 - [x] Special Events/IRL ACL participants can earn across categories through discovery and live rechecks
 - [x] Desktop browser login, complete integrity context, protected pairing, and helper-driven renewal
+- [x] Optional isolated Docker browser service and dashboard login chooser with desktop fallback
+- [x] Recoverable Chromium response-body capture failures no longer abort the desktop helper
 - [ ] Live Twitch verification of browser login, renewal, earning, and claims
 - [x] Compact reward companion panel sits beside desktop campaigns and below the list on smaller screens
 - [x] Open Reward Campaigns are visible in a separate Show/Hide panel with dates and reward names
@@ -75,7 +77,42 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
-## Browser login and Docker names - 2026-10-04
+## Dashboard login and helper repair - 2026-10-04
+
+- Re-reviewed upstream `1182d0172458db4e23a236e9d9c078fd3b1fd9c7`, including the container browser,
+  session capture, and server renewal. The original generic **Browser command failed** message did
+  not identify the failing CDP command. DockDrops now skips unrelated GraphQL response bodies and
+  recoverable `Network.getResponseBody` failures (`-32000`), retains complete proof/campaign correlation,
+  increases bounded capture buffers, and reports other command names/codes without raw diagnostics.
+- Connect Twitch now offers dashboard login and the desktop helper. The optional
+  `compose.browser.yaml` adds a Chromium/Xvfb/Node service with no data mount or extra published port.
+  It retains non-root execution, dropped capabilities, read-only root, and no-new-privileges; the
+  browser-only `--no-sandbox` tradeoff is documented in SECURITY.md. Login uses an allocated nonzero
+  loopback CDP port, as upstream does, without navigator overrides.
+- The same-origin screenshot viewer supports bounded text, clicks, navigation keys, scroll controls,
+  zoom, Finish sign-in, cancellation, and a mobile keyboard field. Stale views cannot send input into
+  a replacement login. Public state adds the `dashboard` login method; tickets, captured headers,
+  cookies, and context never enter public state or companion status responses sent to the viewer.
+- The JVM atomically owns the admission lease, validates every initial/renewed context through the
+  existing runtime, and stops the browser after reset, replacement, cancellation, or transport failure.
+  Only browser renewal runs in the companion; mining/claims stay in LocalMinerRuntime. The browser
+  profile is temporary, so reconnection is required after JVM/browser restart or renewal failure.
+- Root `test installDist`: 169 tests passed (zero failures/errors/skips), including two capture/renewal
+  cycles through a mock companion, redacted status, lease revocation/reset, strict route/input bounds,
+  and serialization. Node tests: 26 passed, covering capture recovery, safe diagnostics, browser-service
+  request boundaries, input bounds, stale viewer/status races, and the login choices. JavaScript syntax checks passed.
+- Native Windows Chrome checks passed for helper launch/control and the companion's screenshot,
+  keyboard/click, cancellation, and temporary-profile cleanup. A packaged JVM plus native Chrome test
+  companion displayed Twitch's logged-out login page through the real same-origin viewer. This is
+  browser-control evidence, not successful account login or Linux/Xvfb container evidence.
+- Desktop and mobile visual QA covers login choices, logged-out/startup, interactive viewer, service
+  failure, and cancellation. Compose base/override configuration validation passed. Docker image
+  build was attempted but the Docker Desktop Linux daemon is unavailable; image build/runtime,
+  real-account login, browser renewal acceptance, earning, and claims remain unverified.
+- Android reference unchanged at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. Pre-existing untracked
+  `CLAUDE.md` is preserved.
+
+## Browser login and Docker names - 2026-10-04 (superseded login presentation)
 
 - Connect Twitch now pairs a bundled Node.js 22.4+ helper instead of requesting a device code from
   the endpoint returning HTTP 400. Native Chrome/Edge/Chromium performs login in a temporary profile;
@@ -579,9 +616,10 @@ root build.
 
 - Fresh Android-client device authorization can be rejected by Twitch. The new browser helper avoids
   that endpoint, but live account login, integrity renewal, earning, and claims remain unverified.
-  Renewal requires the helper computer to stay running; reconnect after server restart or helper
-  failure. There is no container-side Chromium renewal, Firefox support, or upstream-helper protocol
-  compatibility. Native helper launch was checked only on Windows. Different browser/miner network
+  Renewal requires either the optional browser service or the desktop helper to stay running; reconnect
+  after server/browser restart or a failed renewal. Durable browser renewal cookies/seeds, Firefox,
+  popup-based social sign-in in the dashboard viewer, and upstream-helper protocol compatibility are
+  not implemented. Native browser checks were on Windows. Different browser/miner network
   routes or Twitch browser challenges can reject capture or server-side verification.
 - Docker image build/runtime for the browser-login follow-up could not be verified because this host
   has no available Docker daemon. Compose configuration and the packaged JVM were verified separately.

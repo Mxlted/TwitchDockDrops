@@ -8,7 +8,7 @@ Twitch Dock Drops. For the user-facing project overview, start with the [README]
 - Docker Engine with Docker Compose v2
 - A Twitch account eligible for Drops campaigns
 - A supported browser on the Docker host or a trusted LAN device
-- For fresh Twitch login: Node.js 22.4+ and native Chrome, Edge, or Chromium on a desktop that stays
+- For desktop-helper login only: Node.js 22.4+ and native Chrome, Edge, or Chromium on a desktop that stays
   running for renewal (Windows, macOS, or Linux; browser launch has been checked on Windows)
 
 ## Install and start
@@ -43,7 +43,53 @@ assume one instance per Docker host; override those names for multiple instances
 
 ### Browser login
 
-1. Select **Connect Twitch**. Download `login-helper.mjs` from your dashboard to your desktop.
+Connect Twitch offers two browser-based options. The old device-code endpoint can return HTTP 400;
+changing client IDs does not restore private Drops access. Existing valid Android sessions remain
+supported. Neither new browser option has yet been verified with a live account.
+
+#### Dashboard login (no desktop download)
+
+From your updated repository checkout, enable the optional browser service:
+
+```bash
+docker compose -f compose.yaml -f compose.browser.yaml up --build -d
+```
+
+Set `TZ` in `.env` to the timezone of your home connection; the example default is `America/New_York`.
+Use both Compose files for subsequent `up`, `build`, `logs`, and `down` commands for this deployment.
+The browser shares the app's network namespace, so recreate both services together after changing
+ports or network settings. It adds no published port and does not mount the miner's data volume.
+
+1. Open DockDrops, select **Connect Twitch → Open dashboard login → Start sign-in**.
+2. Sign in on Twitch in the displayed browser. Complete email or two-factor verification there.
+   Click a field and type; mobile users can use **Mobile keyboard / paste** after selecting a field.
+   The browser panel scrolls horizontally on narrow screens; Zoom and Scroll up/down are available.
+3. Select **Finish sign-in** only after Twitch confirms login. The miner verifies OAuth identity and
+   both private Drops queries before accepting the session. Interactive login has an eight-minute limit.
+4. After **Connected**, return to the dashboard. The browser service handles renewal; this page and
+   your computer can be closed while Docker keeps running.
+
+The service uses a temporary profile on a 512 MiB tmpfs, 256 MiB shared memory, a 1 GiB memory limit,
+and at most 256 processes. These are limits, not steady-state requirements. It uses Chromium/Xvfb;
+there is no Android emulator or remote desktop port. The login viewer relays screenshots, bounded
+text, pointer clicks, and navigation keys through the same-origin JVM API. It does not offer arbitrary
+browser commands, downloads, drag gestures, popup-based social sign-in, passkeys, or OS dialogs. Use the desktop fallback if a
+Twitch challenge requires those interactions. Firefox is not supported.
+
+Cookies for renewal stay in temporary browser storage. **Reconnect after restarting the JVM or
+browser service**, cancellation, or a failed renewal. The encrypted miner session remains preserved,
+but it can only be used until its captured integrity proof expires without a fresh capture. Server-side
+renewal persistence across restarts is not implemented. Cancel stops the temporary browser; it does
+not delete the previously saved miner credential. **Reset Twitch Session** still signs the miner out.
+
+If startup fails, check `docker compose -f compose.yaml -f compose.browser.yaml logs browser` and
+confirm the browser service is running. Health remains a check of the JVM's local readiness, independent
+of this optional service and Twitch. The current image build/runtime could not be checked on the
+development host because its Docker Linux daemon was unavailable.
+
+#### Desktop helper (fallback)
+
+1. Select **Connect Twitch → Use desktop helper**. Download `login-helper.mjs` from your dashboard to your desktop.
 2. In that directory run `node login-helper.mjs`. Enter the dashboard origin (for example
    `http://192.168.1.20:8080`) and the displayed pairing code. Complete pairing and login within ten minutes.
 3. Sign in directly on Twitch in the new browser, including any Twitch verification. Close all windows
@@ -63,7 +109,7 @@ a `dockdrops-login-*` folder in the operating system's temporary directory.
 After a server restart, helper failure, or expired proof, select **Reconnect Twitch** in Settings and
 run the helper again. New pairing, session reset, and server restart revoke the previous helper
 connection. The persisted session can be restored only within the captured proof's lifetime until
-renewal resumes. There is no Chromium inside the container and no renewal without the desktop helper.
+renewal resumes. In this lightweight deployment, renewal requires the desktop helper.
 The upstream Python helper uses a different protocol and cannot connect here. Firefox is not supported
 by this helper. Native browser login and network access from the miner must both be accepted by Twitch;
 different VPN/proxy routes can cause server-side verification to fail.
@@ -74,6 +120,14 @@ and its key; do not reset or delete the volume for temporary 403/integrity error
 the previous credential until successful atomic save, and a failed replacement can restore it after
 restart. Explicit **Reset Twitch Session** still deletes it. Live Twitch account acceptance, earning,
 and claims with the new browser helper remain unverified; see [Project Status](./PROJECT_STATUS.md).
+
+The helper now skips unrelated GraphQL bodies and Chromium's discarded response-body error (`-32000`)
+while still requiring complete matching proof and campaign evidence. Other failures report the CDP
+command name and numeric code without raw browser diagnostics. This addresses a likely cause of the
+old generic **Browser command failed** message; that old message cannot identify the precise command.
+Download the updated helper after rebuilding. If it still fails, run `--check-browser` and try an
+explicit Edge/Chrome executable. Users with a trusted repository checkout can run
+`node src/main/resources/web/login-helper.mjs` directly without a separate download.
 
 ## Everyday commands
 
@@ -159,6 +213,8 @@ deployment boundary.
 
 | Variable | Purpose |
 | --- | --- |
+| `TWITCH_DROPS_DASHBOARD_LOGIN` | Enables the optional browser bridge. Defaults to `false`; the browser Compose override sets `true`. Requires the companion on loopback port 8091. |
+| `TZ` | Browser-service timezone; set it to match your home connection. Defaults to `America/New_York` in the override. |
 | `TWITCH_DROPS_BIND` | Host interface used by Compose port publication. Defaults to `127.0.0.1`. |
 | `TWITCH_DROPS_PORT` | Host port in Compose and listener port for direct JVM execution. Defaults to `8080`. |
 | `TWITCH_DROPS_LISTEN_HOST` | Direct JVM listener. Defaults to `127.0.0.1`; Compose sets `0.0.0.0` inside the container. |

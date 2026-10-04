@@ -19,7 +19,7 @@
 *Current dashboard with built-in preview data. Campaigns, rewards, and activity are illustrative.*
 
 Twitch Dock Drops quietly farms timed Twitch Drops without playing or downloading the stream. Run it
-in Docker, connect your Twitch account using the desktop browser helper, choose the games
+in Docker, connect your Twitch account through dashboard login or the desktop browser helper, choose the games
 you care about, and leave the miner to handle the rest.
 
 > [!IMPORTANT]
@@ -46,17 +46,22 @@ you care about, and leave the miner to handle the rest.
 ## Quick start
 
 You need [Docker](https://docs.docker.com/get-docker/) with Docker Compose and a Twitch account that
-can participate in Drops campaigns. Fresh login also needs [Node.js 22.4 or newer](https://nodejs.org/en/download)
-and Chrome, Edge, or Chromium on a desktop that can stay running for session renewal.
+can participate in Drops campaigns. The optional browser service lets you sign in directly through the
+dashboard without downloading a helper or installing Node.js on your computer.
 
 ```bash
 git clone https://github.com/Mxlted/TwitchDockDrops.git
 cd TwitchDockDrops
 cp .env.example .env
-docker compose up --build -d
+docker compose -f compose.yaml -f compose.browser.yaml up --build -d
 ```
 
 On PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
+
+Set `TZ` in `.env` to your local timezone (for example, `America/New_York`). The browser service has a
+1 GiB memory limit and adds Chromium to a separate image. For the lightweight desktop-helper setup,
+omit `-f compose.yaml -f compose.browser.yaml`. That option needs Node.js 22.4+ and Chrome, Edge, or
+Chromium on a desktop that stays running. See [login options](./OPERATIONS.md#browser-login).
 
 Then open:
 
@@ -70,14 +75,14 @@ the [Operator Guide](./OPERATIONS.md#network-access) for loopback-only and rever
 ## Start farming in three steps
 
 1. Select **Connect Twitch** in the dashboard.
-2. Download the login helper, run `node login-helper.mjs`, and enter the dashboard address and pairing
-   code. Sign in on Twitch in the new browser, then close its windows. Leave the helper running.
+2. Choose **Open dashboard login**, then **Start sign-in**. Sign in to Twitch in the displayed browser,
+   finish verification, and select **Finish sign-in**. **Use desktop helper** remains available as a fallback.
 3. Choose game priorities or leave Auto Mode in charge, then start the miner.
 
 Twitch Dock Drops refreshes your campaigns, chooses an eligible live channel, reports watch progress,
 recovers from stalled channels, and claims completed Drops. Your saved session is restored after a
 container restart, and the miner resumes automatically if it was running before the restart. Browser
-sessions need fresh integrity proof: reconnect the helper after a container restart so renewal continues.
+sessions need fresh integrity proof: reconnect after restarting the server or browser service so renewal continues.
 See [browser login](./OPERATIONS.md#browser-login) for setup and troubleshooting.
 
 ## The dashboard
@@ -111,7 +116,7 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
   responding.
 
 The miner keeps lifecycle work on the server. Closing the dashboard does not stop farming; keep the
-desktop login helper running to renew browser sessions.
+browser service or selected desktop login helper running to renew browser sessions.
 **Up next** follows your saved priorities, exclusions, campaign eligibility, and fallback order;
 live-channel availability determines what can actually run.
 
@@ -127,7 +132,7 @@ or open `/?preview=active` on your instance. Preview controls do not change the 
 - Unlinked-campaign farming is optional and treated as speculative until Twitch confirms real progress.
 - Private Twitch behavior can change, so review the [Project Status](./PROJECT_STATUS.md) when troubleshooting.
 - Connect Twitch uses browser login because Twitch can reject the older device-code flow. Existing
-  sessions are preserved. Live account acceptance of the new helper has not yet been verified.
+  sessions are preserved. Live account acceptance of either browser option has not yet been verified.
 - Local activity logs can contain campaign and channel names; review them before sharing.
 
 ## Documentation

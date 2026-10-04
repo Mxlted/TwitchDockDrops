@@ -29,7 +29,13 @@ const INTEGRITY = 'https://gql.twitch.tv/integrity';
 const CLIENT = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const HEADER_NAMES = new Set(['authorization', 'client-id', 'client-integrity', 'client-version',
   'client-session-id', 'x-device-id', 'device-id', 'accept-language']);
-class HelperError extends Error {}
+export class HelperError extends Error {}
+export class BrowserCommandError extends HelperError {
+  constructor(method, code) {
+    super(`Browser command ${method} failed (code ${Number.isInteger(code) ? code : 'unknown'}). Retry login or try another Chromium browser.`);
+    this.method = method; this.code = code;
+  }
+}
 
 export function dashboardUrl(value) {
   let url;
@@ -64,13 +70,25 @@ export class CaptureObservation {
     } else if (method === 'Network.loadingFinished') {
       const response = this.responses.get(id);
       if (!response || response.status !== 200 || response.fromDiskCache || response.fromServiceWorker) return;
-      const data = await body(id);
+      // Unauthenticated GraphQL traffic and preflight replies do not contribute to a session.
+      if (response.url === GQL && !this.requests.has(id)) { this.responses.delete(id); return; }
+      let data;
+      try { data = await body(id); }
+      catch (error) {
+        // Chromium can discard a response during navigation. A later, complete response is
+        // required; never accept missing evidence or abort login for an evicted response.
+        if (!(error instanceof BrowserCommandError) || error.method !== 'Network.getResponseBody' || error.code !== -32000) throw error;
+        this.requests.delete(id); this.responses.delete(id); return;
+      }
+      this.responses.delete(id);
       if (response.url === INTEGRITY && typeof data?.token === 'string' && Number.isFinite(data.expiration)) {
         this.issued.set(data.token, [this.clock(), Math.floor(data.expiration / 1000)]);
       } else if (this.requests.has(id)) {
         const rows = Array.isArray(data) ? data : [data];
         if (rows.some(row => row && !row.errors?.length && Array.isArray(row.data?.currentUser?.dropCampaigns))) this.campaigns.add(id);
       }
+    } else if (method === 'Network.loadingFailed') {
+      this.requests.delete(id); this.responses.delete(id);
     }
   }
   bundle(userAgent) {
@@ -83,7 +101,7 @@ export class CaptureObservation {
   }
 }
 
-class Cdp {
+export class Cdp {
   constructor(socket) {
     this.closed = false;
     this.socket = socket; this.nextId = 0; this.pending = new Map(); this.events = []; this.waiter = null;
@@ -92,7 +110,7 @@ class Cdp {
       let message; try { message = JSON.parse(event.data); } catch { socket.close(); return; }
       if (message.id) {
         const request = this.pending.get(message.id);
-        if (request) { this.pending.delete(message.id); clearTimeout(request.timer); message.error ? request.reject(new HelperError('Browser command failed.')) : request.resolve(message.result); }
+        if (request) { this.pending.delete(message.id); clearTimeout(request.timer); message.error ? request.reject(new BrowserCommandError(request.method, message.error.code)) : request.resolve(message.result); }
       } else if (message.method?.startsWith('Network.')) {
         if (this.events.length > 2048) { socket.close(); return; }
         if (this.waiter) { this.waiter(message); this.waiter = null; } else this.events.push(message);
@@ -105,6 +123,7 @@ class Cdp {
     });
   }
   static async open(url, port, signal) {
+    signal.throwIfAborted();
     const parsed = new URL(url);
     if (parsed.protocol !== 'ws:' || parsed.hostname !== '127.0.0.1' || parsed.port !== String(port)) throw new HelperError('Unexpected browser control address.');
     const socket = new WebSocket(url);
@@ -113,6 +132,7 @@ class Cdp {
       socket.addEventListener('open', () => { clearTimeout(timer); resolve(); }, {once:true});
       socket.addEventListener('error', () => { clearTimeout(timer); reject(new HelperError('Cannot connect to the owned browser.')); }, {once:true});
     });
+    if (signal.aborted) { socket.close(); signal.throwIfAborted(); }
     signal.addEventListener('abort', () => socket.close(), { once: true });
     return new Cdp(socket);
   }
@@ -121,7 +141,7 @@ class Cdp {
     return new Promise((resolve, reject) => {
       const id = ++this.nextId;
       const timer = setTimeout(() => { this.pending.delete(id); reject(new HelperError('Browser command timed out.')); }, 15000);
-      this.pending.set(id, {resolve,reject,timer});
+      this.pending.set(id, {resolve,reject,timer,method});
       this.socket.send(JSON.stringify({id,method,params}));
     });
   }
@@ -148,7 +168,7 @@ async function browserExecutable(explicit) {
   throw new HelperError('Install native Chrome, Edge, or Chromium, or pass its executable as the second argument.');
 }
 
-async function stopBrowser(child) {
+export async function stopBrowser(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   if (platform() === 'win32') {
     const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {stdio:'ignore', windowsHide:true});
@@ -158,7 +178,7 @@ async function stopBrowser(child) {
   if (platform() !== 'win32') { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }
 }
 
-async function startBrowser(executable, profile, args) {
+export async function startBrowser(executable, profile, args) {
   const child = spawn(executable, ['--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
     '--disable-background-mode', ...args], { stdio:'ignore', detached:platform() !== 'win32', windowsHide:true,
     env: { ...process.env, XDG_CONFIG_HOME:join(profile,'config'), XDG_CACHE_HOME:join(profile,'cache') } });
@@ -166,10 +186,10 @@ async function startBrowser(executable, profile, args) {
   return child;
 }
 
-async function capture(executable, profile, signal, checkOnly = false) {
+export async function capture(executable, profile, signal, checkOnly = false, browserArgs = []) {
   await rm(join(profile,'DevToolsActivePort'), {force:true});
   const child = await startBrowser(executable, profile, ['--headless=new','--remote-debugging-address=127.0.0.1',
-    '--remote-debugging-port=0','--disable-dev-shm-usage','about:blank']);
+    '--remote-debugging-port=0','--disable-dev-shm-usage',...browserArgs,'about:blank']);
   const timer = AbortSignal.timeout(120000);
   const abort = AbortSignal.any([signal,timer]);
   let cdp;
@@ -185,7 +205,7 @@ async function capture(executable, profile, signal, checkOnly = false) {
     const response = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, {method:'PUT',redirect:'error',signal:abort});
     const target = await response.json();
     cdp = await Cdp.open(target.webSocketDebuggerUrl, port, abort);
-    await cdp.command('Network.enable');
+    await cdp.command('Network.enable', {maxTotalBufferSize:16777216, maxResourceBufferSize:4194304});
     await cdp.command('Network.setCacheDisabled',{cacheDisabled:true});
     const agent = (await cdp.command('Runtime.evaluate',{expression:'navigator.userAgent',returnByValue:true})).result.value;
     if (checkOnly) {

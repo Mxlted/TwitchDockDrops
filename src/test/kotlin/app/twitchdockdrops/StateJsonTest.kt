@@ -21,6 +21,15 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class StateJsonTest {
+    @Test fun `dashboard authorization exposes only its method and no pairing credential`() {
+        val snapshot = RuntimeSnapshot(account = LoginSession(LoginState.LoginRequired, "Waiting for dashboard login", method = "dashboard"))
+        val account = Json.parseToJsonElement(StateJson().encode(snapshot, AppSettings(), emptyList()))
+            .jsonObject.getValue("snapshot").jsonObject.getValue("account").jsonObject
+        assertEquals("dashboard", account.getValue("method").jsonPrimitive.content)
+        assertEquals("null", account.getValue("oauthCode").toString())
+        assertFalse(account.containsKey("ticket"))
+    }
+
     @Test
     fun `display rewards serialize independently of selection and drop counters`() {
         val reward = com.nathan.twitchdropsminer.android.data.model.RewardCampaign(

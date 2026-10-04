@@ -25,9 +25,11 @@ LocalMinerRuntime (root-owned JVM source)
   `-- JVM network status provider
 ```
 
-Compose runs this graph as one service. Splitting the static UI, API, and miner into separate
+The base Compose file runs this graph as one service. Splitting the static UI, API, and miner into separate
 containers would add synchronization and failure modes without improving isolation: they share one
-account session and one authoritative runtime state.
+account session and one authoritative runtime state. `compose.browser.yaml` optionally adds an isolated
+Chromium/Xvfb/Node companion for dashboard authentication. It shares only the app's network namespace,
+has no data mounts, listens on loopback 8091, and is accessed through the existing same-origin JVM API.
 
 At process startup, `LocalMinerRuntime` restores any encrypted Twitch session and honors the persisted
 `miningRequested` intent: a previously running miner resumes, while a previously stopped miner only
@@ -91,14 +93,15 @@ replacement; failure to obtain a new code does not delete it. Start/refresh comm
 preserved credential while authorization is active. Explicit session reset still deletes it.
 
 The 2026-10-04 upstream review covers rangermix/TwitchDropsMiner through `1182d0172458` (v2.1.1).
-The dashboard now defaults to a root-owned Node desktop helper modeled on upstream's browser-context
+The desktop fallback uses a root-owned Node helper modeled on upstream's browser-context
 capture. It uses a temporary native Chromium profile for interactive Twitch login, then short headless
 captures for renewal. It correlates issued integrity tokens with successful authenticated campaign
 responses and transfers only allowlisted request headers, user agent, and issuance/expiry timestamps.
 The JVM validates the web OAuth client/account and both Inventory and Campaigns queries before atomic
 encrypted save. Each helper lease binds to the first accepted account. Renewal goes through the same
 generation-guarded runtime authentication command and resumes saved mining intent. Chromium is not
-installed in the container; the helper must remain running. Upstream's helper protocol is not supported.
+installed in the JVM image; renewal runs in the optional browser companion or desktop helper.
+Upstream's helper protocol is not supported.
 Existing Android sessions remain supported; the superseded Smart TV client switch is not adopted.
 
 `BrowserLoginAdmission` owns a single in-memory pairing lease: a random 72-bit one-use code with a
@@ -108,7 +111,33 @@ revoke it. Ticket-authenticated status reports only connected/verifying/ready/fa
 verification cannot commit after reset or a replacement. The helper stops on capture, transfer, or
 verification failure; reconnect to resume. Expired integrity proof blocks authenticated requests
 without deleting the saved credential. Browser-context persistence remains within the encrypted
-session envelope, and old sessions load without migration.
+session envelope, and old sessions load without migration. Discarded CDP response bodies (`-32000` on
+`Network.getResponseBody`) are skipped while waiting for complete evidence. Unrelated unauthenticated
+GraphQL bodies are not read. Other command errors retain only the method and numeric code.
+
+### Optional dashboard browser
+
+`DashboardLogin` owns authentication transport only. Starting login requests a serialized runtime
+command that opens and claims an admission lease atomically; neither pairing code nor ticket enters
+the public state. A coroutine serializes companion startup, status/context transfers, and cleanup.
+The worker opens a headed Chromium browser under Xvfb. The UI relays JPEG frames and a bounded set of
+click, text, scroll, and key commands. Finish sign-in closes that browser, then invokes the same
+headless capture routine used by the desktop helper. The JVM submits each numbered capture once
+through `LocalMinerRuntime`, acknowledges it only after validation succeeds, and permits renewal
+only for the original account. No scheduling of mining, campaigns, heartbeats, or claims moves to
+the companion. A missing context during renewal does not acknowledge the previous capture again.
+
+Public browser endpoints explicitly serialize only a view ID, state/error, or JPEG image. The worker's
+private status can include captured context but is never proxied wholesale. Worker routes reject
+Origin-bearing requests, require an internal header and the exact loopback Host, disable CORS, and
+bound bodies. The JVM only calls a fixed loopback address without redirects. It never exposes arbitrary
+CDP commands or URL navigation. View IDs reject stale input and frames after replacement. Interactive
+login is limited to eight minutes; captures and verification are time-bounded. A renewal or transport
+failure stops the browser and requests re-login; there is no persistent renewal seed or automatic
+recovery across JVM/companion restarts. Profile cookies stay on the companion's tmpfs, never in the
+miner volume. New helper login, reset, cancellation, and shutdown stop the companion session; runtime
+lease revocation independently blocks late credential commits. Original encrypted credentials are
+preserved until validated replacement or explicit reset.
 
 Watch earning telemetry uses the direct Spade transport restored by the current TwitchDropsMiner
 implementations. Every heartbeat builds a new uncompressed Base64 JSON array containing one
@@ -186,10 +215,20 @@ local logs. `GET /api/events` is a server-sent event stream of the same document
 device code secret, encryption key, and filesystem paths are never serialized. Campaign ACL
 membership remains server-side for selection and is not included in campaign state payloads.
 
-`snapshot.account.method` is `device` or `browser`. For browser pairing, `oauthCode` contains the
+`snapshot.account.method` is `device`, `browser`, or `dashboard` during integrated sign-in. An accepted
+integrated session uses `browser`, since its persisted credential type is the same as the helper's.
+For desktop browser pairing, `oauthCode` contains the
 short-lived pairing code and `expiresAt` its deadline; `oauthUrl` is absent. Full browser context and
 helper tickets never enter state/events/logs. The client renders helper instructions rather than
-Twitch activation for this method.
+Twitch activation for this method. `dashboard` omits `oauthCode` and links to `/browser-login.html`.
+
+`GET /api/auth/options` advertises configured dashboard support. `GET /api/auth/dashboard/status`
+returns `{id,state,error}` (including an explicit unavailable state), and `GET /api/auth/dashboard/frame?id=...`
+returns `{image}` for the current interactive view. All responses bypass caches. The `start`, `finish`,
+`input`, and `cancel` routes under that prefix use POST, trusted Origin, strict JSON and the normal body
+limit. Start returns immediately after local lease setup and launches browser work asynchronously.
+Input is at most 256 characters or a bounded coordinate/navigation event; credentials are relayed
+without trimming, logging, or persistence. Session material is never returned to the viewer.
 
 `snapshot.rewardCampaigns` is a separate, display-only list of reward promotions, with explicit
 `id`, `name`, nullable `brand`, `gameName`, `summary`, `startsAt`, `endsAt`, and `rewardNames` fields.

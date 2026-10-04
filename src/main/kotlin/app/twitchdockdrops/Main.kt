@@ -43,7 +43,9 @@ fun main() {
         logRepository.append("INFO", "Twitch Dock Drops host started")
     }
 
+    val dashboardLogin = if (environment.dashboardLogin) DashboardLogin(runtime) else null
     val webServer = WebServer(
+        dashboardLogin = dashboardLogin,
         categorySearch = TwitchCategorySearch(httpClient),
         port = environment.port,
         listenHost = environment.listenHost,
@@ -59,6 +61,7 @@ fun main() {
 
     Runtime.getRuntime().addShutdownHook(
         Thread {
+            dashboardLogin?.close()
             runBlocking { runtime.stopMiningAndJoin() }
             webServer.close()
             networkStatusProvider.close()
