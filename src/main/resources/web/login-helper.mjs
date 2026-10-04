@@ -17,11 +17,12 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE. */
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, access, chmod } from 'node:fs/promises';
+import { mkdtemp, rm, access, chmod } from 'node:fs/promises';
 import { tmpdir, homedir, platform } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
+import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const GQL = 'https://gql.twitch.tv/gql';
@@ -65,11 +66,13 @@ export class CaptureObservation {
       if (headers['client-id'] === CLIENT && /^OAuth [A-Za-z0-9_-]+$/.test(headers.authorization || '') && headers['client-integrity']) {
         this.requests.set(id, Object.fromEntries(Object.entries(headers).filter(([k]) => HEADER_NAMES.has(k))));
       }
-    } else if (method === 'Network.responseReceived' && [GQL, INTEGRITY].includes(params.response.url)) {
+    } else if (method === 'Network.responseReceived' && params.type !== 'Preflight' && [GQL, INTEGRITY].includes(params.response.url)) {
       this.responses.set(id, params.response);
     } else if (method === 'Network.loadingFinished') {
       const response = this.responses.get(id);
-      if (!response || response.status !== 200 || response.fromDiskCache || response.fromServiceWorker) return;
+      if (!response || response.status !== 200 || response.fromDiskCache || response.fromServiceWorker) {
+        this.requests.delete(id); this.responses.delete(id); return;
+      }
       // Unauthenticated GraphQL traffic and preflight replies do not contribute to a session.
       if (response.url === GQL && !this.requests.has(id)) { this.responses.delete(id); return; }
       let data;
@@ -83,28 +86,80 @@ export class CaptureObservation {
       this.responses.delete(id);
       if (response.url === INTEGRITY && typeof data?.token === 'string' && Number.isFinite(data.expiration)) {
         this.issued.set(data.token, [this.clock(), Math.floor(data.expiration / 1000)]);
+        for (const [token, [, expiry]] of this.issued) if (expiry <= this.clock()) this.issued.delete(token);
+        while (this.issued.size > 16) this.issued.delete(this.issued.keys().next().value);
       } else if (this.requests.has(id)) {
         const rows = Array.isArray(data) ? data : [data];
-        if (rows.some(row => row && !row.errors?.length && Array.isArray(row.data?.currentUser?.dropCampaigns))) this.campaigns.add(id);
+        if (rows.some(row => row && !row.errors?.length && Array.isArray(row.data?.currentUser?.dropCampaigns))) {
+          this.campaigns.add(id);
+          // Keep recent successful evidence, not every authenticated request for the browser's lifetime.
+          while (this.campaigns.size > 16) {
+            const oldest = this.campaigns.values().next().value;
+            this.campaigns.delete(oldest); this.requests.delete(oldest);
+          }
+        } else this.requests.delete(id);
       }
     } else if (method === 'Network.loadingFailed') {
       this.requests.delete(id); this.responses.delete(id);
     }
   }
-  bundle(userAgent) {
-    for (const [id, headers] of this.requests) {
+  bundle(userAgent, previousToken = null) {
+    for (const [id, headers] of [...this.requests].reverse()) {
       const issued = this.issued.get(headers['client-integrity']);
-      if (!issued || !this.campaigns.has(id) || issued[1] <= this.clock() + 60 || issued[1] > issued[0] + 86400) continue;
+      if (!issued || headers['client-integrity'] === previousToken || !this.campaigns.has(id) || issued[1] <= this.clock() + 60 || issued[1] > issued[0] + 86400) continue;
       return { version: 1, captured_at: issued[0], expires_at: issued[1], user_agent: userAgent, headers };
     }
     return null;
   }
 }
 
+// Observe from before login until cancellation. Issuance can precede Finish sign-in, and a
+// later navigation may reuse that proof without issuing it again. Never invent its expiry.
+export class BrowserCapture {
+  constructor(cdp, userAgent) {
+    this.cdp = cdp; this.userAgent = userAgent; this.observation = new CaptureObservation();
+    this.failure = null;
+    this.task = this.collect().catch(error => { this.failure = error; });
+  }
+  static async start(cdp) {
+    await cdp.command('Network.enable', {maxTotalBufferSize:16777216, maxResourceBufferSize:4194304});
+    await cdp.command('Network.setCacheDisabled',{cacheDisabled:true});
+    const agent = (await cdp.command('Runtime.evaluate',{expression:'navigator.userAgent',returnByValue:true})).result.value;
+    if (typeof agent !== 'string' || !agent.includes('Chrome/')) throw new HelperError('Unexpected browser response.');
+    return new BrowserCapture(cdp, agent);
+  }
+  async collect() {
+    for (;;) {
+      const event = await this.cdp.event();
+      if (!event) throw new HelperError('Browser disconnected.');
+      await this.observation.observe(event, id => this.cdp.body(id));
+    }
+  }
+  async wait(signal, previousToken = null, timeout = 120000) {
+    signal.throwIfAborted();
+    const abort = AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
+    await this.cdp.command('Page.navigate',{url:'https://www.twitch.tv/drops/campaigns'});
+    let reloadAt = Date.now() + 30000;
+    while (!abort.aborted) {
+      if (this.failure) throw this.failure;
+      const bundle = this.observation.bundle(this.userAgent, previousToken);
+      if (bundle) return bundle;
+      // Some page loads ask for campaigns before integrity is ready. Retry the page using
+      // the same authenticated browser; only successful, correlated evidence is accepted.
+      if (Date.now() >= reloadAt) {
+        await this.cdp.command('Page.reload',{ignoreCache:true}); reloadAt = Date.now() + 30000;
+      }
+      await sleep(100,undefined,{signal:abort}).catch(error => { if (!abort.aborted) throw error; });
+    }
+    signal.throwIfAborted();
+    throw new HelperError('Twitch did not provide verified Drops access within two minutes. Complete Twitch verification, then retry sign-in or use the desktop helper.');
+  }
+}
+
 export class Cdp {
   constructor(socket) {
     this.closed = false;
-    this.socket = socket; this.nextId = 0; this.pending = new Map(); this.events = []; this.waiter = null;
+    this.socket = socket; this.nextId = 0; this.pending = new Map(); this.events = []; this.waiter = null; this.networkRequests = new Set();
     socket.addEventListener('message', event => {
       if (typeof event.data !== 'string' || event.data.length > 8 * 1024 * 1024) { socket.close(); return; }
       let message; try { message = JSON.parse(event.data); } catch { socket.close(); return; }
@@ -112,7 +167,18 @@ export class Cdp {
         const request = this.pending.get(message.id);
         if (request) { this.pending.delete(message.id); clearTimeout(request.timer); message.error ? request.reject(new BrowserCommandError(request.method, message.error.code)) : request.resolve(message.result); }
       } else if (message.method?.startsWith('Network.')) {
-        if (this.events.length > 2048) { socket.close(); return; }
+        // A Twitch page emits large amounts of unrelated telemetry and asset traffic.
+        // Queue only the request/response/completion events needed for auth correlation.
+        const {method, params = {}} = message, id = params.requestId;
+        if (method === 'Network.requestWillBeSent') {
+          if (![GQL,INTEGRITY].includes(params.request?.url) || params.request.method !== 'POST') return;
+          this.networkRequests.add(id);
+        } else if (method === 'Network.responseReceived') {
+          if (params.type === 'Preflight' || !this.networkRequests.has(id)) return;
+        } else if (method === 'Network.loadingFinished' || method === 'Network.loadingFailed') {
+          if (!this.networkRequests.delete(id)) return;
+        } else return;
+        if (this.networkRequests.size > 256 || this.events.length >= 256) { socket.close(); return; }
         if (this.waiter) { this.waiter(message); this.waiter = null; } else this.events.push(message);
       }
     });
@@ -155,6 +221,14 @@ export class Cdp {
   close() { this.socket.close(); }
 }
 
+export async function browserPort() {
+  const server = createServer();
+  await new Promise((resolve,reject) => { server.once('error',reject); server.listen(0,'127.0.0.1',resolve); });
+  const port = server.address().port;
+  await new Promise(resolve => server.close(resolve));
+  return port;
+}
+
 async function browserExecutable(explicit) {
   const candidates = explicit ? [resolve(explicit)] : platform() === 'win32' ? [
     join(process.env.PROGRAMFILES || 'C:/Program Files', 'Google/Chrome/Application/chrome.exe'),
@@ -188,8 +262,9 @@ export async function startBrowser(executable, profile, args) {
 
 export async function capture(executable, profile, signal, checkOnly = false, browserArgs = []) {
   await rm(join(profile,'DevToolsActivePort'), {force:true});
-  const child = await startBrowser(executable, profile, ['--headless=new','--remote-debugging-address=127.0.0.1',
-    '--remote-debugging-port=0','--disable-dev-shm-usage',...browserArgs,'about:blank']);
+  const allocatedPort = await browserPort();
+  const child = await startBrowser(executable, profile, ['--remote-debugging-address=127.0.0.1',
+    `--remote-debugging-port=${allocatedPort}`,'--disable-dev-shm-usage',...browserArgs,'about:blank']);
   const timer = AbortSignal.timeout(120000);
   const abort = AbortSignal.any([signal,timer]);
   let cdp;
@@ -198,30 +273,19 @@ export async function capture(executable, profile, signal, checkOnly = false, br
     for (let i = 0; i < 200; i++) {
       abort.throwIfAborted();
       if (child.exitCode !== null) throw new HelperError('Browser exited during capture.');
-      try { const value = (await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0]; if (/^[0-9]{1,5}$/.test(value) && +value > 0 && +value < 65536) { port = +value; break; } } catch {}
+      try {
+        const ready = await fetch(`http://127.0.0.1:${allocatedPort}/json/version`, {redirect:'error',signal:AbortSignal.any([abort,AbortSignal.timeout(500)])});
+        if (ready.ok) { port = allocatedPort; break; }
+      } catch {}
       await sleep(100,undefined,{signal:abort});
     }
     if (!port) throw new HelperError('Browser did not start its local control connection.');
     const response = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, {method:'PUT',redirect:'error',signal:abort});
     const target = await response.json();
     cdp = await Cdp.open(target.webSocketDebuggerUrl, port, abort);
-    await cdp.command('Network.enable', {maxTotalBufferSize:16777216, maxResourceBufferSize:4194304});
-    await cdp.command('Network.setCacheDisabled',{cacheDisabled:true});
-    const agent = (await cdp.command('Runtime.evaluate',{expression:'navigator.userAgent',returnByValue:true})).result.value;
-    if (checkOnly) {
-      if (typeof agent !== 'string' || !agent.includes('Chrome/')) throw new HelperError('Unexpected browser response.');
-      return;
-    }
-    const observation = new CaptureObservation();
-    await cdp.command('Page.navigate',{url:'https://www.twitch.tv/drops/campaigns'});
-    while (!abort.aborted) {
-      const event = await cdp.event();
-      if (!event) break;
-      await observation.observe(event, id => cdp.body(id));
-      const bundle = observation.bundle(agent);
-      if (bundle) return bundle;
-    }
-    throw new HelperError('Twitch did not provide a verified Drops session. Run the helper again and finish Twitch verification.');
+    const collector = await BrowserCapture.start(cdp);
+    if (checkOnly) return;
+    return await collector.wait(signal);
   } finally {
     if (cdp) { await cdp.command('Browser.close').catch(() => {}); cdp.close(); }
     await stopBrowser(child);

@@ -48,6 +48,32 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test fun `dashboard capture failure reports safe guidance and preserves saved credentials`(): Unit = runBlocking {
+        val store = sessionStore()
+        val saved = storedSession()
+        store.saveTwitchSession(saved)
+        val runtime = runtime(store, AuthenticationTwitchApi())
+        val cancelled = AtomicBoolean()
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): okhttp3.mockwebserver.MockResponse {
+                if (request.path == "/cancel") cancelled.set(true)
+                return okhttp3.mockwebserver.MockResponse().setBody(if (request.path == "/status")
+                    """{"state":"failed","sequence":0,"error":"capture_failed","detail":"secret-upstream-body"}""" else "{}")
+            }
+        }
+        server.start()
+        val bridge = app.twitchdockdrops.DashboardLogin(runtime, server.port)
+        try {
+            bridge.start(runtime.startManagedBrowserAuthentication())
+            withTimeout(5000) { while (!cancelled.get()) delay(20) }
+            val view = bridge.view().toString()
+            assertTrue(view.contains("verified Drops access"))
+            assertFalse(view.contains("secret-upstream-body"))
+            assertEquals(saved.accessToken, store.twitchSession()?.accessToken)
+        } finally { bridge.close(); server.close() }
+    }
+
     @Test fun `dashboard bridge validates renewals redacts view and stops a revoked lease`(): Unit = runBlocking {
         val store = sessionStore()
         val validations = AtomicInteger()

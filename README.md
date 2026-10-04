@@ -84,6 +84,7 @@ recovers from stalled channels, and claims completed Drops. Your saved session i
 container restart, and the miner resumes automatically if it was running before the restart. Browser
 sessions need fresh integrity proof: reconnect after restarting the server or browser service so renewal continues.
 See [browser login](./OPERATIONS.md#browser-login) for setup and troubleshooting.
+For Debian running inside Proxmox LXC, see the [LXC setup notes](./OPERATIONS.md#debian-docker-inside-proxmox-lxc).
 
 ## The dashboard
 

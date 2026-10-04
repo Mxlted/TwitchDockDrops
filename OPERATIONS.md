@@ -41,11 +41,40 @@ same command. The `twitch-dock-drops-data` volume keeps its name and contents. A
 network may remain after upgrading; do not delete the data volume. Explicit container/network names
 assume one instance per Docker host; override those names for multiple instances.
 
+### Debian Docker inside Proxmox LXC
+
+Use a Debian container with Docker Engine and the Compose plugin installed following
+[Docker's Debian instructions](https://docs.docker.com/engine/install/debian/). In the Proxmox
+container's **Options → Features**, enable nesting and, for an unprivileged container, keyctl while
+preserving other selected features. These are host prerequisites for nested Docker; see the
+[Proxmox container feature reference](https://github.com/proxmox/pve-docs/blob/master/generated/pct.conf.5-opts.adoc).
+Restart the LXC after changing its features. Keep the application's Compose security settings intact.
+
+Run the two-file browser-login command below inside Debian. The browser's display is supplied by
+Xvfb in Docker, so Debian needs no desktop environment, attached monitor, or GPU passthrough. Open
+`http://<debian-lxc-ip>:8080` from your trusted LAN after applying `.env.example`; use the LXC address,
+not the Proxmox management address. Allow that port through any LXC/host firewall rules you use.
+Ensure the LXC has enough memory for the 1 GiB browser limit plus the JVM, Docker and Debian; allow
+additional memory during image builds. Keep the host clock synchronized for Twitch proof expiry.
+
+Verify deployment with:
+
+```bash
+docker compose -f compose.yaml -f compose.browser.yaml config --quiet
+docker compose -f compose.yaml -f compose.browser.yaml up --build -d
+docker compose -f compose.yaml -f compose.browser.yaml ps
+curl --fail http://127.0.0.1:8080/api/health
+```
+
+The images and login browser have been exercised on Docker Desktop's Linux/amd64 engine. The actual
+Proxmox LXC host, its kernel restrictions, and real-account login require verification on that host.
+
 ### Browser login
 
 Connect Twitch offers two browser-based options. The old device-code endpoint can return HTTP 400;
 changing client IDs does not restore private Drops access. Existing valid Android sessions remain
-supported. Neither new browser option has yet been verified with a live account.
+supported. Dashboard login and authenticated campaign loading were verified with a live account on
+Linux Docker on 2026-10-04. Unattended renewal and desktop-helper account acceptance remain unverified.
 
 #### Dashboard login (no desktop download)
 
@@ -66,6 +95,8 @@ ports or network settings. It adds no published port and does not mount the mine
    The browser panel scrolls horizontally on narrow screens; Zoom and Scroll up/down are available.
 3. Select **Finish sign-in** only after Twitch confirms login. The miner verifies OAuth identity and
    both private Drops queries before accepting the session. Interactive login has an eight-minute limit.
+   Finish keeps the same authenticated browser open while collecting Drops proof; allow up to two
+   minutes for capture and up to two more for server validation. A failure displays a retry message.
 4. After **Connected**, return to the dashboard. The browser service handles renewal; this page and
    your computer can be closed while Docker keeps running.
 
@@ -84,8 +115,8 @@ not delete the previously saved miner credential. **Reset Twitch Session** still
 
 If startup fails, check `docker compose -f compose.yaml -f compose.browser.yaml logs browser` and
 confirm the browser service is running. Health remains a check of the JVM's local readiness, independent
-of this optional service and Twitch. The current image build/runtime could not be checked on the
-development host because its Docker Linux daemon was unavailable.
+of this optional service and Twitch. If Twitch itself rejects the container browser as unsupported,
+use the desktop helper; changing client IDs or disabling container protections does not repair that.
 
 #### Desktop helper (fallback)
 
@@ -94,7 +125,7 @@ development host because its Docker Linux daemon was unavailable.
    `http://192.168.1.20:8080`) and the displayed pairing code. Complete pairing and login within ten minutes.
 3. Sign in directly on Twitch in the new browser, including any Twitch verification. Close all windows
    of that temporary browser when finished; your everyday profile is not used.
-4. The helper opens a headless browser briefly, captures a fresh authenticated Drops request, and
+4. The helper reopens a regular browser briefly, captures a fresh authenticated Drops request, and
    sends its context directly to this server. The JVM validates the account and both Drops queries
    before saving the encrypted session and loading campaigns.
 5. Leave the helper running. It periodically reopens its temporary profile to renew integrity proof.
@@ -118,8 +149,8 @@ The previous HTTP 400 device-login error is avoided by using browser login. Swit
 cannot repair that old endpoint. Working saved Android sessions remain supported. Keep the session
 and its key; do not reset or delete the volume for temporary 403/integrity errors. Replacement keeps
 the previous credential until successful atomic save, and a failed replacement can restore it after
-restart. Explicit **Reset Twitch Session** still deletes it. Live Twitch account acceptance, earning,
-and claims with the new browser helper remain unverified; see [Project Status](./PROJECT_STATUS.md).
+restart. Explicit **Reset Twitch Session** still deletes it. Desktop-helper account acceptance, unattended
+renewal, earning, and claims remain unverified; see [Project Status](./PROJECT_STATUS.md).
 
 The helper now skips unrelated GraphQL bodies and Chromium's discarded response-body error (`-32000`)
 while still requiring complete matching proof and campaign evidence. Other failures report the CDP
@@ -128,6 +159,13 @@ old generic **Browser command failed** message; that old message cannot identify
 Download the updated helper after rebuilding. If it still fails, run `--check-browser` and try an
 explicit Edge/Chrome executable. Users with a trusted repository checkout can run
 `node src/main/resources/web/login-helper.mjs` directly without a separate download.
+
+The dashboard's former Finish path closed the authenticated browser and launched a headless one.
+It now retains the login browser and begins observing integrity issuance before sign-in. The desktop
+helper also uses regular browser captures, matching upstream's current native Chrome flow. These
+changes address the capture handoff; a successful Twitch login must still pass the server's account,
+Inventory, and Campaigns checks. Upstream documents the distinction in its
+[authentication investigation](https://github.com/rangermix/TwitchDropsMiner/issues/118).
 
 ## Everyday commands
 
@@ -317,9 +355,25 @@ gradle clean test installDist
 Client rendering regressions use Node's built-in test runner (no package installation):
 
 ```bash
-node --test src/test/js/app.test.cjs
+node --test src/test/js/*.cjs src/test/js/*.mjs
 node --check src/main/resources/web/app.js
 ```
+
+An optional offline integration test exercises real Chromium capture across login/navigation and
+renewal using synthetic responses. After building `dockdrops-browser:local`, run from the repository
+root on Linux (Docker networking is disabled; no Twitch account is used):
+
+```bash
+docker run --rm --init --network none --read-only \
+  --tmpfs /tmp:size=512m,mode=1777 --shm-size=256m --memory=1g --pids-limit=256 \
+  --cap-drop=ALL --security-opt=no-new-privileges \
+  -e DOCKDROPS_BROWSER_TEST=1 \
+  --mount "type=bind,src=$(pwd)/browser/capture-smoke.test.mjs,dst=/app/browser/capture-smoke.test.mjs,readonly" \
+  --entrypoint xvfb-run dockdrops-browser:local \
+  --server-args="-screen 0 1100x850x24 -nolisten tcp" node --test browser/capture-smoke.test.mjs
+```
+
+Keep `--init`: Xvfb's startup signalling requires it when launched this way in a container.
 
 The complete image build also runs the test and install-distribution tasks:
 

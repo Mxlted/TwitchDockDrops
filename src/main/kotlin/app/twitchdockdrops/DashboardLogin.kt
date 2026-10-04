@@ -39,12 +39,16 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
                     var submitted = 0
                     while (isActive) {
                         val admission = runtime.browserLoginStatus(ticket)
-                        if (admission == "failed") error("Verification rejected")
+                        if (admission == "failed") throw LoginFailure("Twitch rejected account or Drops verification. Retry sign-in using the desktop helper; saved credentials were preserved.")
                         val response = request("status")
                         val state = response["state"]?.jsonPrimitive?.content
                         when (state) {
                             "interactive", "starting", "capturing", "ready" -> publish(id, state)
-                            "failed" -> error("Browser failed")
+                            "failed" -> throw LoginFailure(when (response["error"]?.jsonPrimitive?.content) {
+                                "login_timeout" -> "Twitch sign-in timed out. Start again and finish Twitch verification within eight minutes."
+                                "capture_failed" -> "Twitch login did not yield verified Drops access. Complete Twitch verification before Finish sign-in, or try the desktop helper."
+                                else -> "The login browser stopped. Check the browser container and retry sign-in."
+                            })
                             else -> error("Unexpected browser state")
                         }
                         val sequence = response["sequence"]?.jsonPrimitive?.intOrNull ?: 0
@@ -61,6 +65,7 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
                         delay(if (state == "ready") 5_000 else 750)
                     }
                 } catch (error: CancellationException) { throw error }
+                catch (error: LoginFailure) { publish(id, "failed", error.message.orEmpty()) }
                 catch (_: Throwable) {
                     publish(id, "failed", "Dashboard browser or Twitch verification failed. Retry sign-in, or use the desktop helper. Check that the browser service is running.")
                 } finally {
@@ -71,6 +76,8 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
             }
         }
     }
+
+    private class LoginFailure(message: String) : RuntimeException(message)
 
     @Synchronized private fun publish(id: String, state: String, error: String = "") {
         if (status.id == id) status = View(id, state, error)

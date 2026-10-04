@@ -61,8 +61,8 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
   renewal but the ticket remains valid until expiry or revocation. Anyone with dashboard access can
   start pairing, so this does not add user authentication to trusted-LAN mode.
 - The helper uses only its own temporary browser profile. Interactive login has no debugging port;
-  headless capture binds the browser control port to loopback with an ephemeral port. Other local
-  processes under the same user can access that profile/control channel. Normal exit deletes the
+  regular-browser capture binds the browser control port to loopback with an allocated nonzero port.
+  Other local processes under the same user can access that profile/control channel. Normal exit deletes the
   profile; crashes or forced termination may leave it in the OS temporary directory. Keep the helper
   computer trusted. HTTP uploads are restricted to private/loopback addresses; otherwise use verified
   HTTPS. TLS verification and redirect protection remain enabled.
@@ -137,6 +137,10 @@ does not fit the deployment. Do not grant privileged mode or mount the miner vol
 The temporary profile is on a 512 MiB tmpfs and is removed on normal cancellation/exit; container removal
 also discards it. Memory, shared memory, and process counts are bounded. Downloads are denied, arbitrary
 CDP/navigation commands are not relayed, and credentials are not included in browser process arguments.
+After Finish sign-in, the same headed browser remains in the isolated companion for capture and
+renewal. Its viewer/input routes are disabled outside interactive login. The network observer retains
+only bounded issuance and successful campaign evidence, and forwards only the existing allowlisted
+context. Error codes are mapped to fixed public messages; raw browser diagnostics are never relayed.
 The public viewer returns only fixed status fields and bounded JPEG frames with `no-store`; its
 mutation routes retain normal Host/Origin, JSON, and size checks. Passwords entered into this viewer
 traverse the dashboard connection, so trusted-LAN HTTP has the same local-network exposure as other

@@ -94,8 +94,9 @@ preserved credential while authorization is active. Explicit session reset still
 
 The 2026-10-04 upstream review covers rangermix/TwitchDropsMiner through `1182d0172458` (v2.1.1).
 The desktop fallback uses a root-owned Node helper modeled on upstream's browser-context
-capture. It uses a temporary native Chromium profile for interactive Twitch login, then short headless
-captures for renewal. It correlates issued integrity tokens with successful authenticated campaign
+capture. It uses a temporary native Chromium profile for interactive Twitch login, then regular headed
+browser captures for renewal, with a nonzero loopback debugging port. It correlates issued integrity
+tokens with successful authenticated campaign
 responses and transfers only allowlisted request headers, user agent, and issuance/expiry timestamps.
 The JVM validates the web OAuth client/account and both Inventory and Campaigns queries before atomic
 encrypted save. Each helper lease binds to the first accepted account. Renewal goes through the same
@@ -121,11 +122,19 @@ GraphQL bodies are not read. Other command errors retain only the method and num
 command that opens and claims an admission lease atomically; neither pairing code nor ticket enters
 the public state. A coroutine serializes companion startup, status/context transfers, and cleanup.
 The worker opens a headed Chromium browser under Xvfb. The UI relays JPEG frames and a bounded set of
-click, text, scroll, and key commands. Finish sign-in closes that browser, then invokes the same
-headless capture routine used by the desktop helper. The JVM submits each numbered capture once
+click, text, scroll, and key commands. Capture starts before the login page so proof issued during
+sign-in is retained. Finish sign-in navigates that same browser to Drops campaigns; it does not close
+the authenticated browser or change to a headless user agent. The JVM submits each numbered capture once
 through `LocalMinerRuntime`, acknowledges it only after validation succeeds, and permits renewal
 only for the original account. No scheduling of mining, campaigns, heartbeats, or claims moves to
 the companion. A missing context during renewal does not acknowledge the previous capture again.
+The capture stream only queues relevant OAuth-context request, response and completion events,
+excluding preflights and unrelated assets/telemetry. Completed non-campaign evidence is discarded;
+at most 16 successful campaign requests and 16 issued proofs are retained. Initial capture has a
+two-minute deadline and reloads campaigns every 30 seconds if proof and successful campaign data
+have not yet matched. The headed browser stays alive for renewal, accepting only a different verified
+proof before another upload. The eight-minute interactive deadline does not close an accepted browser.
+Fixed browser-failure codes distinguish login timeout and capture failure without forwarding diagnostics.
 
 Public browser endpoints explicitly serialize only a view ID, state/error, or JPEG image. The worker's
 private status can include captured context but is never proxied wholesale. Worker routes reject

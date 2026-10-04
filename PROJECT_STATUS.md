@@ -12,7 +12,10 @@ changes.
 - [x] Desktop browser login, complete integrity context, protected pairing, and helper-driven renewal
 - [x] Optional isolated Docker browser service and dashboard login chooser with desktop fallback
 - [x] Recoverable Chromium response-body capture failures no longer abort the desktop helper
-- [ ] Live Twitch verification of browser login, renewal, earning, and claims
+- [x] Dashboard Finish retains the authenticated browser and observes proof before login
+- [x] Linux container capture/navigation and renewal verified with offline synthetic Chromium traffic
+- [x] Live Twitch dashboard login and authenticated campaign loading on Linux Docker
+- [ ] Live Twitch verification of unattended browser renewal, earning, and claims
 - [x] Compact reward companion panel sits beside desktop campaigns and below the list on smaller screens
 - [x] Open Reward Campaigns are visible in a separate Show/Hide panel with dates and reward names
 - [x] Reward listings refresh with inventory without entering the mining selector or claim runtime
@@ -76,6 +79,37 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Finish sign-in capture repair - 2026-10-04
+
+- Investigated the report that Twitch accepts login but Finish never reaches Connected. The old
+  worker closed the authenticated browser and started headless Chromium. It also began observing
+  issuance only after login. The revised worker observes before login and keeps that same headed
+  Chromium, device context and user agent through Finish and renewal. The native helper also uses
+  regular browser capture with a nonzero debugging port, consistent with upstream's current helper.
+- Compared rangermix's `src/auth/login_helper.py`, `session_helper.py`, `browser_session.py`, and
+  [auth investigation #118](https://github.com/rangermix/TwitchDropsMiner/issues/118), plus the original
+  DevilXD project and Twitch's OAuth documentation. OAuth success alone is insufficient evidence of
+  private campaign access; the existing independent account/Inventory/Campaigns checks remain required.
+- The long-lived observer filters out unrelated assets, telemetry and preflights, clears unsuccessful
+  completed requests, bounds recent evidence, retries campaign navigation, and accepts only a different
+  proof for renewal. Capture times out after two minutes with fixed retry guidance. The interactive
+  eight-minute timeout no longer controls the accepted browser's lifetime. No public state schema changed.
+- Root `test installDist` with the repository-local JDK 21: **170 tests passed**, no failures/errors.
+  Node regression suite: **30 tests passed**, including pre-Finish proof, bounded traffic, renewal,
+  cancellation and server acceptance. The Linux/Xvfb offline integration test passes both initial
+  capture and distinct proof renewal through actual Chromium/CDP with networking disabled.
+- Both Compose images build successfully on Docker Desktop's Linux/amd64 engine; the app image runs
+  root `clean test installDist`. Isolated Compose deployment on loopback port 18080 passes health,
+  dashboard Start/Finish mutations, and the missing-login capture timeout. Non-root/read-only/drop-all/
+  no-new-privileges protections are retained. The test volume is separate from operator data.
+- Operator documentation now includes Debian/Proxmox LXC prerequisites and a reproducible offline
+  browser test. The actual Proxmox host and unattended real-account renewal remain unverified.
+- The Android reference remains clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
+- The user completed a real Twitch login in the isolated Linux Docker viewer. The public login
+  status reached `ready`, runtime account state was `loggedin` with browser authentication, and
+  **143 campaigns** loaded with no runtime error. Mining remained stopped. This verifies initial
+  account/Inventory/Campaigns acceptance; unattended renewal, earning and claims were not exercised.
 
 ## Dashboard login and helper repair - 2026-10-04
 
@@ -614,15 +648,16 @@ root build.
 
 ## Known external risks
 
-- Fresh Android-client device authorization can be rejected by Twitch. The new browser helper avoids
-  that endpoint, but live account login, integrity renewal, earning, and claims remain unverified.
+- Fresh Android-client device authorization can be rejected by Twitch. Dashboard browser login now
+  has live account/campaign evidence on Linux Docker; desktop-helper account acceptance, unattended
+  integrity renewal, earning, and claims remain unverified.
   Renewal requires either the optional browser service or the desktop helper to stay running; reconnect
   after server/browser restart or a failed renewal. Durable browser renewal cookies/seeds, Firefox,
   popup-based social sign-in in the dashboard viewer, and upstream-helper protocol compatibility are
   not implemented. Native browser checks were on Windows. Different browser/miner network
   routes or Twitch browser challenges can reject capture or server-side verification.
-- Docker image build/runtime for the browser-login follow-up could not be verified because this host
-  has no available Docker daemon. Compose configuration and the packaged JVM were verified separately.
+- Linux/amd64 Docker image build/runtime and offline Chromium capture now pass on Docker Desktop.
+  The user's Debian/Proxmox LXC deployment and unattended real-account renewal are still unverified.
 - Reward-campaign visibility has fixture coverage and public Twitch client schema inspection, but
   has not been verified with an authenticated real-account reward listing. Twitch's private persisted
   query can change. These campaigns are view-only: reward progress, automatic earning/claiming, and

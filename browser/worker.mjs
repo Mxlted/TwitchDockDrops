@@ -1,12 +1,11 @@
 // Private browser companion. No miner volume, saved credentials, or public listening port.
 import {createServer} from 'node:http';
-import {createServer as createPortReservation} from 'node:net';
 import {mkdtemp, chmod, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve, dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
-import {Cdp, capture, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
+import {Cdp, BrowserCapture, browserPort, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
 
 const executable = process.env.DOCKDROPS_CHROMIUM || '/usr/bin/chromium';
 // This browser is confined by its own non-root, read-only container without the miner volume.
@@ -29,13 +28,19 @@ export class BrowserWorker {
   constructor(options = {}) { this.session = null; this.executable = options.executable || executable; this.browserArgs = options.browserArgs || browserArgs; }
   status() {
     const s = this.session;
-    return s ? {state:s.state, sequence:s.sequence, ...(s.context ? {context:s.context} : {})} : {state:'idle',sequence:0};
+    return s ? {state:s.state, sequence:s.sequence, error:s.error || '', ...(s.context ? {context:s.context} : {})} : {state:'idle',sequence:0};
   }
   async start(id) {
     await this.cancel();
     const s = {id, state:'starting', stop:new AbortController(), sequence:0, context:null, cdp:null, child:null, profile:null};
     this.session = s;
-    s.task = this.run(s).catch(() => { if (!s.stop.signal.aborted) s.state = 'failed'; }).finally(async () => {
+    s.task = this.run(s).catch(() => {
+      if (!s.stop.signal.aborted) {
+        // Fixed codes only; CDP errors and upstream responses may contain credentials.
+        s.error = s.state === 'interactive' ? 'login_timeout' : s.state === 'capturing' ? 'capture_failed' : 'browser_failed';
+        s.state = 'failed';
+      }
+    }).finally(async () => {
       await this.closeBrowser(s);
       // Only delete the profile created by this invocation, under the resolved temporary root.
       if (s.profile && dirname(s.profile) === resolve(tmpdir()) && s.profile.startsWith(join(tmpdir(),'dockdrops-browser-'))) {
@@ -49,10 +54,7 @@ export class BrowserWorker {
     await chmod(s.profile,0o700);
     // Use an allocated nonzero port for the interactive browser, as upstream does. Chrome treats
     // port zero as automated execution. This viewer does not inject navigator overrides.
-    const reservation = createPortReservation();
-    await new Promise((resolve,reject) => { reservation.once('error',reject); reservation.listen(0,'127.0.0.1',resolve); });
-    s.port = reservation.address().port;
-    await new Promise(resolve => reservation.close(resolve));
+    s.port = await browserPort();
     s.stop.signal.throwIfAborted();
     s.child = await startBrowser(this.executable,s.profile,[...this.browserArgs,'--remote-debugging-address=127.0.0.1',`--remote-debugging-port=${s.port}`,
       '--disable-dev-shm-usage','--window-size=1100,850','--disable-extensions','about:blank']);
@@ -70,16 +72,27 @@ export class BrowserWorker {
     }
     if (!ready) throw Error('Browser launch timed out');
     const target = await (await fetch(`http://127.0.0.1:${s.port}/json/new?about:blank`,{method:'PUT',redirect:'error',signal})).json();
-    s.cdp = await Cdp.open(target.webSocketDebuggerUrl,s.port,signal);
+    // The eight-minute deadline covers interactive login only. The accepted browser must
+    // stay connected for renewal after that deadline has elapsed.
+    s.cdp = await Cdp.open(target.webSocketDebuggerUrl,s.port,s.stop.signal);
     await s.cdp.command('Browser.setDownloadBehavior',{behavior:'deny'});
     await s.cdp.command('Emulation.setDeviceMetricsOverride',{width:1100,height:760,deviceScaleFactor:1,mobile:false});
+    s.capture = await BrowserCapture.start(s.cdp);
     await s.cdp.command('Page.navigate',{url:'https://www.twitch.tv/login'});
     s.state = 'interactive';
-    while (!s.finished) { await sleep(200,undefined,{signal}); }
+    while (!s.finished) {
+      if (s.capture.failure) throw s.capture.failure;
+      await sleep(200,undefined,{signal});
+    }
     s.state = 'capturing';
-    await this.closeBrowser(s);
+    await this.maintainSession(s);
+  }
+  async maintainSession(s) {
+    let previousToken = null;
     while (!s.stop.signal.aborted) {
-      s.context = await capture(this.executable,s.profile,s.stop.signal,false,this.browserArgs);
+      // Preserve the actual logged-in browser, user agent, SDK state and observed issuance.
+      // Switching to headless here can make a successful Twitch login fail Drops integrity.
+      s.context = await s.capture.wait(s.stop.signal,previousToken);
       s.sequence++;
       s.state = 'capturing';
       const deadline = Date.now() + 120000;
@@ -88,9 +101,15 @@ export class BrowserWorker {
         await sleep(500,undefined,{signal:s.stop.signal});
       }
       s.state = 'ready';
-      const seconds = Math.max(15,Math.min(1800,Math.floor((s.context.expires_at-Date.now()/1000)/2)));
+      previousToken = s.context.headers['client-integrity'];
+      const renewAt = s.context.expires_at * 1000 - 90000;
       s.context = null;
-      await sleep(seconds*1000,undefined,{signal:s.stop.signal});
+      // The live page can renew early. Otherwise reload near expiry; do not resubmit the
+      // same proof every few seconds and repeatedly interrupt the mining lifecycle.
+      while (Date.now() < renewAt && !s.capture.observation.bundle(s.capture.userAgent,previousToken)) {
+        if (s.capture.failure) throw s.capture.failure;
+        await sleep(Math.min(15000,renewAt-Date.now()),undefined,{signal:s.stop.signal});
+      }
       s.state = 'capturing';
     }
   }
