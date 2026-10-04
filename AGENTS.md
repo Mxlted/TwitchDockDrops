@@ -159,6 +159,29 @@ and state material uncertainty. Do not invent a repository wrapper or use Androi
 Private Twitch behavior requires current implementation/reference evidence, not assumptions from public
 API docs. Record meaningful dependency/version changes in the relevant project docs.
 
+## Docker Desktop on this Windows host
+
+Docker Desktop was verified installed and running on 2026-10-04: Desktop 4.93.0, Engine 29.8.1,
+Compose v5.5.1, with a reachable Linux engine in the `desktop-linux` context. Its installation is
+`%LOCALAPPDATA%\Programs\DockerDesktop`; these are observed host facts, not project version requirements.
+
+Before declaring Docker unavailable or skipping container verification:
+
+1. Check Docker Desktop itself, not just `Get-Command docker`. Inspect the observed installation above
+   and the standard `%ProgramFiles%\Docker\Docker` location for `Docker Desktop.exe`; check the
+   `Docker Desktop` and `com.docker.backend` processes. Installed, running, and engine-ready are separate states.
+2. If `docker` is absent from PATH, use `resources\bin\docker.exe` beneath the discovered installation.
+   In PowerShell invoke it with `& $dockerCli`; do not reinstall Docker or change global PATH merely
+   because the current shell cannot resolve the command.
+3. Run `version`, `compose version`, and `context show` through that CLI. A client version alone does
+   not prove engine connectivity. Inspect the selected context before assuming it is local; do not
+   silently switch contexts or target another daemon.
+4. Distinguish sandbox/executable or named-pipe access denial from a missing installation or stopped
+   engine. Retry required read-only checks through the permitted approval flow when blocked. Report
+   the actual failure if access remains unavailable; do not label Docker Desktop as absent.
+
+Recheck readiness when container work starts; this dated observation does not guarantee future state.
+
 ## Verification by change
 
 Use the union of applicable rows. Add focused regression tests for bugs and nontrivial settings,
