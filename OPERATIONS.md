@@ -41,6 +41,34 @@ same command. The `twitch-dock-drops-data` volume keeps its name and contents. A
 network may remain after upgrading; do not delete the data volume. Explicit container/network names
 assume one instance per Docker host; override those names for multiple instances.
 
+### Deployment branch
+
+`main` is the full development repository. `deployment` is a deliberately published server snapshot
+with the application, browser service, Docker/Compose files, Gradle build inputs, ignore rules, and
+license notices. JVM tests stay because the Docker build runs them. Documentation, screenshots,
+optional test harnesses, and all `.env` files are omitted.
+
+For a new checkout (the destination must be absent or empty):
+
+```bash
+git clone --single-branch --branch deployment https://github.com/Mxlted/TwitchDockDrops.git /opt/TwitchDockDrops
+```
+
+Place your server's local `.env` in that checkout. To update it:
+
+```bash
+cd /opt/TwitchDockDrops
+git pull --ff-only
+docker compose -f compose.yaml -f compose.browser.yaml up --build -d
+```
+
+An existing Git checkout can switch with `git fetch origin` followed by
+`git switch --track origin/deployment`. Preserve local edits before switching; uploaded folders
+without a `.git` directory need a Git checkout first. Ignored `.env` files remain local.
+
+Changes on `main` do not automatically publish to `deployment`. Refresh the deployment snapshot
+deliberately, retaining its exclusions; do not merge the full development tree into the server branch.
+
 ### Debian Docker inside Proxmox LXC
 
 Use a Debian container with Docker Engine and the Compose plugin installed following

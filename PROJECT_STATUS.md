@@ -5,6 +5,7 @@ changes.
 
 ## Implementation checklist
 
+- [x] Published `deployment` branch keeps server build/runtime inputs and excludes environment files
 - [x] Compact Overview/Settings account card shows the signed-in username, ID, and sign-in method
 - [x] Public username survives encrypted-session restore, with legacy ID fallback and guarded enrichment
 - [x] Device polling accepts Twitch message-based replies and keeps transient HTTP failures retryable
