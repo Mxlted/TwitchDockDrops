@@ -1,213 +1,217 @@
 # AGENTS.md
 
-## Mission
+## Scope and priorities
 
-This repository contains an independent headless JVM host, web UI, and Docker Compose deployment for
-an unofficial Twitch Drops miner. `TwitchDropsMinerAndroid` is maintained in a separate repository as
-the behavioral reference. An optional local checkout at `TwitchDropsMinerAndroid/` is ignored by Git
-and Docker.
+This is the independent JVM host, web dashboard, and Docker deployment for an unofficial Twitch
+Drops miner. Work in this root repository. The optional `TwitchDropsMinerAndroid/` checkout is a
+separate, ignored behavioral reference, not a build dependency. Android edits require an explicit
+user request.
 
-Preserve behavioral parity deliberately while keeping the projects isolated. Do not run an Android
-emulator inside Docker, invoke Android Gradle wrappers from root commands, add the optional Android
-checkout to this repository, or modify it unless the user explicitly requests Android work.
+Preserve user work, credentials, and runtime correctness. Keep changes within the requested scope.
+Follow explicit user instructions over workflow defaults here. Make routine implementation decisions
+autonomously; ask when missing information or authorization prevents safe progress. Missing optional
+references or tools do not justify weakening checks or changing architecture.
 
-## Required reading before edits
+## Start here
 
-Read these files before changing implementation:
+Before any file changes:
 
-- `README.md`
-- `OPERATIONS.md` for installation, networking, persistence, or environment-variable work
-- `ARCHITECTURE.md`
-- `PROJECT_STATUS.md`
-- `SECURITY.md` for API, storage, networking, container, or auth work
-- `TwitchDropsMinerAndroid/README.md` for miner behavior when the optional local reference is present
-
-Then inspect the files in the area being changed. Do not infer Twitch behavior from UI labels alone.
-
-## Git workflow
-
-The repository root is the authoritative Git worktree on branch `main`. The optional Android reference
-is a separate, ignored Git repository and must never be added as a submodule or ordinary tracked tree.
-Use Git throughout every task so changes remain attributable and recoverable.
-
-At the start of every task that may change files:
-
-1. Run `git status --short` and inspect the recent root history with `git log -5 --oneline`.
-2. If `TwitchDropsMinerAndroid/` exists locally, record its status and commit before root work with
+1. Run `git status --short`, `git branch --show-current`, and `git log -5 --oneline`. Record pre-existing
+   staged, unstaged, and untracked work; inspect relevant diffs before editing overlapping files.
+2. If `TwitchDropsMinerAndroid/` exists, record its status and HEAD with
    `git -C TwitchDropsMinerAndroid status --short` and `git -C TwitchDropsMinerAndroid rev-parse HEAD`.
-3. Treat all pre-existing modifications and untracked files as user work. Do not discard, overwrite,
-   stage, or commit them unless the task explicitly includes them.
+   Preserve that baseline, including existing changes.
+3. Read `README.md`, relevant `ARCHITECTURE.md` sections, and the current checklist, latest relevant
+   verification, and known limitations in `PROJECT_STATUS.md`. Read older history only as needed.
+4. Use the table below, then inspect affected implementation and tests before editing.
 
-While working:
+| Task area | Additional reading / entry points |
+| --- | --- |
+| Installation, networking, persistence, environment, containers | `OPERATIONS.md`, `SECURITY.md`, build/Compose files, `.env.example` |
+| API, authentication, storage, outbound requests | `SECURITY.md`; `WebServer.kt`, `StateJson.kt`, `AppEnvironment.kt`, affected adapters |
+| Mining, selection, watch progress, claims | Root runtime and Twitch client; optional Android `README.md` and corresponding reference source |
+| Dashboard, browser login, helper | Relevant web files and Node tests; `DashboardLogin.kt`, `browser/worker.mjs`, architecture/security browser sections |
+| Documentation only | Referenced files and commands; verify claims against current source without unrelated builds |
 
-- Use `git diff` to review the root changes at meaningful checkpoints and before verification.
-- Keep generated output, `.env`, `/data`, credentials, tokens, keys, sessions, logs, and Twitch
-  response captures untracked. Update `.gitignore` when a new local/generated artifact class appears.
-- Never use `git reset --hard`, force checkout, clean commands, history rewriting, or destructive
-  recovery unless the user explicitly requests it and the exact targets have been verified.
-- Never modify Git configuration, remotes, branches, tags, or submodule pointers unless the task
-  requires it. Never push, fetch, pull, publish, or open a pull request without explicit user
-  authorization.
-- Do not use Git commands in the root that recurse into, initialize, add, absorb, or rewrite the
-  optional Android checkout during ordinary root work.
-
-At the end of a completed change task:
-
-1. Review `git diff --check`, the complete relevant diff, and the verification results.
-2. If the optional `TwitchDropsMinerAndroid/` checkout exists, confirm it is still clean and remains
-   at its starting commit unless Android work was explicitly requested.
-3. Stage only files belonging to the task and create one focused local commit with an imperative,
-   descriptive message. If unrelated user changes prevent a safe commit, leave the task changes
-   uncommitted and explain why instead of mixing them.
-4. Run `git status --short` after the commit and report the commit ID plus any remaining changes.
-
-If the user explicitly asks to leave changes uncommitted, to split commits differently, or to avoid a
-commit, follow that request. Do not amend or replace an existing commit unless the user explicitly
-asks for history editing.
+Source, tests, and configuration establish implemented behavior; status records establish what was
+verified. Investigate disagreements and correct task-related documentation. Do not infer Twitch
+behavior from UI labels or treat historical test results as verification of new changes.
 
 ## Repository map
 
-- `build.gradle`, `settings.gradle` — root JVM application build
-- `src/main/kotlin/app/twitchdockdrops/` — server bootstrap, API, serialization
-- `src/main/kotlin/com/nathan/.../data/` — JVM replacements for Android-only repositories/providers
-- `src/main/resources/web/` — framework-free web UI
-- `src/test/` — root host tests
-- `TwitchDropsMinerAndroid/` — optional ignored local Android reference, never published or built
-- `Dockerfile`, `compose.yaml`, `.dockerignore` — container delivery
-- `OPERATIONS.md` — operator setup, networking, persistence, and maintenance guide
-- `docs/` — README showcase assets that must not contain real account data
-- root Markdown files — operator and agent handoff documentation
+- `build.gradle`, `settings.gradle`: root JVM build; JDK 21, Gradle 9.5.1.
+- `src/main/kotlin/app/twitchdockdrops/`: bootstrap, environment, API, redacting serializer, dashboard
+  login bridge, atomic-file and safe-text utilities.
+- `src/main/kotlin/com/nathan/twitchdropsminer/android/`: root-owned models, JVM data adapters, Twitch
+  transport, and runtime. The legacy package name is intentional.
+- `src/main/resources/web/`: framework-free dashboard, theme initialization, browser-login viewer,
+  and downloadable `login-helper.mjs`.
+- `browser/`: optional Chromium companion, Dockerfile, and offline capture smoke test.
+- `src/test/kotlin/`, `src/test/js/`: JVM and Node regression suites.
+- `Dockerfile`, `compose.yaml`, `compose.browser.yaml`, `.dockerignore`: container delivery.
+- `docs/`: public showcase assets; use synthetic data, never real account/login captures.
 
-## Build-isolation invariant
+`main` is the development branch. `deployment` is a separately published minimal server snapshot;
+normal development does not update it. Follow `OPERATIONS.md` when explicitly asked to refresh it,
+retaining its exclusions rather than merging the whole development tree.
 
-The root project owns these JVM miner files under `src/main/kotlin/com/nathan/twitchdropsminer/android/`:
+## Isolation and Git discipline
 
-- `data/model/AppSettings.kt`
-- `data/model/AutoModePriority.kt`
-- `data/model/BackendModels.kt`
-- `data/model/RuntimeModels.kt`
-- `data/twitch/TwitchApiClient.kt`
-- `runtime/DropClaimRuntime.kt`
-- `runtime/LocalMinerRuntime.kt`
+- Root Gradle and Docker builds must never read, sync, execute, generate, or write anything under
+  `TwitchDropsMinerAndroid/`. Never invoke its Gradle wrappers from root commands, run an Android
+  emulator in Docker, or add the checkout as tracked files or a submodule. Keep the entire directory
+  excluded from Git and the Docker context. Read-only manual parity inspection is allowed.
+- Compile the root-owned `AppSettings.kt`, `AutoModePriority.kt`, `BackendModels.kt`, `RuntimeModels.kt`,
+  `TwitchApiClient.kt`, `DropClaimRuntime.kt`, and `LocalMinerRuntime.kt` directly. Apply parity changes
+  manually and document intentional differences; never synchronize trees as a build step.
+- Review `git diff` at meaningful checkpoints. Do not discard, overwrite, stage, or commit unrelated
+  user work. Avoid blanket staging; inspect staged and working-tree diffs.
+- Do not run root Git commands that initialize, absorb, or rewrite the optional Android checkout.
+- Never commit `.env`, `/data`, credentials, tokens, keys, sessions, logs, browser profiles, raw Twitch
+  captures, or generated output. Add ignore rules when introducing generated artifact classes.
+- Do not change Git configuration, remotes, branches, tags, or submodule pointers unless required by
+  the task. Never fetch, pull, push, publish, or open a PR without explicit user authorization.
+- Never use hard resets, forced checkout, clean commands, history rewriting, or destructive recovery
+  without an explicit request and verified targets. Do not amend an existing commit by default.
 
-The legacy package path is intentional. The root Gradle build must compile these root-owned files
-directly and must never read, sync, execute, generate, or write anything under
-`TwitchDropsMinerAndroid/`. The Docker context must continue to exclude the complete Android folder.
-Parity work is manual and explicit; Android changes require a separate user request.
+## Runtime and Twitch behavior
 
-## Runtime invariants
+- `LocalMinerRuntime` owns the authoritative `RuntimeSnapshot` and mining lifecycle. Keep commands
+  serialized and async results guarded by session/operation generations. Cancelled or superseded
+  work must not commit state, credentials, settings, logs, or counters.
+- Login completion, inventory refresh, channel selection/failover, watch heartbeats, unlinked probing,
+  and claims stay server-side. The API, dashboard, and browser companion must not become schedulers.
+- Preserve idempotent commands, bounded work/queues/retries, and coalesced refreshes. Test reset, stop,
+  replacement-login, and stale-completion races when changing lifecycle behavior.
+- Normalize settings with `AppSettings.normalized()` before persistence. Reset settings preserves
+  Twitch login and mining intent; reset session stops mining and clears session priorities/exclusions.
+  Shutdown preserves the saved Start/Stop intent.
+- Keep category priorities independent of current inventory. Use the server selector for Up next.
+  Open Reward Campaigns remain display-only, outside mining selection, watch totals, and claims.
+- Preserve campaign/drop windows, confirmed-progress supervision, failover, and claim retries.
+  Missing progress is not zero progress; failed or partial inventory is not an empty list.
+- Preserve credentials on inconclusive authentication/integrity failures. Only authoritative token
+  validation HTTP 401 proves invalidity; do not replay claims automatically on authentication failure.
+- Health reports local readiness, not Twitch reachability. Claim live Twitch success only for the
+  real-account flow exercised; fixtures and browser capture tests are separate evidence.
 
-- `LocalMinerRuntime` owns mining lifecycle and the authoritative `RuntimeSnapshot`.
-- Do not create a parallel scheduler in the API or browser.
-- Device login, inventory refresh, watch heartbeats, channel selection/failover, unlinked progress
-  probing, and claims must remain server-side.
-- Persist settings only after `AppSettings.normalized()`.
-- Never expose access tokens, device-code secrets, encryption keys, or raw session files through API,
-  logs, UI, errors, tests, or screenshots.
-- Reset settings must not sign out Twitch. Reset session must stop mining and clear session-scoped
-  priorities/exclusions.
-- Health reflects local process readiness, not Twitch reachability.
+## API, authentication, and persistence
 
-## API conventions
+- Keep browser and public API same-origin. Validate Host on every route and Origin on every mutation;
+  do not trust forwarded headers to redefine that boundary.
+- Prefer small, reviewable files and explicit routing. Never expose real credentials, encryption keys,
+  raw sessions, or upstream response bodies through public APIs, logs, errors, fixtures, or screenshots.
+- Read-only routes use GET; mutations use POST/PUT with `application/json`, strict known fields/types,
+  bounded values, and the 64 KiB body limit. Return stable JSON errors with an `error` field and
+  appropriate HTTP status. Keep raw upstream diagnostics out of public errors.
+- Commands return promptly while Twitch work runs on application coroutines. Acknowledge persistence
+  mutations only after successful atomic storage. Bound upstream reads, concurrency, queues, and SSE clients.
+- Use explicit redacting serializers, never reflective domain serialization. State/events must exclude
+  OAuth tokens, device-code secrets, helper tickets, browser context, keys, and filesystem paths.
+  Preserve the narrowly scoped pairing-code and login-frame responses defined in `ARCHITECTURE.md`.
+- Update client, serializer tests, and `ARCHITECTURE.md` together when changing the state contract.
+  Keep Twitch/user text escaped and outbound credential destinations narrowly allowlisted.
+- Replacement login preserves encrypted credentials until validated atomic replacement or explicit
+  reset. Browser renewal remains bound to the original account and revocable lease.
+- Keep browser control internal to loopback, with fixed routes, bounded input, and stale-view rejection.
+  Never expose arbitrary navigation/CDP or proxy private worker status wholesale. Preserve the
+  authenticated browser through Finish sign-in and renewal; viewer input/frames are interactive-only.
+- Never log login input, frames, cookies, tickets, or captured headers. Keep input/frames and tickets
+  out of durable storage, browser profiles ephemeral, and accepted context inside the encrypted session.
+  Use synthetic credentials and responses in tests.
+- `/data` is the app container's only durable writable path. Preserve atomic settings/session writes,
+  AES-GCM authentication, 32-byte key validation, owner-only permissions where supported, and recovery
+  of corrupt/key-mismatched files without silently overwriting recoverable credentials.
+- Preserve non-root containers, dropped capabilities, read-only roots, `no-new-privileges`, and app
+  health checks. Document concrete reasons for security changes in `SECURITY.md`. The optional browser
+  receives no miner volume/secrets or Docker socket; its profile stays ephemeral.
+- Keep Compose's no-environment loopback default. `.env.example` explicitly opts into trusted LAN;
+  do not confuse it with the default. LAN admission accepts only literal private/link-local addresses
+  with matching HTTP Origin Host/port, never a public wildcard. LAN access is not authentication.
 
-- Keep browser and API same-origin.
-- Read-only routes use `GET`; mutations use `POST` or `PUT` with `application/json`.
-- Enforce the request-size limit and origin check on every mutation.
-- Return structured JSON errors with a stable `error` field and an appropriate status.
-- Command endpoints should return quickly; Twitch/network work belongs on application coroutines.
-- Every state payload must pass through the redacting serializer. Never serialize domain objects
-  reflectively.
-- If the state document changes, update the client, tests, and `ARCHITECTURE.md` together.
+## UI design and interaction
 
-## Persistence and security
+Keep the flat Apple/Anthropic-style dashboard with Twitch purple as its single primary accent.
 
-- `/data` is the only durable writable path in the container.
-- Use atomic replace for settings and session writes.
-- Preserve AES-GCM authenticated encryption and key length validation.
-- Keep generated key/session files owner-readable only where POSIX permissions are available.
-- Do not weaken the Compose loopback default, non-root user, dropped capabilities, read-only root,
-  `no-new-privileges`, or health check without documenting a concrete reason in `SECURITY.md`.
-- Preserve LAN mode as an explicit opt-in: accept only literal private/link-local addresses and require
-  LAN mutation origins to match the request Host and port. Never turn it into a public wildcard.
-- Never commit `.env`, volume data, credentials, tokens, keys, logs, or Twitch response captures.
-
-## UI design system
-
-The web client is a flat, modern dashboard in the Apple/Anthropic idiom with Twitch purple as its
-single accent. It is not a glassmorphism showcase.
-
-- Use the existing mist, paper, line, ink, muted, twitch, mint, lilac, peach, sky, and lemon tokens in
-  `app.css`. Each palette color has a `--*` tint for fills and a `--*-deep` for text/accents.
-  Twitch purple is the single primary accent: `--accent` (text-safe purple) and `--accent-tint` for
-  highlights, `--accent-fill` (#9146ff) for solid controls and progress. Mint is reserved for
-  live/success states, lemon for waiting, and danger tokens for errors and destructive actions.
-- Surfaces are opaque with 1px hairline borders and no drop shadows, blur, gradients, or ambient
-  decoration. Pop-over elements (dialog, toast) may use the one `--shadow-pop` token.
-- Typography is the system stack (SF Pro / Segoe UI Variable / Inter fallbacks) with tight tracking on
-  headings and 13–15px body copy; never smaller than 11px.
-- Preserve rounded (8–20px) controls, 2px accent focus rings, minimum 44px touch targets, and useful
-  empty states. Motion is limited to short opacity/color transitions.
-- Logged-out hero panels pair copy with a factual aside (steps or the device code), not artwork.
-  Authenticated views are functional panels: stats, the watch card, lists, and fact rows.
-- The header owns the global miner status pill and Start/Stop; do not duplicate them in views.
-- Views are addressed by URL hash (`#campaigns`); keep navigation going through `showView`.
-- Keep status meaning independent of color and meet accessible contrast.
-- Support desktop, tablet, and mobile layouts plus `prefers-reduced-motion`.
-- Do not add remote fonts, UI frameworks, icon packages, or build tooling without a strong reason.
-- Escape all Twitch/user-controlled text. Prefer DOM `textContent`; if templates are used, pass every
-  dynamic value through the shared escaping helper.
+- Reuse `app.css` mist, paper, line, ink, muted, twitch, mint, lilac, peach, sky, and lemon tokens and
+  their existing tint/deep variants. Use `--accent` for text, `--accent-tint` for highlights, and
+  `--accent-fill` (#9146ff) for solid controls/progress. Mint means live/success, lemon waiting, and
+  danger tokens errors/destructive actions; convey meaning with text as well as color.
+- Use opaque surfaces, 1px hairline borders, and no gradients, blur, ambient decoration, or surface
+  shadows. Dialogs/toasts may use `--shadow-pop`. Keep dark default and persisted light mode consistent.
+- Use the existing system font stack, tight heading tracking, 13–15px body text, and nothing below
+  11px. Preserve 8–20px rounding, 2px accent focus rings, 44px minimum touch targets, accessible
+  contrast, keyboard navigation, and reduced-motion support. Limit motion to short opacity/color changes.
+- Logged-out panels pair copy with factual steps/login information; authenticated views use functional
+  panels. The header owns global status and Start/Stop. Route hash navigation through `showView`.
+- Preserve focus, selection, in-progress edits, and scroll during state updates. Provide useful empty,
+  loading, error, and offline states at desktop, tablet, and mobile widths.
+- Prefer `textContent`; escape every dynamic template value through the shared helper. Validate link
+  destinations separately from escaping. Keep external navigation distinct from editing controls.
+- Do not add remote fonts, UI frameworks, icon packages, or build tooling without a concrete need.
 
 ## Documentation lookup
 
 For library, framework, SDK, API, CLI, cloud-service, Docker, Gradle, Kotlin, OkHttp, or coroutine
-questions, use the repository-provided Context7/`ctx7` workflow before relying on memory. Use current
-official documentation and record meaningful version changes in the relevant docs.
+questions, use available Context7 tools or `ctx7` before relying on memory. Resolve the library and
+query the relevant version's documentation. If unavailable or insufficient, use official documentation
+and state material uncertainty. Do not invent a repository wrapper or use Android tooling.
+Private Twitch behavior requires current implementation/reference evidence, not assumptions from public
+API docs. Record meaningful dependency/version changes in the relevant project docs.
 
-## Commands
+## Verification by change
 
-From the repository root:
+Use the union of applicable rows. Add focused regression tests for bugs and nontrivial settings,
+security, or lifecycle changes. Keep verification proportional; documentation-only edits do not need
+an application build. Never report an unavailable or skipped check as passed.
+
+| Changed area | Required checks |
+| --- | --- |
+| Documentation/instructions only | Verify referenced paths, commands, and claims; review Markdown and `git diff --check` |
+| JVM server, API, serializer, storage, miner core | Root Gradle tests and distribution build; isolated health and at least one mutation smoke check for server changes |
+| Web JavaScript or login helper/worker | Node regression suite and syntax checks on changed scripts; JVM checks too if contract/server changes |
+| Client HTML/CSS/interaction | Desktop and mobile visual inspection, both themes; affected empty, loading, logged-out, active, and error states; keyboard/focus checks |
+| Compose | Validate each affected base/merged configuration |
+| Dockerfile, dependencies, distribution | Build affected images; check health/runtime when behavior changes |
+| Browser capture/login | Relevant JVM and Node tests; offline Chromium smoke test from `OPERATIONS.md` when capture/navigation/renewal changes |
+
+Run from the root; Node tests need no package installation:
 
 ```powershell
-# Root JVM tests/build, when Gradle 9.5.1 is installed locally
-gradle clean test installDist
-
-# Compose validation and image build
-docker compose config
+gradle test installDist
+node --test src/test/js/*.cjs src/test/js/*.mjs
+node --check src/main/resources/web/app.js
+docker compose config --quiet
+docker compose -f compose.yaml -f compose.browser.yaml config --quiet
 docker compose build
-
-# Run locally through Compose
-docker compose up -d
-docker compose logs -f app
+docker compose -f compose.yaml -f compose.browser.yaml build
 ```
 
-Root commands must not invoke `TwitchDropsMinerAndroid/gradlew` or `gradlew.bat`.
+These are a command menu, not a requirement to run every command on every task. Use
+`gradle clean test installDist` for clean-build verification. Run `node --check` for other changed
+scripts too. Quiet Compose validation avoids printing interpolated secrets.
 
-## Verification requirements
+Use disposable data and an unused loopback port for smoke tests; never mutate a saved user session or
+reset live settings to test an endpoint. Compose has explicit container/network/volume names, so a
+different project name alone does not isolate it: override those resources or use a disposable local
+JVM host. Send the expected Origin and JSON headers and verify mutation results through state.
+Clean up only resources created by the task.
 
-Choose verification proportional to the change, but before marking implementation complete:
+For visual fixtures use `/?preview=active`, `/?preview=loggedout`, `/?preview=preparing`,
+`/?preview=code`, or `/?preview=expired`. Preview controls do not verify real mutations or Twitch
+behavior. See `OPERATIONS.md` for the offline Chromium test and deployment commands.
 
-1. Run root Gradle tests for server, API, serialization, storage, or shared-source changes.
-2. Verify the Android directory has no changes after root or Docker work.
-3. Run `docker compose config` for Compose changes.
-4. Build the image for Dockerfile, dependency, or install-distribution changes.
-5. Exercise the health endpoint and at least one mutation endpoint for server changes.
-6. Visually inspect desktop and mobile UI for client/CSS changes; check empty, loading, logged-out,
-   active, and error states when applicable.
+## Finish and handoff
 
-Do not claim live Twitch verification unless a real account flow was actually exercised.
-
-## Change discipline
-
-- Preserve unrelated user changes and the nested Android Git history.
-- Keep each completed task in a focused local Git commit unless the user requests otherwise.
-- Prefer small, reviewable files and explicit serializers over reflection or magic routing.
-- Update `PROJECT_STATUS.md` checkboxes and known limitations as work lands.
-- Update `README.md` whenever operator commands, ports, environment variables, or persistence behavior
-  changes.
-- Add focused tests for bug fixes and nontrivial settings/security behavior.
-
-## Definition of done
-
-A change is done when implementation, focused tests, operator docs, agent handoff docs, and visual or
-runtime verification agree. Known gaps must be written in `PROJECT_STATUS.md`, not left as implied
-future work.
+1. Review the complete task diff, `git diff --check`, and verification results. Compare the Android
+   checkout's status and HEAD with the starting baseline; do not try to clean pre-existing changes.
+2. Update `PROJECT_STATUS.md` when behavior, scope, verification evidence, or known limitations change.
+   Update `ARCHITECTURE.md` for contracts/design, `SECURITY.md` for trust boundaries, and `README.md` plus
+   `OPERATIONS.md` for operator commands, ports, environment, or persistence changes. Avoid unrelated
+   history rewrites and status churn for editorial-only edits.
+3. Stage only reviewed task files/hunks, inspect `git diff --cached`, and create one focused local
+   commit with an imperative descriptive message. Preserve unrelated staged work; if it cannot be
+   safely excluded, leave task changes uncommitted and explain why. Honor a user request not to commit.
+4. Run `git status --short`. Report changes, checks actually run and their outcomes, material unverified
+   areas, commit ID, and remaining user changes. Record implementation verification gaps in
+   `PROJECT_STATUS.md`; do not claim completion beyond the available evidence.
