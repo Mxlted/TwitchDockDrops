@@ -5,6 +5,11 @@ changes.
 
 ## Implementation checklist
 
+- [x] Device polling accepts Twitch message-based replies and keeps transient HTTP failures retryable
+- [x] OAuth validation checks client/account identity and preserves credentials on inconclusive rejection
+- [x] Pure GraphQL authentication/integrity errors trigger validation without replaying claims
+- [x] Special Events/IRL ACL participants can earn across categories through discovery and live rechecks
+- [ ] Browser-based fresh login, complete integrity context, and automated session renewal
 - [x] Compact reward companion panel sits beside desktop campaigns and below the list on smaller screens
 - [x] Open Reward Campaigns are visible in a separate Show/Hide panel with dates and reward names
 - [x] Reward listings refresh with inventory without entering the mining selector or claim runtime
@@ -68,6 +73,61 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Upstream review - 2026-10-04
+
+Reviewed [rangermix/TwitchDropsMiner at v2.1.1 / 1182d0172458](https://github.com/rangermix/TwitchDropsMiner/tree/1182d0172458),
+including the September auth migration and October 4 helper restoration.
+
+- [Android-session preservation](https://github.com/rangermix/TwitchDropsMiner/commit/ac82f0176b3d):
+  retain the Android client and reject mismatched validated clients without deleting credentials.
+  The earlier Smart TV switch from v1.3.1 was superseded; changing a client ID does not convert an
+  existing token or establish private Drops access.
+  Replacement authorization also retains the encrypted credential until successful atomic save;
+  Start/refresh is blocked during authorization and explicit reset still clears the session.
+- [v2.0 login migration](https://github.com/rangermix/TwitchDropsMiner/pull/124),
+  [v2.1 container browser](https://github.com/rangermix/TwitchDropsMiner/pull/145), and
+  [v2.1.1 desktop fallback](https://github.com/rangermix/TwitchDropsMiner/pull/154): reviewed, not ported.
+  They require an interactive browser, integrity context capture, protected helper admission,
+  server-side browser verification, and renewable credential storage. This patch preserves the
+  independent non-root headless JVM deployment and does not claim equivalent new-login support.
+- Adopted upstream's distinction between pure pre-execution GraphQL auth errors and partial results.
+  HTTP-200 `invalid oauth token` / `failed integrity check` errors now validate OAuth before expiry;
+  partial data is preserved and claims are not automatically replayed by the transport. This host
+  retains its existing runtime retry/claim-cooldown ownership rather than adding another retry loop.
+- The comparison also found the local device parser rejected Twitch's documented
+  [`message: authorization_pending`](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth/#device-code-grant-flow).
+  Both `message` and OAuth `error` forms now work; 429/5xx remains transient, invalid device codes and
+  device-request 4xx rejections other than 429 are terminal, and upstream error text/JSON parser
+  excerpts do not enter OAuth diagnostics.
+  [Token validation](https://dev.twitch.tv/docs/authentication/validate-tokens/) uses HTTP 401 as the
+  authoritative invalid-token signal; 403 and malformed/client-mismatched results preserve storage.
+- Ported the [Special Events/IRL eligibility fix](https://github.com/rangermix/TwitchDropsMiner/pull/105)
+  using category IDs and explicit channel ACL membership. Discovery, the compatible-channel picker,
+  and live rechecks share the exception; actual stream category attribution remains intact. Ordinary
+  campaigns retain category matching. Campaign category IDs are server-only; the browser state schema
+  is unchanged.
+- Direct Spade delivery, fresh heartbeat payloads, prerequisite-aware drops, and manual category
+  priority ordering already exist here. Upstream GUI, Telegram, drop-history/export, and dashboard
+  password features were not copied as part of these compatibility fixes.
+
+### Verification
+
+- Root Gradle 9.5.1 / repository-local JDK 21 `test installDist`: 156 tests passed, zero failures,
+  errors, or skips. Added 16 regressions for OAuth response forms/rejection/diagnostic safety,
+  validation identity/status handling, GraphQL auth/partial-data behavior, preserved credentials,
+  special-category mapping/ACL boundaries, and the runtime channel recheck.
+- The initial sandbox build could not resolve the Kotlin plugin; the authorized cache/network build
+  passed without changing dependencies. A new lifecycle test initially assumed all device-request
+  failures were terminal; inspection exposed unconditional retry. Explicit authorization rejections
+  now stop immediately while transient failures retain backoff. The final complete suite passed.
+- Isolated packaged JVM on `127.0.0.1:18789`: health returned HTTP 200 with `status: ok`, inventory
+  refresh returned HTTP 202, and state returned HTTP 200 without private credential fields. The
+  process was stopped after verification; disposable data remains only under ignored `.gradle/`.
+- `git diff --check` passed. No browser client/CSS, state schema, dependencies, Dockerfile, Compose,
+  or distribution configuration changed, so visual QA and container rebuilds were not repeated.
+- Android reference remained clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. The existing untracked
+  root `CLAUDE.md` was left untouched. No live Twitch account login, earning, or claim was exercised.
 
 ## Verification record - 2026-09-29 (compact reward layout)
 
@@ -484,6 +544,10 @@ root build.
 
 ## Known external risks
 
+- Fresh Android-client device authorization can be rejected by Twitch. Browser login, integrity
+  context capture/renewal, and upstream desktop-helper compatibility are not implemented. Preserving
+  saved Android sessions and fixing response parsing does not resolve this upstream restriction.
+  No live account login, cross-category earning, or claim was exercised for the 2026-10-04 port.
 - Reward-campaign visibility has fixture coverage and public Twitch client schema inspection, but
   has not been verified with an authenticated real-account reward listing. Twitch's private persisted
   query can change. These campaigns are view-only: reward progress, automatic earning/claiming, and

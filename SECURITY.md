@@ -33,12 +33,22 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
 - The app uses Twitch device authorization and never receives a Twitch password.
 - API responses never include the OAuth access token or encryption key.
 - Session data is encrypted with AES-256-GCM before it is written to `/data/session.enc`.
+- Replacement login keeps the old encrypted credential until the new session is validated and
+  atomically saved. Mining and refresh cannot use it while authorization is active; explicit reset
+  still removes it. An interrupted or failed replacement can therefore restore the previous session
+  after restart.
 - When Twitch rejects a stored token as invalid, the runtime cancels session work and deletes the
   encrypted credential before exposing the expired state to the browser.
-- A 401/403 from authoritative token validation can expire a session. A Twitch GraphQL 401/403 first
+- Only HTTP 401 from authoritative token validation expires a session. A validation 403, temporary
+  failure, malformed identity, or client mismatch preserves the encrypted credential. Validation
+  checks the Android client ID and a positive numeric user ID; changing a client ID cannot convert
+  a token. A Twitch GraphQL 401/403 or pure HTTP-200 authentication/integrity error first
   re-validates the token and expires the session only when validation confirms it is invalid. A watch
   beacon or HTML/JavaScript watch-configuration rejection cannot; those results invalidate or retry
   watch configuration while preserving the stored OAuth session.
+- Device OAuth errors and JSON parsing failures use fixed diagnostics, never raw upstream text.
+  The upstream browser-login/helper/renewal system is not part of this host; do not upload browser
+  cookies, browser session bundles, or upstream helper credentials to it.
 - By default, a random key is stored alongside the encrypted session in the private named volume.
   This protects accidental disclosure of the session file alone, but not theft of the complete
   volume by a host administrator.

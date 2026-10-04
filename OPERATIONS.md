@@ -40,6 +40,22 @@ Repeated **Connect Twitch** actions do not replace a device code that is still b
 polled. Use **Request a new code** only when you want to cancel the displayed attempt and obtain a
 replacement.
 
+### Current Twitch login limitation
+
+Twitch may reject new device-code requests for the Android client used by this host. Updating the
+polling parser does not remove that upstream restriction. Keep a working encrypted session and its
+key; do not reset the session or delete the data volume to troubleshoot a temporary 403 or integrity
+error. Only an authoritative token-validation HTTP 401 clears an invalid saved credential.
+Starting a replacement login keeps the existing credential until the new login succeeds; explicit
+**Reset Twitch Session** still deletes it. Restarting after a failed replacement can restore the
+previous session.
+
+Upstream rangermix/TwitchDropsMiner v2.1.1 uses browser login, browser integrity context, and Chromium
+renewal, with an optional desktop helper. Those components are not implemented here, and its helper
+cannot connect to this dashboard. This host continues to offer device authorization, with no reliable
+fresh-login recovery when Twitch refuses that flow. See the dated review in
+[Project Status](./PROJECT_STATUS.md#upstream-review---2026-10-04).
+
 ## Everyday commands
 
 ```bash

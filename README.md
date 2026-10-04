@@ -123,6 +123,8 @@ or open `/?preview=active` on your instance. Preview controls do not change the 
   progress reporting.
 - Unlinked-campaign farming is optional and treated as speculative until Twitch confirms real progress.
 - Private Twitch behavior can change, so review the [Project Status](./PROJECT_STATUS.md) when troubleshooting.
+- Fresh device login may be rejected by Twitch. Preserve working saved sessions; upstream's newer
+  browser login and renewal are not yet available here. See [login limitations](./OPERATIONS.md#current-twitch-login-limitation).
 - Local activity logs can contain campaign and channel names; review them before sharing.
 
 ## Documentation

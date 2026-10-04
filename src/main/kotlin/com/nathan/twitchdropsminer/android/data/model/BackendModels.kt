@@ -103,7 +103,13 @@ data class Campaign(
     val drops: List<CampaignDrop> = emptyList(),
     val allowedChannels: List<Channel> = emptyList(),
     val selected: Boolean = false,
+    val gameId: String? = null,
 ) {
+    fun permitsCrossCategoryChannel(channel: Channel): Boolean =
+        gameId in setOf("509663", "509672") && allowedChannels.any {
+            it.id > 0 && it.id == channel.id && it.login.equals(channel.login, ignoreCase = true)
+        }
+
     val progress: Float
         get() = drops.watchProgressFraction()
 

@@ -197,7 +197,8 @@ class LocalMinerRuntime(
         waitingForNetwork = false
         val existingDeviceId = secureSessionStore.twitchSession()?.deviceId
         sessionGeneration += 1L
-        secureSessionStore.clear()
+        // Replace atomically only after a new login succeeds. A failed device request must not
+        // destroy an older credential (including one preserved because its key did not match).
         _snapshot.update {
             it.copy(
                 phase = RuntimePhase.Connecting,
@@ -266,6 +267,7 @@ class LocalMinerRuntime(
         if (command.persistIntent) {
             persistMiningIntent(requested = true)
         }
+        if (authJob?.isActive == true) return
         if (miningJob?.isActive == true) {
             return
         }
@@ -371,6 +373,7 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleRefreshInventory() {
+        if (authJob?.isActive == true) return
         if (miningJob?.isActive == true) {
             inventoryRefreshRequests.update { it + 1L }
             _snapshot.update {
@@ -525,6 +528,8 @@ class LocalMinerRuntime(
                         ensureCurrentAuthentication(authGeneration)
                     }
                 } catch (error: CancellationException) {
+                    throw error
+                } catch (error: DeviceAuthorizationException) {
                     throw error
                 } catch (error: Throwable) {
                     ensureCurrentAuthentication(authGeneration)
@@ -1715,10 +1720,10 @@ class LocalMinerRuntime(
         unlinkedProgressProbe: UnlinkedProgressProbe?,
     ): ChannelStatusApplication {
         val channelStatus = runCatchingCancellable {
-            twitchApiClient.fetchChannel(
+            twitchApiClient.fetchCampaignChannel(
                 session,
                 currentChannel.login,
-                currentCampaign.gameName,
+                currentCampaign,
             )
         }
         ensureCurrentOperation()

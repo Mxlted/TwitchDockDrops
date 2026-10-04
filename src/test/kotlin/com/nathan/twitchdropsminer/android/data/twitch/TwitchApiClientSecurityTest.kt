@@ -16,6 +16,76 @@ import okhttp3.mockwebserver.MockWebServer
 
 class TwitchApiClientSecurityTest {
     @Test
+    fun `validation forbidden and unavailable responses do not expire saved credentials`() {
+        MockWebServer().use { server ->
+            server.start()
+            for (code in listOf(403, 429, 503)) {
+                server.enqueue(MockResponse().setResponseCode(code))
+                val error = assertFailsWith<TwitchApiException> {
+                    runBlocking { client(server).validateAccessToken("secret") }
+                }
+                assertEquals(TwitchApiErrorType.Http, error.type)
+            }
+        }
+    }
+
+    @Test
+    fun `validation rejects foreign clients and malformed identities without expiring credentials`() {
+        MockWebServer().use { server ->
+            server.start()
+            for ((clientId, userId) in listOf(
+                "ue6666qo983tsx6so1t0vnawi233wa" to "123",
+                "kimne78kx3ncx6brgo4mv6wki5h1ko" to "123",
+                TwitchClientId to "0", TwitchClientId to "-1", TwitchClientId to "secret-value",
+            )) {
+                server.enqueue(MockResponse().setBody("""{"client_id":"$clientId","user_id":"$userId"}"""))
+                val error = assertFailsWith<TwitchApiException> {
+                    runBlocking { client(server).validateAccessToken("secret") }
+                }
+                assertEquals(TwitchApiErrorType.UnexpectedResponse, error.type)
+                assertFalse(error.message.orEmpty().contains("secret-value"))
+            }
+            server.enqueue(MockResponse().setBody("""{"client_id":"$TwitchClientId","user_id":"123"}"""))
+            assertEquals(ValidatedToken("123", TwitchClientId),
+                runBlocking { client(server).validateAccessToken("secret") })
+        }
+    }
+
+    @Test
+    fun `HTTP 200 GraphQL auth rejection validates OAuth and never replays a claim`() {
+        MockWebServer().use { server ->
+            server.start()
+            for (message in listOf("invalid oauth token", "failed integrity check")) {
+                for (invalid in listOf(false, true)) {
+                    val before = server.requestCount
+                    server.enqueue(MockResponse().setBody("""{"errors":[{"message":"$message"}]}"""))
+                    server.enqueue(if (invalid) MockResponse().setResponseCode(401) else
+                        MockResponse().setBody("""{"client_id":"$TwitchClientId","user_id":"12345"}"""))
+                    val error = assertFailsWith<TwitchApiException> {
+                        runBlocking { client(server).claimDrop(session(), "claim-id") }
+                    }
+                    assertEquals(if (invalid) TwitchApiErrorType.InvalidToken else TwitchApiErrorType.Http, error.type)
+                    assertEquals(before + 2, server.requestCount)
+                    assertEquals("/gql", server.takeRequest().path)
+                    assertEquals("/oauth2/validate", server.takeRequest().path)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `partial GraphQL data is not treated as a preexecution auth rejection`() {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse().setBody(
+                """{"data":{"user":{"id":"12","stream":null}},"errors":[{"message":"invalid oauth token","path":["user"]}]}""",
+            ))
+            assertFalse(runBlocking { client(server).fetchChannel(session(), "channel", "Game") }.online)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
     fun `untrusted derived watch URL is rejected without receiving a request`() {
         val twitch = MockWebServer()
         val untrusted = MockWebServer()

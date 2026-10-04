@@ -77,6 +77,25 @@ fixed batch and large inventories cannot create one suspended coroutine per cand
 requests are skipped when summary/inventory fields are already sufficient. The shared HTTP client also
 bounds each complete upstream call, including redirects and response-body reads, to two minutes.
 
+Device polling accepts both OAuth `error` and Twitch's documented `message` response field. HTTP
+429/5xx remains transient even if its body resembles a terminal OAuth error. OAuth parsing failures
+use fixed diagnostics; device-request 4xx rejections other than 429 stop authorization immediately.
+No raw OAuth response text is surfaced. Validation requires the Android client ID
+and a positive numeric user ID; only a validation HTTP 401 proves token invalidity. A 403, client
+mismatch, malformed validation, or integrity rejection preserves the encrypted credential. Pure
+GraphQL `invalid oauth token` / `failed integrity check` errors without data or an execution path
+also trigger OAuth validation, including when HTTP status is 200. Partial data is retained and this
+transport never automatically replays a claim.
+Starting replacement authorization preserves the old encrypted credential until successful atomic
+replacement; failure to obtain a new code does not delete it. Start/refresh commands cannot use that
+preserved credential while authorization is active. Explicit session reset still deletes it.
+
+The 2026-10-04 upstream review covers rangermix/TwitchDropsMiner through `1182d0172458` (v2.1.1).
+Its Chromium login, complete browser integrity context, session renewal, and desktop helper protocol
+are not implemented by this JVM host. The temporary Smart TV client switch was superseded upstream
+and is deliberately not adopted. Existing Android sessions remain supported; device-code parsing
+fixes cannot restore fresh authorization if Twitch refuses to issue a code for that client.
+
 Watch earning telemetry uses the direct Spade transport restored by the current TwitchDropsMiner
 implementations. Every heartbeat builds a new uncompressed Base64 JSON array containing one
 `minute-watched` event, then form-POSTs it as `data` to the discovered Spade URL. The payload includes
@@ -98,6 +117,13 @@ Completed or claimable drops remain claim candidates after their watch window.
 Within the prioritized-game group, promotion checks only games earlier than the current game in the
 saved order; fallback work still checks every higher fallback group. Promotion results are revalidated
 against the latest settings before they commit.
+
+Special Events (`509663`) and IRL (`509672`) campaigns allow an explicitly listed live participant
+to stream another category. Campaign category IDs remain server-side; names alone never enable this
+exception. Initial ACL discovery, channel-picker discovery, and periodic live rechecks use the same
+campaign-aware lookup. Both numeric channel ID and login must match the participant list. Ordinary
+campaigns and campaigns without a participant list keep the category requirement. Watch events
+retain the actual streamed game name and ID; priority selection still uses the campaign category.
 
 Active promotion deadlines also include the next known campaign/drop start boundary. After that
 instant, only future boundaries are considered, preventing a tight loop on the same start time.
@@ -306,7 +332,7 @@ The responsive breakpoints are:
 
 ## Failure behavior
 
-- Invalid Twitch tokens delete the persisted credential only after token validation confirms invalid
+- Invalid Twitch tokens delete the persisted credential only after token validation returns HTTP 401 for invalid
   credentials. A Twitch GraphQL 401/403 triggers that validation first; a still-valid session or an
   inconclusive validation result is treated as a transient HTTP failure. Watch/configuration 401/403
   results preserve the session and trigger configuration recovery.

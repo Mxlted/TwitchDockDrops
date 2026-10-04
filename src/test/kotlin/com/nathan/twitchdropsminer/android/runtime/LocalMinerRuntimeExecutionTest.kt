@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
@@ -46,6 +47,38 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test
+    fun `failed replacement authorization preserves the prior encrypted credential`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val api = AuthenticationTwitchApi(deviceCodeFailure = DeviceAuthorizationException(
+            "device_authorization_rejected", "Device authorization rejected",
+        ))
+        val runtime = runtime(store, api)
+        runtime.startAuthentication()
+        withTimeout(2_000) { runtime.snapshot.first { it.currentTask == "Twitch login failed" } }
+        assertEquals(storedSession(), store.twitchSession())
+        runtime.stopMiningAndJoin()
+    }
+
+    @Test
+    fun `preserved credential cannot start work while replacement authorization is active`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val api = AuthenticationTwitchApi()
+        val runtime = runtime(store, api)
+        runtime.startAuthentication()
+        withTimeout(2_000) { runtime.snapshot.first { it.account.oauthCode == "CODE-1" } }
+        runtime.startMining()
+        runtime.refreshInventory()
+        // A joined stop is a command-queue barrier after the two requests above.
+        runtime.stopMiningAndJoin()
+        assertEquals("CODE-1", runtime.snapshot.value.account.oauthCode)
+        assertEquals(storedSession(), store.twitchSession())
+        assertFalse(runtime.snapshot.value.miningActive)
+        runtime.resetSession()
+        withTimeout(2_000) { runtime.snapshot.first { it.account.state == LoginState.LoggedOut } }
+        assertNull(store.twitchSession())
+    }
+
     @TempDir
     lateinit var directory: Path
 
@@ -352,6 +385,27 @@ class LocalMinerRuntimeExecutionTest {
         }
 
         assertEquals(2, api.validationCalls.get())
+        runtime.stopMiningAndJoin()
+    }
+
+    @Test
+    fun `special campaign live recheck retains ACL participant across categories`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val channel = testChannel(5L, "participant", "broadcast", viewers = 100)
+        val campaign = watchCampaign("special", "Special Events").copy(
+            gameId = "509663", allowedChannels = listOf(channel),
+        )
+        val api = ChannelStatusTwitchApi(campaign, listOf(channel)) {
+            channel.copy(game = "Another category", gameId = "123", dropsEnabled = false)
+        }
+        val runtime = runtime(store, api, channelStatusCheckInterval = Duration.ZERO)
+        runtime.startMining()
+        val refreshed = withTimeout(2_000) {
+            runtime.snapshot.first { it.currentChannel?.gameId == "123" }
+        }
+        assertEquals(channel.id, refreshed.currentChannel?.id)
+        assertTrue(refreshed.currentChannel?.dropsEnabled == true)
+        assertFalse(refreshed.activity.any { it.title == "Channel changed category" })
         runtime.stopMiningAndJoin()
     }
 
@@ -960,6 +1014,7 @@ private class AuthenticationTwitchApi(
     private val failFirstDeviceCode: Boolean = false,
     private val blockFirstPoll: Boolean = false,
     private val pollFailure: Throwable? = null,
+    private val deviceCodeFailure: Throwable? = null,
 ) : TwitchApi {
     val deviceCodeRequests = AtomicInteger()
     val firstDeviceCodeStarted = CompletableDeferred<Unit>()
@@ -969,6 +1024,7 @@ private class AuthenticationTwitchApi(
     val pollCalls = AtomicInteger()
 
     override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization {
+        deviceCodeFailure?.let { throw it }
         val request = deviceCodeRequests.incrementAndGet()
         if (request == 1) {
             firstDeviceCodeStarted.complete(Unit)

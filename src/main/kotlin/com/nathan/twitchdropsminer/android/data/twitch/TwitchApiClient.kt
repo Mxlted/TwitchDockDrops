@@ -33,8 +33,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.FormBody
@@ -157,6 +155,19 @@ interface TwitchApi {
         login: String,
         expectedGame: String? = null,
     ): Channel
+    suspend fun fetchCampaignChannel(
+        session: StoredTwitchSession,
+        login: String,
+        campaign: Campaign,
+    ): Channel {
+        val channel = fetchChannel(session, login, campaign.gameName)
+        // Only Twitch's explicit participant ACL permits cross-category earning.
+        return if (campaign.permitsCrossCategoryChannel(channel)) {
+            channel.copy(dropsEnabled = channel.online)
+        } else {
+            channel
+        }
+    }
     suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel): Boolean
     suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress?
     suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult
@@ -204,14 +215,17 @@ class TwitchApiClient(
 
             okHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    val root = response.body.readBoundedJsonObject(MaxOAuthResponseBytes)
-                    val error = root?.get("error").asStringOrNull()
-                    throw IllegalStateException(
-                        "Twitch device login failed: ${error?.take(80) ?: "HTTP ${response.code}"}.",
-                    )
+                    if (response.code in 400..499 && response.code != 429) {
+                        throw DeviceAuthorizationException(
+                            "device_authorization_rejected",
+                            "Twitch device login was rejected (HTTP ${response.code}). Twitch may no longer support " +
+                                "new device logins for this client. Existing saved sessions are preserved.",
+                        )
+                    }
+                    throw TwitchApiException(TwitchApiErrorType.Http,
+                        "Twitch device login temporarily failed (HTTP ${response.code}).")
                 }
-                val root = response.body.readBoundedString(MaxOAuthResponseBytes, "device login").asObject()
-                    ?: throw IllegalStateException("Twitch device login returned no body")
+                val root = response.body.readOAuthObject("device login")
                 val expiresIn = root["expires_in"].asIntOrNull()
                     ?.takeIf { it in 1..86_400 }
                     ?: throw IllegalStateException("Twitch device login returned an invalid expiry.")
@@ -246,22 +260,30 @@ class TwitchApiClient(
                 .build()
 
             okHttpClient.newCall(request).execute().use { response ->
-                val root = response.body.readBoundedString(MaxOAuthResponseBytes, "token polling").asObject()
-                    ?: throw IllegalStateException("Twitch token response returned no body")
+                // Gate transient HTTP failures before parsing proxy HTML or an OAuth-shaped body.
+                if (response.code == 429 || response.code >= 500) {
+                    throw TwitchApiException(
+                        TwitchApiErrorType.Http,
+                        "Twitch token polling temporarily failed (HTTP ${response.code}).",
+                    )
+                }
+                val root = response.body.readOAuthObject("token polling")
                 if (response.isSuccessful) {
                     return@withContext DeviceTokenPollResult.Authorized(
                         TokenResponse(root["access_token"].asRequiredNonBlank("access_token")),
                     )
                 }
-                when (val oauthError = root["error"].asStringOrNull()) {
+                // Twitch documents {status:400,message:"authorization_pending"}; also accept
+                // the standard OAuth error field, which takes precedence when present.
+                when (val oauthError = (root["error"] ?: root["message"]).asStringOrNull()) {
                     "authorization_pending" -> DeviceTokenPollResult.AuthorizationPending
                     "slow_down" -> DeviceTokenPollResult.SlowDown
                     "access_denied" -> throw DeviceAuthorizationException(
                         oauthError,
                         "Twitch device authorization was denied.",
                     )
-                    "expired_token" -> throw DeviceAuthorizationException(
-                        oauthError,
+                    "expired_token", "invalid device code" -> throw DeviceAuthorizationException(
+                        "expired_token",
                         "Twitch device authorization expired.",
                     )
                     null -> throw TwitchApiException(
@@ -269,7 +291,7 @@ class TwitchApiClient(
                         "Twitch token polling returned a malformed error response.",
                     )
                     else -> throw DeviceAuthorizationException(
-                        oauthError.take(80),
+                        "unsupported_error",
                         "Twitch token polling returned an unsupported OAuth error.",
                     )
                 }
@@ -293,7 +315,7 @@ class TwitchApiClient(
                 )
             }
             response.use {
-                if (it.code == 401 || it.code == 403) {
+                if (it.code == 401) {
                     throw TwitchApiException(
                         TwitchApiErrorType.InvalidToken,
                         "Twitch session expired or could not be validated.",
@@ -305,11 +327,24 @@ class TwitchApiClient(
                         "Twitch session validation failed: HTTP ${it.code}.",
                     )
                 }
-                val root = it.body.readBoundedString(MaxOAuthResponseBytes, "session validation").asObject()
-                    ?: throw IllegalStateException("Twitch validation returned no body")
+                val root = it.body.readOAuthObject("session validation")
+                val clientId = root["client_id"].asRequiredNonBlank("client_id")
+                if (clientId != TwitchClientId) {
+                    throw TwitchApiException(
+                        TwitchApiErrorType.UnexpectedResponse,
+                        "Twitch session belongs to a different client. Reconnect Twitch; saved credentials were preserved.",
+                    )
+                }
+                val userId = root["user_id"].asRequiredNonBlank("user_id")
+                if (userId.toLongOrNull()?.let { id -> id > 0 } != true) {
+                    throw TwitchApiException(
+                        TwitchApiErrorType.UnexpectedResponse,
+                        "Twitch validation returned an invalid account identity.",
+                    )
+                }
                 ValidatedToken(
-                    userId = root["user_id"].asRequiredNonBlank("user_id"),
-                    clientId = root["client_id"].asRequiredNonBlank("client_id"),
+                    userId = userId,
+                    clientId = clientId,
                 )
             }
         }
@@ -414,7 +449,7 @@ class TwitchApiClient(
             for (page in allowedChannels.chunked(limit.coerceAtLeast(1))) {
                 val attempts = page.mapConcurrent(MaxConcurrentTwitchLookups) { channel ->
                     runCatchingCancellable {
-                        fetchChannel(session, channel.login, campaign.gameName)
+                        fetchCampaignChannel(session, channel.login, campaign)
                     }
                 }
                 val resolved = attempts.mapNotNull { it.getOrNullUnlessInvalidToken() }
@@ -698,27 +733,7 @@ class TwitchApiClient(
             )
         }.use { response ->
             if (response.code == 401 || response.code == 403) {
-                try {
-                    validateAccessToken(session.accessToken)
-                } catch (error: TwitchApiException) {
-                    when (error.type) {
-                        TwitchApiErrorType.InvalidToken -> throw error
-                        TwitchApiErrorType.Network,
-                        TwitchApiErrorType.Http
-                        -> throw TwitchApiException(
-                            TwitchApiErrorType.Http,
-                            "Twitch GraphQL rejected the request (HTTP ${response.code}), but the rejection " +
-                                "could not be confirmed because session validation failed.",
-                            error,
-                        )
-                        else -> throw error
-                    }
-                }
-                throw TwitchApiException(
-                    TwitchApiErrorType.Http,
-                    "Twitch GraphQL rejected the request (HTTP ${response.code}) although the session is " +
-                        "still valid; retrying.",
-                )
+                rejectGraphQlAuthentication(session, "HTTP ${response.code}")
             }
             if (!response.isSuccessful) {
                 throw TwitchApiException(
@@ -741,6 +756,14 @@ class TwitchApiClient(
                     "Unexpected Twitch GraphQL response shape.",
                 )
             val errors = obj["errors"].asArray()
+            if (!obj.containsKey("data") && errors.isNotEmpty() && errors.all { error ->
+                    val item = error.asObjectOrNull()
+                    item != null && !item.containsKey("path") && item["message"].asStringOrNull() in
+                        setOf("invalid oauth token", "failed integrity check")
+                }
+            ) {
+                rejectGraphQlAuthentication(session, "authentication or integrity check")
+            }
             if (errors.isNotEmpty() && obj["data"].asObjectOrNull() == null) {
                 throw TwitchApiException(
                     TwitchApiErrorType.GraphQl,
@@ -749,6 +772,24 @@ class TwitchApiClient(
             }
             obj
         }
+    }
+
+    private suspend fun rejectGraphQlAuthentication(session: StoredTwitchSession, reason: String): Nothing {
+        try {
+            validateAccessToken(session.accessToken)
+        } catch (error: TwitchApiException) {
+            if (error.type == TwitchApiErrorType.InvalidToken) throw error
+            throw TwitchApiException(
+                TwitchApiErrorType.Http,
+                "Twitch GraphQL rejected the request ($reason), but the rejection " +
+                    "could not be confirmed because session validation failed.",
+            )
+        }
+        throw TwitchApiException(
+            TwitchApiErrorType.Http,
+            "Twitch GraphQL rejected the request ($reason) although the OAuth session is still valid. " +
+                "Saved credentials were preserved; Twitch may require browser-based login.",
+        )
     }
 
     private fun baseHeaders(deviceId: String): okhttp3.Headers =
@@ -893,8 +934,6 @@ class TwitchApiClient(
         return isTrustedTwitchWatchEventUrl(candidate)
     }
 
-    private fun String.asObject(): JsonObject =
-        json.parseToJsonElement(this).jsonObject
 }
 
 private val BeaconUrlPattern =
@@ -1075,6 +1114,7 @@ private fun JsonObject.toCampaign(
             ?: game?.get("name").asStringOrNull()
             ?: "Unknown game",
         gameBoxArtUrl = game?.get("boxArtURL").asStringOrNull(),
+        gameId = game?.get("id").asStringOrNull(),
         campaignUrl = "https://www.twitch.tv/drops/campaigns?dropID=${this["id"].asString()}",
         linkUrl = linkUrl,
         startsAt = startsAt,
@@ -1334,10 +1374,14 @@ private fun ResponseBody?.readBoundedString(maximumBytes: Int, label: String): S
     return bytes.toString(Charsets.UTF_8)
 }
 
-private fun ResponseBody?.readBoundedJsonObject(maximumBytes: Int): JsonObject? =
-    runCatching {
-        Json.parseToJsonElement(readBoundedString(maximumBytes, "OAuth error")) as? JsonObject
-    }.getOrNull()
+private fun ResponseBody?.readOAuthObject(label: String): JsonObject {
+    val body = readBoundedString(MaxOAuthResponseBytes, label)
+    return runCatching { Json.parseToJsonElement(body) as? JsonObject }.getOrNull()
+        ?: throw TwitchApiException(
+            TwitchApiErrorType.UnexpectedResponse,
+            "Twitch $label returned invalid JSON.",
+        )
+}
 
 private fun List<JsonElement>.boundedSummary(): String =
     joinToString(prefix = "[", postfix = "]", limit = 4, truncated = "…") { error ->
