@@ -21,6 +21,15 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class StateJsonTest {
+    @Test fun `account username is public only while authenticated`() {
+        for (state in listOf(LoginState.LoggedIn, LoginState.LoggedOut, LoginState.LoginRequired, LoginState.Expired)) {
+            val snapshot = RuntimeSnapshot(account = LoginSession(state, "Status", userId = "123", username = "cozy_collector"))
+            val account = Json.parseToJsonElement(StateJson().encode(snapshot, AppSettings(), emptyList()))
+                .jsonObject.getValue("snapshot").jsonObject.getValue("account").jsonObject
+            assertEquals(if (state == LoginState.LoggedIn) "\"cozy_collector\"" else "null", account.getValue("username").toString())
+        }
+    }
+
     @Test fun `dashboard authorization exposes only its method and no pairing credential`() {
         val snapshot = RuntimeSnapshot(account = LoginSession(LoginState.LoginRequired, "Waiting for dashboard login", method = "dashboard"))
         val account = Json.parseToJsonElement(StateJson().encode(snapshot, AppSettings(), emptyList()))

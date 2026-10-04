@@ -48,6 +48,35 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test fun `late username lookup cannot restore identity after session reset`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession())
+        val lookupStarted = CompletableDeferred<Unit>()
+        val releaseLookup = CompletableDeferred<Unit>()
+        val lookupReturned = CompletableDeferred<Unit>()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun fetchCampaignInventory(session: StoredTwitchSession) = CampaignInventory(emptyList())
+            override suspend fun validateSession(session: StoredTwitchSession): ValidatedToken = withContext(NonCancellable) {
+                lookupStarted.complete(Unit)
+                releaseLookup.await()
+                lookupReturned.complete(Unit)
+                ValidatedToken(session.userId, "client", username = "previous_account")
+            }
+        }
+        val runtime = runtime(store, api)
+        try {
+            runtime.bootstrap()
+            withTimeout(2_000) { lookupStarted.await() }
+            runtime.resetSession()
+            withTimeout(2_000) { runtime.snapshot.first { it.account.state == LoginState.LoggedOut } }
+            releaseLookup.complete(Unit)
+            withTimeout(2_000) { lookupReturned.await() }
+            runtime.stopMiningAndJoin()
+            assertNull(runtime.snapshot.value.account.username)
+            assertNull(store.twitchSession())
+        } finally { releaseLookup.complete(Unit); runtime.stopMiningAndJoin() }
+    }
+
     @Test fun `dashboard capture failure reports safe guidance and preserves saved credentials`(): Unit = runBlocking {
         val store = sessionStore()
         val saved = storedSession()

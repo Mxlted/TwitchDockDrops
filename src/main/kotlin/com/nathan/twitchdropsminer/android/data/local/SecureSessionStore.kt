@@ -41,6 +41,7 @@ class SecureSessionStore(
             put("userId", session.userId)
             put("deviceId", session.deviceId)
             put("savedAt", session.savedAt.toString())
+            session.username?.let { put("username", it) }
             session.browserContext?.let { put("browserContext", it.toJson()) }
         }.toString().toByteArray(Charsets.UTF_8)
         val initializationVector = ByteArray(12).also(secureRandom::nextBytes)
@@ -86,6 +87,7 @@ class SecureSessionStore(
                 deviceId = root.requiredString("deviceId"),
                 savedAt = Instant.parse(root.requiredString("savedAt")),
                 browserContext = root["browserContext"]?.let { BrowserSessionContext.parse(it as JsonObject) },
+                username = root["username"]?.jsonPrimitive?.contentOrNull,
             ).also {
                 loadStatus = PersistenceStatus(PersistenceFileState.Loaded)
             }

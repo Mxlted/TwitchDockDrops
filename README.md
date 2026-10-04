@@ -91,7 +91,8 @@ For Debian running inside Proxmox LXC, see the [LXC setup notes](./OPERATIONS.md
 The interface is a flat, Twitch-purple dashboard that keeps the important parts close:
 
 - **Header** shows the miner state on every page with Start/Stop, refresh, and theme controls.
-- **Overview** shows session stats, the current Drop with progress and an estimated finish time,
+- **Overview** shows a compact signed-in account card with your Twitch username, account ID, and
+  sign-in method, plus session stats, the current Drop with progress and an estimated finish time,
   every drop in the active campaign, recent activity, and the server-ranked **Up next** queue.
 - **Campaigns** lets you search, filter, and sort active or upcoming campaigns, expand their drops and
   rewards, check end dates, open account-link pages, and exclude campaigns. Campaign names link to

@@ -545,6 +545,31 @@ h1, h2, h3, h4 {
   padding: clamp(20px, 2.4vw, 28px);
 }
 
+.account-overview {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 18px 20px;
+}
+
+.account-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  height: 44px;
+  border-radius: 14px;
+  color: var(--accent);
+  background: var(--accent-tint);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.account-identity { flex: 1 1 160px; min-width: 0; }
+.account-identity h2 { margin: 3px 0; font-size: 16px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.account-identity p { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.account-manage { margin-left: auto; }
+
 .section-head {
   display: flex;
   justify-content: space-between;

@@ -226,6 +226,14 @@ membership remains server-side for selection and is not included in campaign sta
 
 `snapshot.account.method` is `device`, `browser`, or `dashboard` during integrated sign-in. An accepted
 integrated session uses `browser`, since its persisted credential type is the same as the helper's.
+`snapshot.account.username` is nullable public identity from the OAuth validation response's `login`
+field, exposed only while authenticated. Browser and device login save it inside the existing
+encrypted session envelope; older envelopes without it remain readable. Mining validation refreshes
+the displayed name, and a stopped inventory refresh tries validation after loading campaigns when
+the name is missing. Inconclusive lookup failures retain the inventory and numeric-ID fallback;
+authoritative token expiry follows the existing sign-out path. Identity updates use the same
+operation-generation guard as other runtime updates. Overview and Settings display the account
+separately from the watched channel, using a local initials badge without profile-image requests.
 For desktop browser pairing, `oauthCode` contains the
 short-lived pairing code and `expiresAt` its deadline; `oauthUrl` is absent. Full browser context and
 helper tickets never enter state/events/logs. The client renders helper instructions rather than

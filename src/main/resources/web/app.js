@@ -284,6 +284,7 @@ function renderOverview(data) {
   return `
     <div class="page-stack">
       ${snapshot.error ? renderError(snapshot.error) : ""}
+      ${renderAccountOverview(account)}
       <div class="stat-grid">
         ${renderStat("Claimed this session", snapshot.dropsClaimedThisSession, "drops claimed by the miner", "twitch", dropletIcon())}
         ${renderStat("Active campaigns", snapshot.activeCampaignCount, `${campaigns.length} loaded from Twitch`, "sky", bloomIcon())}
@@ -317,6 +318,22 @@ function renderOverview(data) {
         ${renderQueue(snapshot)}
       </section>
     </div>`;
+}
+
+function renderAccountOverview(account, showSettings = true) {
+  if (!account.authenticated) return "";
+  const username = typeof account.username === "string" ? account.username.trim() : "";
+  const identity = username ? `@${username}` : "Twitch account";
+  const initials = username ? Array.from(username).slice(0, 2).join("").toUpperCase() : "TW";
+  const details = [account.userId ? `ID ${account.userId}` : "Username unavailable",
+    account.method === "browser" ? "Browser sign-in" : account.method === "device" ? "Device sign-in" : null]
+    .filter(Boolean).join(" · ");
+  return `<section class="soft-card account-overview" aria-label="Signed-in Twitch account">
+    <span class="account-avatar" aria-hidden="true">${esc(initials)}</span>
+    <div class="account-identity"><p>${ui.preview ? "Preview account" : "Signed in to Twitch"}</p>
+      <h2>${esc(identity)}</h2><p>${esc(details)}</p></div>
+    ${showSettings ? '<button class="tiny-button account-manage" data-view="settings" type="button">Account settings</button>' : ""}
+  </section>`;
 }
 
 function renderWelcomeHero() {
@@ -819,6 +836,7 @@ function renderSettings(data) {
   const authenticated = snapshot.account.authenticated;
   return `
     <div class="page-stack">
+      ${renderAccountOverview(snapshot.account, false)}
       <div class="grid-two">
         <section class="soft-card section-card">
           <div class="section-head"><div><h2>Timing</h2><p>Intervals are normalized by the server before they are saved.</p></div></div>
@@ -1289,7 +1307,7 @@ function previewState() {
       currentTask: "Watching willowbyte for No Man's Sky",
       progressSummary: "Iridescent Trail is 62% complete.",
       lastUpdate: iso(-1),
-      account: { state: "loggedin", statusText: "Logged in with Twitch", userId: "preview", oauthUrl: null, oauthCode: null, expiresAt: null, authenticated: true, actionRequired: false },
+      account: { state: "loggedin", statusText: "Logged in with Twitch", userId: "123456789", username: "cozy_collector", method: "browser", oauthUrl: null, oauthCode: null, expiresAt: null, authenticated: true, actionRequired: false },
       campaigns,
       selectionPreview: ["solstice-relay", "harbor-lights", "meadow-market"],
       channels: [

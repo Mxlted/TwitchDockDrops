@@ -129,6 +129,7 @@ class LocalMinerRuntime(
                         state = LoginState.LoggedIn,
                         statusText = "Stored Twitch session",
                         userId = session.userId,
+                        username = session.username,
                         method = if (session.browserContext == null) "device" else "browser",
                     )
                 },
@@ -255,6 +256,7 @@ class LocalMinerRuntime(
                     state = LoginState.LoggedIn,
                     statusText = "Logged in with Twitch",
                     userId = command.session.userId,
+                    username = command.session.username,
                     method = if (command.session.browserContext == null) "device" else "browser",
                 ),
                 currentTask = "Twitch login complete",
@@ -753,6 +755,7 @@ class LocalMinerRuntime(
                             userId = validated.userId,
                             deviceId = deviceId,
                             savedAt = now(),
+                            username = validated.username,
                         ),
                     ),
                 )
@@ -836,6 +839,16 @@ class LocalMinerRuntime(
                 progressSummary = campaigns.progressSummary(),
                 error = campaignLoad.warning,
             )
+        }
+        // Older sessions have no cached username. Enrich presentation without making
+        // inventory availability depend on an additional successful Twitch request.
+        if (_snapshot.value.account.username == null) {
+            val identity = runCatchingCancellable { twitchApiClient.validateSession(session) }
+            ensureCurrentInventoryRefresh(expectedSessionGeneration, refreshGeneration)
+            identity.exceptionOrNull()?.throwIfInvalidToken()
+            identity.getOrNull()?.takeIf { it.userId == session.userId }?.username?.let { username ->
+                updateAccountUsername(session.userId, username)
+            }
         }
     }
 
@@ -1778,6 +1791,9 @@ class LocalMinerRuntime(
             }
             ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
             if (validation.isSuccess) {
+                validation.getOrThrow().takeIf { it.userId == session.userId }?.username?.let { username ->
+                    updateAccountUsername(session.userId, username)
+                }
                 return now()
             }
             val error = validation.exceptionOrNull() ?: continue
@@ -2601,6 +2617,16 @@ class LocalMinerRuntime(
             "Local miner stopped after unexpected error",
             error.message,
         )
+    }
+
+    private suspend fun updateAccountUsername(userId: String, username: String) {
+        val guard = currentCoroutineContext()[RuntimeOperationGuard]
+        _snapshot.update {
+            guard?.ensureCurrent()
+            if (it.account.isAuthenticated && it.account.userId == userId) {
+                it.copy(account = it.account.copy(username = username))
+            } else it
+        }
     }
 
     private suspend fun updateSnapshot(

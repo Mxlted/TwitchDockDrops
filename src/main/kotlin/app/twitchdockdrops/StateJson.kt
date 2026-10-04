@@ -119,6 +119,7 @@ private fun LoginSession.toJson(): JsonObject = buildJsonObject {
     put("state", state.name.lowercase())
     put("statusText", SafeText.diagnostic(statusText))
     putNullable("userId", userId)
+    putNullable("username", username.takeIf { isAuthenticated })
     putNullable("oauthUrl", oauthUrl?.takeIf(::isExpectedTwitchActivationUrl))
     putNullable("oauthCode", oauthCode)
     putInstant("expiresAt", expiresAt)

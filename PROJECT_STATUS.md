@@ -5,6 +5,8 @@ changes.
 
 ## Implementation checklist
 
+- [x] Compact Overview/Settings account card shows the signed-in username, ID, and sign-in method
+- [x] Public username survives encrypted-session restore, with legacy ID fallback and guarded enrichment
 - [x] Device polling accepts Twitch message-based replies and keeps transient HTTP failures retryable
 - [x] OAuth validation checks client/account identity and preserves credentials on inconclusive rejection
 - [x] Pure GraphQL authentication/integrity errors trigger validation without replaying claims
@@ -79,6 +81,25 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Signed-in account overview - 2026-10-04
+
+- Overview and Settings show the viewer's Twitch username, numeric account ID, sign-in method,
+  and an initials badge. Overview links to account settings through the existing view navigation.
+  The card disappears during sign-out/replacement login and labels illustrative preview accounts.
+- Username comes from Twitch's existing OAuth validation `login` field, checked against the official
+  validation documentation through Context7. New browser/device sessions store it in the encrypted
+  envelope. Legacy sessions remain readable, show an ID fallback, and enrich their display after
+  inventory loading or mining validation. Delayed results cannot restore a reset account.
+- Root Gradle `test installDist`: **175 tests passed**, zero failures/errors. Client suite:
+  **32 tests passed**; JavaScript syntax and `git diff --check` passed. Coverage includes legacy
+  persistence, validation parsing, public serialization, identity escaping, and reset races.
+- Disposable loopback host: health returned OK; a settings mutation returned 200 and its saved value
+  appeared in state. Desktop 1440px and mobile 390px visual checks covered Overview/Settings,
+  dark/light themes, and logged-out, preparing, and failed-login states; no mobile overflow or browser
+  errors were observed. The Android reference stayed clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
+- Live Twitch username verification was not performed for this change. A missing or temporarily
+  unavailable username leaves the numeric-ID fallback; no profile-picture fetch is implemented.
 
 ## Finish sign-in capture repair - 2026-10-04
 

@@ -16,6 +16,18 @@ import okhttp3.mockwebserver.MockWebServer
 
 class TwitchApiClientSecurityTest {
     @Test
+    fun `validation reads the public login and tolerates missing or malformed names`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            for ((login, expected) in listOf("\"cozy_collector\"" to "cozy_collector",
+                "null" to null, "\"<script>\"" to null, "{}" to null, "\"${"a".repeat(101)}\"" to null)) {
+                server.enqueue(MockResponse().setBody("""{"client_id":"$TwitchClientId","user_id":"123","login":$login}"""))
+                assertEquals(expected, client(server).validateAccessToken("test-token").username)
+            }
+        }
+    }
+
+    @Test
     fun `validation forbidden and unavailable responses do not expire saved credentials`() {
         MockWebServer().use { server ->
             server.start()

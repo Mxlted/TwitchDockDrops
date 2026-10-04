@@ -76,6 +76,7 @@ class LocalMinerRuntimeStartupTest {
             userId = "user-123",
             deviceId = "device-123",
             savedAt = Instant.parse("2026-08-10T12:00:00Z"),
+            username = "cached_account",
         )
         sessionStore.saveTwitchSession(storedSession)
         val twitchApi = RecordingTwitchApi()
@@ -88,9 +89,26 @@ class LocalMinerRuntimeStartupTest {
             runtime.snapshot.first { snapshot -> snapshot.currentTask == "Inventory refreshed" }
         }
         assertEquals(LoginState.LoggedIn, refreshed.account.state)
+        assertEquals("cached_account", refreshed.account.username)
         assertEquals(listOf("campaign-1"), refreshed.campaigns.map(Campaign::id))
         assertFalse(refreshed.miningActive)
         assertNull(withTimeoutOrNull(100) { twitchApi.validationRequest.await() })
+    }
+
+    @Test
+    fun `older sessions load their username after inventory and clear it on reset`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(StoredTwitchSession("test-token", "user-123", "device", Instant.EPOCH))
+        val runtime = runtime(store, RecordingTwitchApi())
+        try {
+            runtime.bootstrap()
+            val snapshot = withTimeout(2_000) { runtime.snapshot.first { it.account.username != null } }
+            assertEquals("cozy_collector", snapshot.account.username)
+            assertFalse(snapshot.miningActive)
+            runtime.resetSession()
+            val cleared = withTimeout(2_000) { runtime.snapshot.first { it.account.state == LoginState.LoggedOut } }
+            assertNull(cleared.account.username)
+        } finally { runtime.stopMiningAndJoin() }
     }
 
     @Test
@@ -234,7 +252,7 @@ private class RecordingTwitchApi(
 
     override suspend fun validateAccessToken(accessToken: String): ValidatedToken {
         validationRequest.complete(accessToken)
-        return ValidatedToken("user-123", "client")
+        return ValidatedToken("user-123", "client", username = "cozy_collector")
     }
 
     override suspend fun fetchEligibleChannels(

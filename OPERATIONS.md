@@ -293,6 +293,11 @@ On startup, a saved Twitch session resumes mining when `miningRequested` is enab
 triggers an inventory refresh in the background. Neither path delays the local health endpoint or web
 UI.
 
+The account card on Overview and Settings identifies the connected Twitch account by username and
+numeric ID. New logins retain the username in the encrypted session. Older sessions initially show
+their ID and load the username during mining validation or after an inventory refresh. If Twitch
+cannot return it, the ID remains visible; reconnecting is not required solely to show the card.
+
 The default Auto Mode order exhausts linked work before unlinked work:
 
 1. Linked campaigns with claimed-drop progress

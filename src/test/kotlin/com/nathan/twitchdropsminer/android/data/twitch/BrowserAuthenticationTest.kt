@@ -50,11 +50,12 @@ class BrowserAuthenticationTest {
     @Test fun `web credentials require server OAuth and both Drops queries before acceptance`() = runBlocking {
         MockWebServer().use { server ->
             server.start()
-            server.enqueue(MockResponse().setBody("""{"client_id":"$TwitchWebClientId","user_id":"12345"}"""))
+            server.enqueue(MockResponse().setBody("""{"client_id":"$TwitchWebClientId","user_id":"12345","login":"cozy_collector"}"""))
             server.enqueue(MockResponse().setBody("""{"data":{"currentUser":{"inventory":{}}}}"""))
             server.enqueue(MockResponse().setBody("""{"data":{"currentUser":{"dropCampaigns":[]}}}"""))
             val session = client(server).validateBrowserContext(BrowserSessionContext.parse(context()))
             assertEquals("12345", session.userId)
+            assertEquals("cozy_collector", session.username)
             val oauth = server.takeRequest()
             assertNull(oauth.getHeader("Client-Integrity"))
             repeat(2) {

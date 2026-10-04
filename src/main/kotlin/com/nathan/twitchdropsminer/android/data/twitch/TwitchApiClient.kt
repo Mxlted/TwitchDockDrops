@@ -87,6 +87,7 @@ class DeviceAuthorizationException(
 data class ValidatedToken(
     val userId: String,
     val clientId: String,
+    val username: String? = null,
 )
 
 data class CurrentDropProgress(
@@ -315,7 +316,8 @@ class TwitchApiClient(
     override suspend fun validateBrowserContext(context: BrowserSessionContext): StoredTwitchSession {
         context.requireFresh()
         val identity = validateToken(context.accessToken, TwitchWebClientId)
-        val session = StoredTwitchSession(context.accessToken, identity.userId, context.deviceId, Instant.now(), context)
+        val session = StoredTwitchSession(context.accessToken, identity.userId, context.deviceId, Instant.now(), context,
+            username = identity.username)
         val inventory = gql(session, TwitchOperation.Inventory.request())
         val campaigns = gql(session, TwitchOperation.Campaigns.request())
         if (inventory["errors"].asArray().isNotEmpty() || campaigns["errors"].asArray().isNotEmpty() ||
@@ -374,6 +376,7 @@ class TwitchApiClient(
                 ValidatedToken(
                     userId = userId,
                     clientId = clientId,
+                    username = root["login"].asStringOrNull()?.takeIf { it.matches(Regex("[A-Za-z0-9_]{1,100}")) },
                 )
             }
         }

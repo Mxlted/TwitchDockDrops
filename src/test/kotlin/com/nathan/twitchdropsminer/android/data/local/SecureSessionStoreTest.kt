@@ -25,12 +25,23 @@ class SecureSessionStoreTest {
             userId = "12345",
             deviceId = "device-abc",
             savedAt = Instant.parse("2026-08-10T12:00:00Z"),
+            username = "cozy_collector",
         )
 
         store.saveTwitchSession(expected)
 
         assertEquals(expected, SecureSessionStore(directory, key).twitchSession())
         assertFalse(Files.readString(directory.resolve("session.enc")).contains(expected.accessToken))
+        assertFalse(Files.readString(directory.resolve("session.enc")).contains(expected.username!!))
+    }
+
+    @Test
+    fun `sessions saved without a username remain readable`() {
+        val store = SecureSessionStore(directory)
+        val session = StoredTwitchSession("token", "123", "device", Instant.EPOCH)
+        store.saveTwitchSession(session)
+        assertEquals(session, store.twitchSession())
+        assertNull(store.twitchSession()?.username)
     }
 
     @Test

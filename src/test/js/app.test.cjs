@@ -14,9 +14,39 @@ function client(fetch = () => { throw new Error('Unexpected request'); }) {
     window: { location: { search: '?preview=active' }, addEventListener() {}, setTimeout, clearTimeout },
   });
   const source = fs.readFileSync(path.join(__dirname, '../../main/resources/web/app.js'), 'utf8');
-  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch, renderBrowserLoginHero, renderLoginPreparingHero, renderLoginOptions };', context);
+  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch, renderBrowserLoginHero, renderLoginPreparingHero, renderLoginOptions, renderAccountOverview, renderOverview, renderSettings };', context);
   return context.client;
 }
+
+test('account overview identifies the viewer separately from the watched channel', () => {
+  const c = client();
+  const data = c.previewState();
+  for (const html of [c.renderOverview(data), c.renderSettings(data)]) {
+    assert.match(html, /@cozy_collector/);
+    assert.match(html, /ID 123456789 · Browser sign-in/);
+    assert.match(html, /Preview account/);
+  }
+  assert.match(c.renderOverview(data), /data-view="settings"[^>]*>Account settings/);
+  c.ui.preview = false;
+  assert.match(c.renderAccountOverview(data.snapshot.account), /Signed in to Twitch/);
+  assert.doesNotMatch(c.renderAccountOverview(data.snapshot.account), /WillowByte/);
+});
+
+test('account overview safely escapes identity and handles older and signed-out sessions', () => {
+  const c = client();
+  const account = {authenticated:true, username:'<img>&"', userId:'<id>', method:'device'};
+  const html = c.renderAccountOverview(account);
+  assert.match(html, /@&lt;img&gt;&amp;&quot;/);
+  assert.match(html, /ID &lt;id&gt;/);
+  assert.doesNotMatch(html, /<img>|<id>/);
+  assert.match(c.renderAccountOverview({...account, username:null}), /Twitch account/);
+  assert.match(c.renderAccountOverview({authenticated:true}), /Username unavailable/);
+  assert.equal(c.renderAccountOverview({...account, authenticated:false}), '');
+  const data = c.previewState();
+  data.snapshot.account = {...account, authenticated:false};
+  assert.doesNotMatch(c.renderOverview(data), /account-overview/);
+  assert.doesNotMatch(c.renderSettings(data), /account-overview/);
+});
 
 test('browser pairing explains helper renewal and safely renders the code', () => {
   const c = client();
