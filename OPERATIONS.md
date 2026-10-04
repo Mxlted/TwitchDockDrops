@@ -8,6 +8,8 @@ Twitch Dock Drops. For the user-facing project overview, start with the [README]
 - Docker Engine with Docker Compose v2
 - A Twitch account eligible for Drops campaigns
 - A supported browser on the Docker host or a trusted LAN device
+- For fresh Twitch login: Node.js 22.4+ and native Chrome, Edge, or Chromium on a desktop that stays
+  running for renewal (Windows, macOS, or Linux; browser launch has been checked on Windows)
 
 ## Install and start
 
@@ -33,28 +35,45 @@ Open one of these addresses:
 - Docker host: [http://127.0.0.1:8080](http://127.0.0.1:8080)
 - Trusted LAN device: `http://<docker-host-lan-ip>:8080`
 
-Select **Connect Twitch** and approve the device code at Twitch's activation page. The app never asks
-for a Twitch password. A completed login immediately loads the campaign inventory.
+The image is `dockdrops:local`, and the container and network are named `dockdrops`. The Compose
+project identity and `app` service remain unchanged, so existing installations are upgraded with the
+same command. The `twitch-dock-drops-data` volume keeps its name and contents. An old unused default
+network may remain after upgrading; do not delete the data volume. Explicit container/network names
+assume one instance per Docker host; override those names for multiple instances.
 
-Repeated **Connect Twitch** actions do not replace a device code that is still being prepared or
-polled. Use **Request a new code** only when you want to cancel the displayed attempt and obtain a
-replacement.
+### Browser login
 
-### Current Twitch login limitation
+1. Select **Connect Twitch**. Download `login-helper.mjs` from your dashboard to your desktop.
+2. In that directory run `node login-helper.mjs`. Enter the dashboard origin (for example
+   `http://192.168.1.20:8080`) and the displayed pairing code. Complete pairing and login within ten minutes.
+3. Sign in directly on Twitch in the new browser, including any Twitch verification. Close all windows
+   of that temporary browser when finished; your everyday profile is not used.
+4. The helper opens a headless browser briefly, captures a fresh authenticated Drops request, and
+   sends its context directly to this server. The JVM validates the account and both Drops queries
+   before saving the encrypted session and loading campaigns.
+5. Leave the helper running. It periodically reopens its temporary profile to renew integrity proof.
+   Closing the dashboard is fine; closing the helper or sleeping its computer interrupts renewal.
 
-Twitch may reject new device-code requests for the Android client used by this host. Updating the
-polling parser does not remove that upstream restriction. Keep a working encrypted session and its
-key; do not reset the session or delete the data volume to troubleshoot a temporary 403 or integrity
-error. Only an authoritative token-validation HTTP 401 clears an invalid saved credential.
-Starting a replacement login keeps the existing credential until the new login succeeds; explicit
-**Reset Twitch Session** still deletes it. Restarting after a failed replacement can restore the
-previous session.
+No password or access token is pasted into the dashboard. The helper needs no npm packages. To use a
+specific browser, run `node login-helper.mjs "http://127.0.0.1:8080" "/path/to/browser"`. Run
+`node login-helper.mjs --check-browser` to check isolated browser launch and local control without a
+Twitch login. The helper deletes its temporary profile on normal exit; abrupt termination can leave
+a `dockdrops-login-*` folder in the operating system's temporary directory.
 
-Upstream rangermix/TwitchDropsMiner v2.1.1 uses browser login, browser integrity context, and Chromium
-renewal, with an optional desktop helper. Those components are not implemented here, and its helper
-cannot connect to this dashboard. This host continues to offer device authorization, with no reliable
-fresh-login recovery when Twitch refuses that flow. See the dated review in
-[Project Status](./PROJECT_STATUS.md#upstream-review---2026-10-04).
+After a server restart, helper failure, or expired proof, select **Reconnect Twitch** in Settings and
+run the helper again. New pairing, session reset, and server restart revoke the previous helper
+connection. The persisted session can be restored only within the captured proof's lifetime until
+renewal resumes. There is no Chromium inside the container and no renewal without the desktop helper.
+The upstream Python helper uses a different protocol and cannot connect here. Firefox is not supported
+by this helper. Native browser login and network access from the miner must both be accepted by Twitch;
+different VPN/proxy routes can cause server-side verification to fail.
+
+The previous HTTP 400 device-login error is avoided by using browser login. Switching client IDs
+cannot repair that old endpoint. Working saved Android sessions remain supported. Keep the session
+and its key; do not reset or delete the volume for temporary 403/integrity errors. Replacement keeps
+the previous credential until successful atomic save, and a failed replacement can restore it after
+restart. Explicit **Reset Twitch Session** still deletes it. Live Twitch account acceptance, earning,
+and claims with the new browser helper remain unverified; see [Project Status](./PROJECT_STATUS.md).
 
 ## Everyday commands
 

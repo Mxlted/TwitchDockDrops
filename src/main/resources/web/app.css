@@ -788,6 +788,12 @@ h1, h2, h3, h4 {
   font-size: 12px;
 }
 
+.pairing-code strong {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: clamp(20px, 2.5vw, 26px);
+  letter-spacing: 0.04em;
+}
+
 .spinner-block {
   display: flex;
   gap: 12px;

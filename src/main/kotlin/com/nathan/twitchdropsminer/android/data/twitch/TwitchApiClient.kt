@@ -6,6 +6,8 @@ import com.nathan.twitchdropsminer.android.data.model.Channel
 import com.nathan.twitchdropsminer.android.data.model.DropReward
 import com.nathan.twitchdropsminer.android.data.model.RewardCampaign
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
+import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
+import com.nathan.twitchdropsminer.android.data.model.TwitchWebClientId
 import com.nathan.twitchdropsminer.android.data.model.inEarningOrder
 import java.io.IOException
 import java.time.Instant
@@ -142,6 +144,9 @@ interface TwitchApi {
     suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization
     suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult
     suspend fun validateAccessToken(accessToken: String): ValidatedToken
+    suspend fun validateSession(session: StoredTwitchSession): ValidatedToken = validateAccessToken(session.accessToken)
+    suspend fun validateBrowserContext(context: BrowserSessionContext): StoredTwitchSession =
+        throw IllegalStateException("Browser login is unavailable.")
     suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign>
     suspend fun fetchCampaignInventory(session: StoredTwitchSession): CampaignInventory =
         CampaignInventory(fetchCampaigns(session))
@@ -177,12 +182,13 @@ interface TwitchApi {
 }
 
 class TwitchApiClient(
-    private val okHttpClient: OkHttpClient,
+    okHttpClient: OkHttpClient,
     private val gqlEndpoint: String = "https://gql.twitch.tv/gql",
     private val twitchWebBaseUrl: String = TwitchClientUrl,
     private val oauthBaseUrl: String = "https://id.twitch.tv",
     private val watchEventTime: () -> Instant = Instant::now,
 ) : TwitchApi {
+    private val okHttpClient = okHttpClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
@@ -298,7 +304,30 @@ class TwitchApiClient(
             }
         }
 
-    override suspend fun validateAccessToken(accessToken: String): ValidatedToken =
+    override suspend fun validateAccessToken(accessToken: String): ValidatedToken = validateToken(accessToken, TwitchClientId)
+
+    override suspend fun validateSession(session: StoredTwitchSession): ValidatedToken =
+        validateToken(session.accessToken, if (session.browserContext == null) TwitchClientId else TwitchWebClientId).also {
+            if (it.userId != session.userId) throw TwitchApiException(
+                TwitchApiErrorType.UnexpectedResponse, "Twitch session account mismatch; reconnect Twitch.")
+        }
+
+    override suspend fun validateBrowserContext(context: BrowserSessionContext): StoredTwitchSession {
+        context.requireFresh()
+        val identity = validateToken(context.accessToken, TwitchWebClientId)
+        val session = StoredTwitchSession(context.accessToken, identity.userId, context.deviceId, Instant.now(), context)
+        val inventory = gql(session, TwitchOperation.Inventory.request())
+        val campaigns = gql(session, TwitchOperation.Campaigns.request())
+        if (inventory["errors"].asArray().isNotEmpty() || campaigns["errors"].asArray().isNotEmpty() ||
+            inventory.path("data", "currentUser")["inventory"].asObjectOrNull() == null ||
+            campaigns.path("data", "currentUser")["dropCampaigns"] !is JsonArray) {
+            throw IllegalStateException("Twitch did not accept browser access to Drops. Reconnect with the helper.")
+        }
+        context.requireFresh()
+        return session
+    }
+
+    private suspend fun validateToken(accessToken: String, expectedClientId: String): ValidatedToken =
         withContext(Dispatchers.IO) {
             val request = Request.Builder()
                 .url(oauthUrl.newBuilder().addPathSegments("oauth2/validate").build())
@@ -329,7 +358,7 @@ class TwitchApiClient(
                 }
                 val root = it.body.readOAuthObject("session validation")
                 val clientId = root["client_id"].asRequiredNonBlank("client_id")
-                if (clientId != TwitchClientId) {
+                if (clientId != expectedClientId) {
                     throw TwitchApiException(
                         TwitchApiErrorType.UnexpectedResponse,
                         "Twitch session belongs to a different client. Reconnect Twitch; saved credentials were preserved.",
@@ -720,7 +749,7 @@ class TwitchApiClient(
     ): JsonObject = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(gqlUrl)
-            .headers(sessionHeaders(session))
+            .headers(sessionHeaders(session, graphql = true))
             .post(payload.toString().toRequestBody(JsonMediaType))
             .build()
         try {
@@ -776,7 +805,7 @@ class TwitchApiClient(
 
     private suspend fun rejectGraphQlAuthentication(session: StoredTwitchSession, reason: String): Nothing {
         try {
-            validateAccessToken(session.accessToken)
+            validateSession(session)
         } catch (error: TwitchApiException) {
             if (error.type == TwitchApiErrorType.InvalidToken) throw error
             throw TwitchApiException(
@@ -802,17 +831,28 @@ class TwitchApiClient(
             .add("X-Device-Id", deviceId)
             .build()
 
-    private fun sessionHeaders(session: StoredTwitchSession): okhttp3.Headers =
-        okhttp3.Headers.Builder()
+    private fun sessionHeaders(session: StoredTwitchSession, graphql: Boolean = false): okhttp3.Headers {
+        val browser = session.browserContext
+        if (browser != null) {
+            try { browser.requireFresh() } catch (_: IllegalArgumentException) {
+                throw TwitchApiException(TwitchApiErrorType.Http,
+                    "Browser session proof expired. Keep the login helper running or reconnect Twitch.")
+            }
+        }
+        return okhttp3.Headers.Builder()
             .add("Accept", "*/*")
-            .add("Client-Id", TwitchClientId)
+            .add("Client-Id", if (browser == null) TwitchClientId else TwitchWebClientId)
             .add("Authorization", "OAuth ${session.accessToken}")
             .add("Client-Session-Id", session.deviceId.take(16))
             .add("Origin", TwitchClientUrl)
             .add("Referer", TwitchClientUrl)
-            .add("User-Agent", TwitchUserAgent)
+            .add("User-Agent", browser?.userAgent ?: TwitchUserAgent)
             .add("X-Device-Id", session.deviceId)
+            .apply {
+                if (graphql && browser != null) browser.headers.forEach { (name, value) -> set(name, value) }
+            }
             .build()
+    }
 
     private fun encodeWatchPayload(
         userId: Long,

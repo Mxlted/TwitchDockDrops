@@ -19,7 +19,7 @@
 *Current dashboard with built-in preview data. Campaigns, rewards, and activity are illustrative.*
 
 Twitch Dock Drops quietly farms timed Twitch Drops without playing or downloading the stream. Run it
-in Docker, connect your Twitch account through the official device-activation page, choose the games
+in Docker, connect your Twitch account using the desktop browser helper, choose the games
 you care about, and leave the miner to handle the rest.
 
 > [!IMPORTANT]
@@ -46,7 +46,8 @@ you care about, and leave the miner to handle the rest.
 ## Quick start
 
 You need [Docker](https://docs.docker.com/get-docker/) with Docker Compose and a Twitch account that
-can participate in Drops campaigns.
+can participate in Drops campaigns. Fresh login also needs [Node.js 22.4 or newer](https://nodejs.org/en/download)
+and Chrome, Edge, or Chromium on a desktop that can stay running for session renewal.
 
 ```bash
 git clone https://github.com/Mxlted/TwitchDockDrops.git
@@ -69,14 +70,15 @@ the [Operator Guide](./OPERATIONS.md#network-access) for loopback-only and rever
 ## Start farming in three steps
 
 1. Select **Connect Twitch** in the dashboard.
-2. Approve the displayed code on Twitch's device-activation page. The app never asks for your Twitch
-   password.
+2. Download the login helper, run `node login-helper.mjs`, and enter the dashboard address and pairing
+   code. Sign in on Twitch in the new browser, then close its windows. Leave the helper running.
 3. Choose game priorities or leave Auto Mode in charge, then start the miner.
 
 Twitch Dock Drops refreshes your campaigns, chooses an eligible live channel, reports watch progress,
 recovers from stalled channels, and claims completed Drops. Your saved session is restored after a
-container restart, and the miner resumes automatically if it was running before the restart, so normal
-day-to-day use is simply opening the dashboard when you want to check in.
+container restart, and the miner resumes automatically if it was running before the restart. Browser
+sessions need fresh integrity proof: reconnect the helper after a container restart so renewal continues.
+See [browser login](./OPERATIONS.md#browser-login) for setup and troubleshooting.
 
 ## The dashboard
 
@@ -108,7 +110,8 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
 - Views are bookmarkable (`/#campaigns`), and an offline banner appears if the local host stops
   responding.
 
-The miner keeps lifecycle work on the server. Closing the browser does not stop farming.
+The miner keeps lifecycle work on the server. Closing the dashboard does not stop farming; keep the
+desktop login helper running to renew browser sessions.
 **Up next** follows your saved priorities, exclusions, campaign eligibility, and fallback order;
 live-channel availability determines what can actually run.
 
@@ -123,8 +126,8 @@ or open `/?preview=active` on your instance. Preview controls do not change the 
   progress reporting.
 - Unlinked-campaign farming is optional and treated as speculative until Twitch confirms real progress.
 - Private Twitch behavior can change, so review the [Project Status](./PROJECT_STATUS.md) when troubleshooting.
-- Fresh device login may be rejected by Twitch. Preserve working saved sessions; upstream's newer
-  browser login and renewal are not yet available here. See [login limitations](./OPERATIONS.md#current-twitch-login-limitation).
+- Connect Twitch uses browser login because Twitch can reject the older device-code flow. Existing
+  sessions are preserved. Live account acceptance of the new helper has not yet been verified.
 - Local activity logs can contain campaign and channel names; review them before sharing.
 
 ## Documentation

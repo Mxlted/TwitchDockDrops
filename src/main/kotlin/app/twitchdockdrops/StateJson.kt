@@ -115,6 +115,7 @@ private fun RuntimeSnapshot.toJson(settings: AppSettings): JsonObject = buildJso
 }
 
 private fun LoginSession.toJson(): JsonObject = buildJsonObject {
+    put("method", method)
     put("state", state.name.lowercase())
     put("statusText", SafeText.diagnostic(statusText))
     putNullable("userId", userId)

@@ -2,6 +2,7 @@ package com.nathan.twitchdropsminer.android.data.local
 
 import app.twitchdockdrops.storage.AtomicFiles
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
+import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -40,6 +41,7 @@ class SecureSessionStore(
             put("userId", session.userId)
             put("deviceId", session.deviceId)
             put("savedAt", session.savedAt.toString())
+            session.browserContext?.let { put("browserContext", it.toJson()) }
         }.toString().toByteArray(Charsets.UTF_8)
         val initializationVector = ByteArray(12).also(secureRandom::nextBytes)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -83,6 +85,7 @@ class SecureSessionStore(
                 userId = root.requiredString("userId"),
                 deviceId = root.requiredString("deviceId"),
                 savedAt = Instant.parse(root.requiredString("savedAt")),
+                browserContext = root["browserContext"]?.let { BrowserSessionContext.parse(it as JsonObject) },
             ).also {
                 loadStatus = PersistenceStatus(PersistenceFileState.Loaded)
             }

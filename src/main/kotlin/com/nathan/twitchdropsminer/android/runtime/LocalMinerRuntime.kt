@@ -15,6 +15,7 @@ import com.nathan.twitchdropsminer.android.data.model.RuntimeActivity
 import com.nathan.twitchdropsminer.android.data.model.RuntimePhase
 import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
+import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
 import com.nathan.twitchdropsminer.android.data.model.inEarningOrder
 import com.nathan.twitchdropsminer.android.data.network.NetworkStatusProvider
 import com.nathan.twitchdropsminer.android.data.twitch.CurrentDropProgress
@@ -105,6 +106,7 @@ class LocalMinerRuntime(
     private val inventoryRefreshRequests = MutableStateFlow(0L)
     private var lastLoggedExcludedCampaignIds: Set<String> = emptySet()
     private var waitingForNetwork = false
+    private val browserAdmission = BrowserLoginAdmission(clock)
 
     init {
         scope.launch {
@@ -127,6 +129,7 @@ class LocalMinerRuntime(
                         state = LoginState.LoggedIn,
                         statusText = "Stored Twitch session",
                         userId = session.userId,
+                        method = if (session.browserContext == null) "device" else "browser",
                     )
                 },
                 lastUpdate = now(),
@@ -148,6 +151,8 @@ class LocalMinerRuntime(
                 when (command) {
                     RuntimeCommand.StartAuthentication -> handleStartAuthentication(replace = false)
                     RuntimeCommand.ReplaceAuthentication -> handleStartAuthentication(replace = true)
+                    RuntimeCommand.StartBrowserAuthentication -> handleStartBrowserAuthentication()
+                    is RuntimeCommand.SubmitBrowserSession -> handleSubmitBrowserSession(command)
                     is RuntimeCommand.AuthenticationSucceeded -> handleAuthenticationSucceeded(command)
                     is RuntimeCommand.StartMining -> handleStartMining(command)
                     is RuntimeCommand.StopMining -> handleStopMining(command)
@@ -176,6 +181,7 @@ class LocalMinerRuntime(
             appendActivity(RuntimePhase.Idle, "Twitch is already connected")
             return
         }
+        browserAdmission.clear()
         val currentAuthorization = _snapshot.value.account
         if (
             !replace &&
@@ -231,7 +237,13 @@ class LocalMinerRuntime(
             return
         }
         sessionGeneration += 1L
-        secureSessionStore.saveTwitchSession(command.session)
+        try {
+            secureSessionStore.saveTwitchSession(command.session)
+        } catch (error: Throwable) {
+            command.browserLease?.let(browserAdmission::failed)
+            throw error
+        }
+        command.browserLease?.let { browserAdmission.accepted(it, command.session.userId) }
         authJob = null
         _snapshot.update {
             it.copy(
@@ -240,6 +252,7 @@ class LocalMinerRuntime(
                     state = LoginState.LoggedIn,
                     statusText = "Logged in with Twitch",
                     userId = command.session.userId,
+                    method = if (command.session.browserContext == null) "device" else "browser",
                 ),
                 currentTask = "Twitch login complete",
                 progressSummary = "Loading drops inventory.",
@@ -267,7 +280,7 @@ class LocalMinerRuntime(
         if (command.persistIntent) {
             persistMiningIntent(requested = true)
         }
-        if (authJob?.isActive == true) return
+        if (authJob?.isActive == true || browserAdmission.pending()) return
         if (miningJob?.isActive == true) {
             return
         }
@@ -373,7 +386,7 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleRefreshInventory() {
-        if (authJob?.isActive == true) return
+        if (authJob?.isActive == true || browserAdmission.pending()) return
         if (miningJob?.isActive == true) {
             inventoryRefreshRequests.update { it + 1L }
             _snapshot.update {
@@ -433,6 +446,7 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleResetSession(command: RuntimeCommand.ResetSession) {
+        browserAdmission.clear()
         sessionGeneration += 1L
         authRunGeneration += 1L
         miningRunGeneration += 1L
@@ -464,6 +478,7 @@ class LocalMinerRuntime(
         if (command.expectedSessionGeneration != sessionGeneration) {
             return
         }
+        browserAdmission.clear()
         sessionGeneration += 1L
         authRunGeneration += 1L
         miningRunGeneration += 1L
@@ -501,6 +516,65 @@ class LocalMinerRuntime(
 
     fun startAuthentication() {
         enqueueCoalesced(RuntimeCommand.StartAuthentication)
+    }
+
+    fun startBrowserAuthentication() { enqueueCoalesced(RuntimeCommand.StartBrowserAuthentication) }
+    fun claimBrowserLogin(code: String): String = browserAdmission.claim(code)
+    fun browserLoginStatus(ticket: String): String = browserAdmission.status(ticket)
+    suspend fun submitBrowserSession(ticket: String, context: BrowserSessionContext) {
+        val completed = CompletableDeferred<Unit>()
+        runtimeCommands.send(RuntimeCommand.SubmitBrowserSession(ticket, context, completed))
+        completed.await()
+    }
+
+    private fun cancelForBrowserAuthentication() {
+        authRunGeneration++
+        sessionGeneration++
+        miningRunGeneration++
+        inventoryRefreshRunGeneration++
+        authJob?.cancel(); miningJob?.cancel(); inventoryRefreshJob?.cancel()
+        authJob = null; miningJob = null; inventoryRefreshJob = null
+        waitingForNetwork = false
+    }
+
+    private suspend fun handleStartBrowserAuthentication() {
+        cancelForBrowserAuthentication()
+        val (code, expiry) = browserAdmission.open()
+        updateSnapshot(RuntimePhase.Authenticating, "Connect the browser login helper") {
+            it.copy(account = LoginSession(LoginState.LoginRequired, "Waiting for browser helper",
+                oauthCode = code, expiresAt = expiry, method = "browser"),
+                miningActive = false, currentChannel = null, activeCampaign = null, activeDrop = null,
+                channelSearchInProgress = false, error = null)
+        }
+    }
+
+    private suspend fun handleSubmitBrowserSession(command: RuntimeCommand.SubmitBrowserSession) {
+        val lease = browserAdmission.begin(command.ticket)
+        cancelForBrowserAuthentication()
+        val generation = authRunGeneration
+        updateSnapshot(RuntimePhase.Authenticating, "Verifying browser login") {
+            it.copy(account = LoginSession(LoginState.LoginRequired, "Verifying browser login", method = "browser"),
+                miningActive = false, currentChannel = null, activeCampaign = null, activeDrop = null,
+                channelSearchInProgress = false, error = null)
+        }
+        authJob = scope.launch(RuntimeOperationGuard { isCurrentAuthentication(generation) }) {
+            try {
+                val session = twitchApiClient.validateBrowserContext(command.context)
+                ensureCurrentAuthentication(generation)
+                require(lease.expectedAccount == null || session.userId == lease.expectedAccount) { "Account mismatch" }
+                runtimeCommands.send(RuntimeCommand.AuthenticationSucceeded(generation, session, lease.generation))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                if (isCurrentAuthentication(generation)) {
+                    browserAdmission.failed(lease.generation)
+                    updateSnapshot(RuntimePhase.Error, "Browser login verification failed") {
+                        it.copy(error = "Twitch did not accept the browser session. Retry the helper; saved credentials were preserved.")
+                    }
+                }
+            }
+        }
+        command.completed.complete(Unit)
     }
 
     fun replaceAuthentication() {
@@ -1690,7 +1764,7 @@ class LocalMinerRuntime(
             ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
             awaitUsableNetwork()
             val validation = runCatchingCancellable {
-                twitchApiClient.validateAccessToken(session.accessToken)
+                twitchApiClient.validateSession(session)
             }
             ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
             if (validation.isSuccess) {
@@ -3473,11 +3547,15 @@ private fun Duration.runtimeLabel(): String {
 }
 
 private sealed interface RuntimeCommand {
+    data object StartBrowserAuthentication : RuntimeCommand
+    data class SubmitBrowserSession(val ticket: String, val context: BrowserSessionContext,
+        val completed: CompletableDeferred<Unit>) : RuntimeCommand
     data object StartAuthentication : RuntimeCommand
     data object ReplaceAuthentication : RuntimeCommand
     data class AuthenticationSucceeded(
         val authGeneration: Long,
         val session: StoredTwitchSession,
+        val browserLease: Long? = null,
     ) : RuntimeCommand
     data class StartMining(
         val persistIntent: Boolean = false,
@@ -3499,6 +3577,8 @@ private sealed interface RuntimeCommand {
 
 private val RuntimeCommand.label: String
     get() = when (this) {
+        RuntimeCommand.StartBrowserAuthentication -> "start browser login"
+        is RuntimeCommand.SubmitBrowserSession -> "verify browser login"
         RuntimeCommand.StartAuthentication -> "start authentication"
         RuntimeCommand.ReplaceAuthentication -> "replace authentication"
         is RuntimeCommand.AuthenticationSucceeded -> "complete authentication"
@@ -3511,6 +3591,8 @@ private val RuntimeCommand.label: String
 
 private val RuntimeCommand.coalescingKey: String?
     get() = when (this) {
+        RuntimeCommand.StartBrowserAuthentication -> "start-browser-login"
+        is RuntimeCommand.SubmitBrowserSession -> null
         RuntimeCommand.StartAuthentication -> "start-authentication"
         RuntimeCommand.ReplaceAuthentication -> "replace-authentication"
         is RuntimeCommand.StartMining -> "start-mining"
@@ -3523,6 +3605,7 @@ private val RuntimeCommand.coalescingKey: String?
 
 private fun RuntimeCommand.completeExceptionally(error: Throwable) {
     when (this) {
+        is RuntimeCommand.SubmitBrowserSession -> completed.completeExceptionally(error)
         is RuntimeCommand.StopMining -> completed?.completeExceptionally(error)
         is RuntimeCommand.ResetSession -> completed?.completeExceptionally(error)
         else -> Unit

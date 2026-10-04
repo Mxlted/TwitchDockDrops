@@ -33,6 +33,11 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -41,6 +46,31 @@ import okhttp3.Response
 import org.junit.jupiter.api.io.TempDir
 
 class WebServerTest {
+    @Test fun `helper routes require trusted origin bounded strict JSON and one pairing owner`() = runBlocking {
+        for (path in listOf("/api/auth/browser/start","/api/auth/browser/claim","/api/auth/browser/submit","/api/auth/browser/status")) {
+            execute(path,"POST","{}",origin="https://evil.example").use { assertError(it,403) }
+            execute(path).use { assertError(it,405) }
+            execute(path,"POST","{}",contentType="text/plain").use { assertError(it,415) }
+            execute(path,"POST","{\"padding\":\"${"x".repeat(66000)}\"}").use { assertError(it,413) }
+        }
+        execute("/api/auth/browser/start","POST","{}").use { assertEquals(202,it.code) }
+        val code = withTimeout(2000) { runtime.snapshot.first { it.account.oauthCode != null }.account.oauthCode!! }
+        val ticket = execute("/api/auth/browser/claim","POST","""{"code":"$code"}""").use {
+            assertEquals(200,it.code)
+            assertEquals("no-store",it.header("Cache-Control"))
+            Json.parseToJsonElement(it.body!!.string()).jsonObject["ticket"]!!.jsonPrimitive.content
+        }
+        execute("/api/auth/browser/claim","POST","""{"code":"$code"}""").use { assertError(it,400) }
+        execute("/api/state").use { assertFalse(it.body!!.string().contains(ticket)) }
+        execute("/api/auth/browser/submit","POST","""{"ticket":"$ticket","context":{}}""").use { assertError(it,400) }
+        execute("/api/session/reset","POST","{}").use { assertEquals(200,it.code) }
+        execute("/api/auth/browser/status","POST","""{"ticket":"$ticket"}""").use { assertError(it,400) }
+        execute("/login-helper.mjs").use {
+            assertEquals(200,it.code); assertTrue(it.header("Content-Disposition").orEmpty().contains("attachment"))
+            assertTrue(it.body!!.string().contains("MIT License"))
+        }
+    }
+
     @TempDir
     lateinit var directory: Path
 

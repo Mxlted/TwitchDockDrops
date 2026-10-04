@@ -18,6 +18,7 @@ data class LoginSession(
     val oauthCode: String? = null,
     val deviceCode: String? = null,
     val expiresAt: Instant? = null,
+    val method: String = "device",
 ) {
     val isAuthenticated: Boolean
         get() = state == LoginState.LoggedIn
@@ -31,6 +32,7 @@ data class StoredTwitchSession(
     val userId: String,
     val deviceId: String,
     val savedAt: Instant,
+    val browserContext: BrowserSessionContext? = null,
 )
 
 data class MinerStatus(

@@ -30,7 +30,8 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
 
 ## Twitch credentials
 
-- The app uses Twitch device authorization and never receives a Twitch password.
+- Fresh login uses an isolated desktop browser helper. Passwords are entered only on Twitch in that
+  browser, never in the dashboard or JVM. Existing device-authorized sessions remain supported.
 - API responses never include the OAuth access token or encryption key.
 - Session data is encrypted with AES-256-GCM before it is written to `/data/session.enc`.
 - Replacement login keeps the old encrypted credential until the new session is validated and
@@ -41,14 +42,28 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
   encrypted credential before exposing the expired state to the browser.
 - Only HTTP 401 from authoritative token validation expires a session. A validation 403, temporary
   failure, malformed identity, or client mismatch preserves the encrypted credential. Validation
-  checks the Android client ID and a positive numeric user ID; changing a client ID cannot convert
+  checks the matching Android or web client ID and a positive numeric user ID; changing a client ID cannot convert
   a token. A Twitch GraphQL 401/403 or pure HTTP-200 authentication/integrity error first
   re-validates the token and expires the session only when validation confirms it is invalid. A watch
   beacon or HTML/JavaScript watch-configuration rejection cannot; those results invalidate or retry
   watch configuration while preserving the stored OAuth session.
 - Device OAuth errors and JSON parsing failures use fixed diagnostics, never raw upstream text.
-  The upstream browser-login/helper/renewal system is not part of this host; do not upload browser
-  cookies, browser session bundles, or upstream helper credentials to it.
+  Only the helper downloaded from this instance uses its pairing protocol; upstream helper credentials
+  are incompatible. Never paste raw cookies, tokens, or captured headers into the dashboard.
+- Browser context is strictly bounded and encrypted with the session; state, events, logs, and errors
+  exclude it. The server checks OAuth identity and both private Drops queries before accepting it.
+  Expired proof blocks authenticated requests while preserving encrypted credentials.
+- Pairing uses a one-use 72-bit code, ten-minute deadline, and five-guess limit. The resulting 256-bit
+  ticket stays only in helper/server memory and binds to the first accepted account. Successful renewal
+  extends its lease by 24 hours; new pairing, reset, and server restart revoke it. A helper exit stops
+  renewal but the ticket remains valid until expiry or revocation. Anyone with dashboard access can
+  start pairing, so this does not add user authentication to trusted-LAN mode.
+- The helper uses only its own temporary browser profile. Interactive login has no debugging port;
+  headless capture binds the browser control port to loopback with an ephemeral port. Other local
+  processes under the same user can access that profile/control channel. Normal exit deletes the
+  profile; crashes or forced termination may leave it in the OS temporary directory. Keep the helper
+  computer trusted. HTTP uploads are restricted to private/loopback addresses; otherwise use verified
+  HTTPS. TLS verification and redirect protection remain enabled.
 - By default, a random key is stored alongside the encrypted session in the private named volume.
   This protects accidental disclosure of the session file alone, but not theft of the complete
   volume by a host administrator.

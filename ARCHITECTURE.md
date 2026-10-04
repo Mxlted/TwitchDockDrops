@@ -80,7 +80,7 @@ bounds each complete upstream call, including redirects and response-body reads,
 Device polling accepts both OAuth `error` and Twitch's documented `message` response field. HTTP
 429/5xx remains transient even if its body resembles a terminal OAuth error. OAuth parsing failures
 use fixed diagnostics; device-request 4xx rejections other than 429 stop authorization immediately.
-No raw OAuth response text is surfaced. Validation requires the Android client ID
+No raw OAuth response text is surfaced. Validation requires the session's Android or web client ID
 and a positive numeric user ID; only a validation HTTP 401 proves token invalidity. A 403, client
 mismatch, malformed validation, or integrity rejection preserves the encrypted credential. Pure
 GraphQL `invalid oauth token` / `failed integrity check` errors without data or an execution path
@@ -91,10 +91,24 @@ replacement; failure to obtain a new code does not delete it. Start/refresh comm
 preserved credential while authorization is active. Explicit session reset still deletes it.
 
 The 2026-10-04 upstream review covers rangermix/TwitchDropsMiner through `1182d0172458` (v2.1.1).
-Its Chromium login, complete browser integrity context, session renewal, and desktop helper protocol
-are not implemented by this JVM host. The temporary Smart TV client switch was superseded upstream
-and is deliberately not adopted. Existing Android sessions remain supported; device-code parsing
-fixes cannot restore fresh authorization if Twitch refuses to issue a code for that client.
+The dashboard now defaults to a root-owned Node desktop helper modeled on upstream's browser-context
+capture. It uses a temporary native Chromium profile for interactive Twitch login, then short headless
+captures for renewal. It correlates issued integrity tokens with successful authenticated campaign
+responses and transfers only allowlisted request headers, user agent, and issuance/expiry timestamps.
+The JVM validates the web OAuth client/account and both Inventory and Campaigns queries before atomic
+encrypted save. Each helper lease binds to the first accepted account. Renewal goes through the same
+generation-guarded runtime authentication command and resumes saved mining intent. Chromium is not
+installed in the container; the helper must remain running. Upstream's helper protocol is not supported.
+Existing Android sessions remain supported; the superseded Smart TV client switch is not adopted.
+
+`BrowserLoginAdmission` owns a single in-memory pairing lease: a random 72-bit one-use code with a
+ten-minute expiry and five-guess limit becomes a random 256-bit helper ticket. The initial ticket
+shares that expiry; accepted uploads extend it for 24 hours. New pairing, reset, and process restart
+revoke it. Ticket-authenticated status reports only connected/verifying/ready/failed state. Late
+verification cannot commit after reset or a replacement. The helper stops on capture, transfer, or
+verification failure; reconnect to resume. Expired integrity proof blocks authenticated requests
+without deleting the saved credential. Browser-context persistence remains within the encrypted
+session envelope, and old sessions load without migration.
 
 Watch earning telemetry uses the direct Spade transport restored by the current TwitchDropsMiner
 implementations. Every heartbeat builds a new uncompressed Base64 JSON array containing one
@@ -172,6 +186,11 @@ local logs. `GET /api/events` is a server-sent event stream of the same document
 device code secret, encryption key, and filesystem paths are never serialized. Campaign ACL
 membership remains server-side for selection and is not included in campaign state payloads.
 
+`snapshot.account.method` is `device` or `browser`. For browser pairing, `oauthCode` contains the
+short-lived pairing code and `expiresAt` its deadline; `oauthUrl` is absent. Full browser context and
+helper tickets never enter state/events/logs. The client renders helper instructions rather than
+Twitch activation for this method.
+
 `snapshot.rewardCampaigns` is a separate, display-only list of reward promotions, with explicit
 `id`, `name`, nullable `brand`, `gameName`, `summary`, `startsAt`, `endsAt`, and `rewardNames` fields.
 `snapshot.rewardCampaignsAvailable` distinguishes a complete empty list from unavailable/partial data.
@@ -236,6 +255,12 @@ calls run on coroutines without holding an HTTP connection open. The browser sup
 mutation while that command is in flight, and the runtime remains the final idempotency boundary.
 `/api/auth/start` begins login idempotently;
 `/api/auth/replace` explicitly invalidates the current device-code generation and requests a new code.
+The default UI uses `POST /api/auth/browser/start` with `{}` to create/replace pairing. The desktop
+helper uses POST `/api/auth/browser/claim` with `{code}`, `/submit` with `{ticket,context}`, and
+`/status` with `{ticket}`. These routes enforce the same Host, Origin, JSON, and 64 KiB request limits;
+context is independently capped at 24 KiB with exact fields and bounded ASCII header values. Claim
+returns a ticket only to the caller, submit returns 202 after local admission while verification runs
+asynchronously, and status returns only the lease state. `/login-helper.mjs` is a no-cache attachment.
 
 Direct execution listens on loopback by default. Compose explicitly uses a container-internal
 `0.0.0.0` listener while retaining loopback host publication unless `.env` opts into LAN binding.
@@ -278,6 +303,8 @@ watch events use the authenticated Twitch session headers required to attribute 
 configuration is limited to `assets.twitch.tv` or `static.twitchcdn.net`, and event delivery is limited
 to `https://beacon.twitch.tv/track` or HTTPS `spade.twitch.tv`. Same-origin loopback endpoint
 injection is constructor-only for MockWebServer tests.
+HTTP redirects are disabled. Captured integrity/version/session headers are added only to GraphQL;
+watch configuration and collectors never receive the full browser context.
 
 ## Web client
 

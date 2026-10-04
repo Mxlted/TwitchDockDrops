@@ -7,6 +7,7 @@ import com.nathan.twitchdropsminer.android.data.model.AppSettings
 import com.nathan.twitchdropsminer.android.data.model.AutoModePriority
 import com.nathan.twitchdropsminer.android.data.model.LocalLogEntry
 import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
+import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearch
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchException
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchRequest
@@ -88,9 +89,11 @@ class WebServer(
                     exchange.requireMethod("GET")
                     streamEvents(exchange)
                 }
+                "/api/auth/browser/claim", "/api/auth/browser/submit", "/api/auth/browser/status" ->
+                    handleBrowserHelper(exchange)
 
                 in MutationRoutes -> handleApiMutation(exchange)
-                "/", "/index.html", "/app.css", "/app.js", "/theme-init.js", "/favicon.svg" ->
+                "/", "/index.html", "/app.css", "/app.js", "/theme-init.js", "/favicon.svg", "/login-helper.mjs" ->
                     serveStatic(exchange)
 
                 else -> throw RequestException(404, "Route not found.")
@@ -140,6 +143,39 @@ class WebServer(
         exchange.respondJson(200, stateJson.encodeCategories(request, results))
     }
 
+    private fun handleBrowserHelper(exchange: HttpExchange) {
+        exchange.requireMethod("POST")
+        verifyMutationRequest(exchange)
+        val body = exchange.readJsonBody()
+        exchange.responseHeaders.set("Cache-Control", "no-store")
+        try {
+            val result = runBlocking {
+                mutationMutex.withLock {
+                    when (exchange.requestURI.path) {
+                        "/api/auth/browser/claim" -> {
+                            body.onlyFields("code")
+                            buildJsonObject { put("ticket", runtime.claimBrowserLogin(body.requiredString("code", 32))) }
+                        }
+                        "/api/auth/browser/status" -> {
+                            body.onlyFields("ticket")
+                            buildJsonObject { put("state", runtime.browserLoginStatus(body.requiredString("ticket", 64))) }
+                        }
+                        else -> {
+                            body.onlyFields("ticket", "context")
+                            val context = body["context"] as? JsonObject
+                                ?: throw RequestException(400, "Browser context is required.")
+                            runtime.submitBrowserSession(body.requiredString("ticket", 64), BrowserSessionContext.parse(context).also { it.requireFresh() })
+                            buildJsonObject { put("ok", true) }
+                        }
+                    }
+                }
+            }
+            exchange.respondJson(if (exchange.requestURI.path.endsWith("/submit")) 202 else 200, result.toString())
+        } catch (_: IllegalArgumentException) {
+            throw RequestException(400, "Browser helper request rejected. Check the pairing code or reconnect Twitch.")
+        }
+    }
+
     private fun handleApiMutation(exchange: HttpExchange) {
         exchange.requireMethod("POST", "PUT")
         verifyMutationRequest(exchange)
@@ -175,6 +211,7 @@ class WebServer(
         }
         return when (path) {
             "/api/auth/start" -> body.noFields().let { runtime.startAuthentication(); true }
+            "/api/auth/browser/start" -> body.noFields().let { runtime.startBrowserAuthentication(); true }
             "/api/auth/replace" -> body.noFields().let { runtime.replaceAuthentication(); true }
             "/api/miner/start" -> body.noFields().let { runtime.startMining(); true }
             "/api/miner/stop" -> body.noFields().let { runtime.stopMining(); true }
@@ -348,11 +385,16 @@ class WebServer(
             "/app.js" -> "/web/app.js"
             "/theme-init.js" -> "/web/theme-init.js"
             "/favicon.svg" -> "/web/favicon.svg"
+            "/login-helper.mjs" -> "/web/login-helper.mjs"
             else -> throw RequestException(404, "Static resource not found.")
         }
         val bytes = javaClass.getResourceAsStream(resource)?.use { it.readBytes() }
             ?: throw RequestException(404, "Static resource not found.")
+        if (resource.endsWith("login-helper.mjs")) {
+            exchange.responseHeaders.set("Content-Disposition", "attachment; filename=login-helper.mjs")
+        }
         val contentType = when {
+            resource.endsWith(".mjs") -> "application/octet-stream"
             resource.endsWith(".html") -> "text/html; charset=utf-8"
             resource.endsWith(".css") -> "text/css; charset=utf-8"
             resource.endsWith(".js") -> "text/javascript; charset=utf-8"
@@ -435,6 +477,7 @@ private const val EventStateCheckMillis = 2_000L
 private const val EventKeepAliveNanos = 15_000_000_000L
 
 private val MutationRoutes = setOf(
+    "/api/auth/browser/start",
     "/api/auth/start",
     "/api/auth/replace",
     "/api/miner/start",
@@ -555,6 +598,8 @@ private fun HttpExchange.respondJson(status: Int, body: String) {
 }
 
 private fun HttpExchange.respondError(status: Int, message: String) {
+    // Rejected requests can still have unread bodies; do not reuse that connection.
+    responseHeaders.set("Connection", "close")
     val body = buildJsonObject { put("error", message) }.toString()
     runCatching { respondJson(status, body) }.onFailure { close() }
 }

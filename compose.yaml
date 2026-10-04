@@ -5,7 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: twitch-dock-drops:local
+    image: dockdrops:local
+    container_name: dockdrops
     init: true
     restart: unless-stopped
     ports:
@@ -36,6 +37,10 @@ services:
       retries: 3
       start_period: 15s
       start_interval: 2s
+
+networks:
+  default:
+    name: dockdrops
 
 volumes:
   twitch-dock-drops-data:

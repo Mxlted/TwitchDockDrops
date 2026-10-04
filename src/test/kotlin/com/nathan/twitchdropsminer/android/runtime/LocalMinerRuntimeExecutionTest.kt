@@ -8,6 +8,7 @@ import com.nathan.twitchdropsminer.android.data.model.CampaignDrop
 import com.nathan.twitchdropsminer.android.data.model.Channel
 import com.nathan.twitchdropsminer.android.data.model.LoginState
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
+import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
 import com.nathan.twitchdropsminer.android.data.network.NetworkStatusProvider
 import com.nathan.twitchdropsminer.android.data.twitch.CurrentDropProgress
 import com.nathan.twitchdropsminer.android.data.twitch.CampaignInventory
@@ -47,6 +48,64 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    private fun browserContext(): BrowserSessionContext = BrowserSessionContext.parse(
+        kotlinx.serialization.json.Json.parseToJsonElement("""{
+          "version":1,"captured_at":${Instant.now().epochSecond},"expires_at":${Instant.now().plusSeconds(3600).epochSecond},
+          "user_agent":"TestBrowser","headers":{"client-id":"kimne78kx3ncx6brgo4mv6wki5h1ko",
+          "authorization":"OAuth test-token","client-integrity":"proof","x-device-id":"device"}}
+        """) as kotlinx.serialization.json.JsonObject,
+    )
+
+    @Test fun `browser login commits validated sessions and renews only the same account`(): Unit = runBlocking {
+        val store = sessionStore()
+        var user = "12345"
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(userId=user,browserContext=context)
+            override suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign> = emptyList()
+        }
+        val runtime = runtime(store,api)
+        runtime.startBrowserAuthentication()
+        val code = withTimeout(2000) { runtime.snapshot.first { it.account.oauthCode != null }.account.oauthCode!! }
+        val ticket = runtime.claimBrowserLogin(code)
+        runtime.submitBrowserSession(ticket,browserContext())
+        withTimeout(2000) { while (runtime.browserLoginStatus(ticket) != "ready") delay(10) }
+        assertEquals("12345",store.twitchSession()?.userId)
+        user = "67890"
+        runtime.submitBrowserSession(ticket,browserContext())
+        withTimeout(2000) { while (runtime.browserLoginStatus(ticket) != "failed") delay(10) }
+        assertEquals("12345",store.twitchSession()?.userId)
+        runtime.resetSessionAndJoin()
+        assertNull(store.twitchSession())
+        kotlin.test.assertFailsWith<IllegalArgumentException> { runtime.browserLoginStatus(ticket) }
+    }
+
+    @Test fun `reset invalidates a delayed browser verification before persistence`() = runBlocking {
+        val store = sessionStore()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val finished = CompletableDeferred<Unit>()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateBrowserContext(context: BrowserSessionContext): StoredTwitchSession {
+                started.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+                finished.complete(Unit)
+                return storedSession().copy(browserContext=context)
+            }
+        }
+        val runtime = runtime(store,api)
+        runtime.startBrowserAuthentication()
+        val code = withTimeout(2000) { runtime.snapshot.first { it.account.oauthCode != null }.account.oauthCode!! }
+        val ticket = runtime.claimBrowserLogin(code)
+        runtime.submitBrowserSession(ticket,browserContext())
+        started.await()
+        runtime.resetSessionAndJoin()
+        release.complete(Unit)
+        finished.await()
+        runtime.stopMiningAndJoin()
+        assertNull(store.twitchSession())
+        assertEquals(LoginState.LoggedOut,runtime.snapshot.value.account.state)
+    }
+
     @Test
     fun `failed replacement authorization preserves the prior encrypted credential`() = runBlocking {
         val store = sessionStore().also { it.saveTwitchSession(storedSession()) }

@@ -260,9 +260,9 @@ function renderOverview(data) {
 
   if (!authenticated) {
     const hero = waitingForCode
-      ? renderLoginCodeHero(account)
+      ? (account.method === "browser" ? renderBrowserLoginHero(account) : renderLoginCodeHero(account))
       : preparingLogin
-        ? renderLoginPreparingHero()
+        ? renderLoginPreparingHero(account)
         : renderWelcomeHero();
     return `
       <div class="page-stack">
@@ -321,7 +321,7 @@ function renderWelcomeHero() {
       <div class="hero-copy">
         <p class="hero-kicker">Container ready</p>
         <h2>Connect Twitch to <em>start farming.</em></h2>
-        <p>Approve a one-time device code on Twitch. The miner then follows eligible campaigns, sends watch heartbeats, and claims completed drops from this container.</p>
+        <p>Sign in with the desktop browser helper. Your session stays encrypted in this container; the helper keeps it renewed while the miner farms.</p>
         <div class="hero-actions">
           <button class="button button-primary" data-action="connect" type="button">${linkIcon()} Connect Twitch</button>
           <a class="button button-quiet" href="/?preview=active">Explore with preview data</a>
@@ -330,9 +330,9 @@ function renderWelcomeHero() {
       <aside class="hero-aside" aria-label="How it works">
         <p class="hero-aside-title">How it works</p>
         <ol class="step-list">
-          ${renderStep(1, "Connect Twitch", "Approve a one-time device code. The token stays encrypted in this container.")}
+          ${renderStep(1, "Connect Twitch", "Pair the helper and sign in with Chrome, Edge, or Chromium.")}
           ${renderStep(2, "Choose priorities", "Pin the games you want first, or let Auto Mode find useful work.")}
-          ${renderStep(3, "Let it run", "Watch heartbeats, channel recovery, and claims happen on the server.")}
+          ${renderStep(3, "Let it run", "Keep the helper open for session renewal. Mining and claims run on the server.")}
         </ol>
       </aside>
     </section>`;
@@ -366,7 +366,35 @@ function renderLoginCodeHero(account) {
     </section>`;
 }
 
-function renderLoginPreparingHero() {
+function renderBrowserLoginHero(account) {
+  return `<section class="hero">
+    <div class="hero-copy">
+      <p class="hero-kicker">Browser sign-in</p>
+      <h2>Pair your <em>login helper.</em></h2>
+      <p>On your desktop, download the helper and run <code>node login-helper.mjs</code> with <a href="https://nodejs.org/en/download" target="_blank" rel="noopener noreferrer">Node.js 22.4 or newer</a>. Enter this dashboard’s address and the pairing code. Sign in to Twitch in the new browser, then close that browser’s windows.</p>
+      <p>Keep the helper running for renewal. Your everyday browser profile is untouched.</p>
+      <div class="hero-actions">
+        <a class="button button-primary" href="/login-helper.mjs" download="login-helper.mjs">Download login helper</a>
+        <button class="button button-quiet" data-action="connect" type="button">New pairing code</button>
+      </div>
+    </div>
+    <aside class="hero-aside" aria-label="Helper pairing code">
+      <p class="hero-aside-title">Pairing code</p>
+      <div class="code-display pairing-code"><strong>${esc(account.oauthCode)}</strong>
+        <button class="tiny-button" type="button" data-action="copy-code" data-code="${attr(account.oauthCode)}">Copy code</button>
+        <small>${account.expiresAt ? `Connect before ${esc(formatTime(account.expiresAt))}` : "Enter this in the helper"}</small>
+      </div>
+    </aside>
+  </section>`;
+}
+
+function renderLoginPreparingHero(account = {}) {
+  if (account.method === "browser") return `<section class="hero" aria-busy="true">
+    <div class="hero-copy"><p class="hero-kicker">Browser sign-in</p><h2>Verifying your <em>Twitch session.</em></h2>
+      <p>The server is checking your account and Drops access. Keep the helper open.</p>
+      <div class="hero-actions"><button class="button button-quiet" data-action="connect" type="button">Restart pairing</button></div>
+    </div><aside class="hero-aside"><div class="spinner-block"><span class="spinner" aria-hidden="true"></span><span>Verifying with Twitch…</span></div></aside>
+  </section>`;
   return `
     <section class="hero" aria-busy="true">
       <div class="hero-copy">
@@ -788,7 +816,8 @@ function renderSettings(data) {
             ${renderFactRow("Pinned games", String(settings.selectedGamePriority.length))}
             ${renderFactRow("Excluded campaigns", String(settings.excludedCampaignIds.length))}
           </div>
-          ${authenticated ? "" : `<div class="card-actions actions-spaced"><button class="button button-primary" data-action="connect" type="button">${linkIcon()} Connect Twitch</button></div>`}
+          ${authenticated && snapshot.account.method === "browser" ? `<p class="field-hint">Keep the desktop helper running for renewal. Reconnect after restarting this server or closing the helper.</p>` : ""}
+          <div class="card-actions actions-spaced"><button class="button button-primary" data-action="connect" type="button">${linkIcon()} ${authenticated ? "Reconnect Twitch" : "Connect Twitch"}</button></div>
         </section>
       </div>
       <section class="soft-card section-card">
@@ -905,7 +934,7 @@ async function handleClick(event) {
   const action = button.dataset.action;
   try {
     if (action === "toggle-theme") toggleTheme();
-    if (action === "connect") await command("/api/auth/start");
+    if (action === "connect") { await command("/api/auth/browser/start"); showView("overview"); }
     if (action === "replace-code") await command("/api/auth/replace");
     if (action === "start") await command("/api/miner/start");
     if (action === "stop") await command("/api/miner/stop");
@@ -1281,8 +1310,8 @@ function previewState() {
     preview.snapshot.activeCampaignCount = 0;
   } else if (variant === "preparing") {
     preview.snapshot.phase = "connecting";
-    preview.snapshot.currentTask = "Preparing Twitch device login";
-    preview.snapshot.account = { state: "loginrequired", statusText: "Preparing Twitch device login", userId: null, oauthUrl: null, oauthCode: null, expiresAt: null, authenticated: false, actionRequired: true };
+    preview.snapshot.currentTask = "Verifying browser login";
+    preview.snapshot.account = { state: "loginrequired", method: "browser", statusText: "Verifying browser login", userId: null, oauthUrl: null, oauthCode: null, expiresAt: null, authenticated: false, actionRequired: true };
     preview.snapshot.campaigns = [];
     preview.snapshot.channels = [];
     preview.snapshot.currentChannel = null;
@@ -1292,8 +1321,8 @@ function previewState() {
     preview.snapshot.activeCampaignCount = 0;
   } else if (variant === "code") {
     preview.snapshot.phase = "authenticating";
-    preview.snapshot.currentTask = "Waiting for Twitch activation";
-    preview.snapshot.account = { state: "loginrequired", statusText: "Enter Twitch device code MINT-4K7", userId: null, oauthUrl: "https://www.twitch.tv/activate", oauthCode: "MINT-4K7", expiresAt: iso(10), authenticated: false, actionRequired: true };
+    preview.snapshot.currentTask = "Waiting for browser helper";
+    preview.snapshot.account = { state: "loginrequired", method: "browser", statusText: "Waiting for browser helper", userId: null, oauthUrl: null, oauthCode: "DEMO-PAIRING1", expiresAt: iso(10), authenticated: false, actionRequired: true };
     preview.snapshot.campaigns = [];
     preview.snapshot.channels = [];
     preview.snapshot.currentChannel = null;
@@ -1303,8 +1332,8 @@ function previewState() {
     preview.snapshot.activeCampaignCount = 0;
   } else if (variant === "expired") {
     preview.snapshot.phase = "error";
-    preview.snapshot.currentTask = "Twitch device code expired";
-    preview.snapshot.account = { state: "loginrequired", statusText: "Device code expired", userId: null, oauthUrl: null, oauthCode: null, expiresAt: iso(-1), authenticated: false, actionRequired: true };
+    preview.snapshot.currentTask = "Browser login verification failed";
+    preview.snapshot.account = { state: "loginrequired", method: "browser", statusText: "Browser verification failed", userId: null, oauthUrl: null, oauthCode: null, expiresAt: iso(-1), authenticated: false, actionRequired: true };
     preview.snapshot.campaigns = [];
     preview.snapshot.channels = [];
     preview.snapshot.currentChannel = null;
@@ -1312,7 +1341,7 @@ function previewState() {
     preview.snapshot.activeDrop = null;
     preview.snapshot.miningActive = false;
     preview.snapshot.activeCampaignCount = 0;
-    preview.snapshot.error = "Twitch device code expired. Start login again.";
+    preview.snapshot.error = "Twitch did not accept the browser session. Retry the helper; saved credentials were preserved.";
   }
   preview.snapshot.rewardCampaignsAvailable = variant === "active";
   preview.snapshot.rewardCampaigns = variant === "active" ? [{

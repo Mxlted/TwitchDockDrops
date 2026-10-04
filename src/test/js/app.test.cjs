@@ -14,9 +14,19 @@ function client(fetch = () => { throw new Error('Unexpected request'); }) {
     window: { location: { search: '?preview=active' }, addEventListener() {}, setTimeout, clearTimeout },
   });
   const source = fs.readFileSync(path.join(__dirname, '../../main/resources/web/app.js'), 'utf8');
-  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch };', context);
+  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch, renderBrowserLoginHero, renderLoginPreparingHero };', context);
   return context.client;
 }
+
+test('browser pairing explains helper renewal and safely renders the code', () => {
+  const c = client();
+  const html = c.renderBrowserLoginHero({oauthCode:'<code>&"',expiresAt:null,method:'browser'});
+  assert.match(html,/download="login-helper.mjs"/);
+  assert.match(html,/Keep the helper running/);
+  assert.match(html,/&lt;code&gt;&amp;&quot;/);
+  assert.doesNotMatch(html,/<code>&/);
+  assert.match(c.renderLoginPreparingHero({method:'browser'}),/Verifying your/);
+});
 
 test('campaign names link to their own Twitch campaign across list, watch card and queue', () => {
   const c = client();

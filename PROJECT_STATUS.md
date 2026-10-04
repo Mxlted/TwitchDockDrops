@@ -9,7 +9,8 @@ changes.
 - [x] OAuth validation checks client/account identity and preserves credentials on inconclusive rejection
 - [x] Pure GraphQL authentication/integrity errors trigger validation without replaying claims
 - [x] Special Events/IRL ACL participants can earn across categories through discovery and live rechecks
-- [ ] Browser-based fresh login, complete integrity context, and automated session renewal
+- [x] Desktop browser login, complete integrity context, protected pairing, and helper-driven renewal
+- [ ] Live Twitch verification of browser login, renewal, earning, and claims
 - [x] Compact reward companion panel sits beside desktop campaigns and below the list on smaller screens
 - [x] Open Reward Campaigns are visible in a separate Show/Hide panel with dates and reward names
 - [x] Reward listings refresh with inventory without entering the mining selector or claim runtime
@@ -74,7 +75,38 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
-## Upstream review - 2026-10-04
+## Browser login and Docker names - 2026-10-04
+
+- Connect Twitch now pairs a bundled Node.js 22.4+ helper instead of requesting a device code from
+  the endpoint returning HTTP 400. Native Chrome/Edge/Chromium performs login in a temporary profile;
+  headless captures renew browser integrity proof while the helper stays running. The JVM checks web
+  OAuth identity and both Drops queries before encrypted storage. Existing Android sessions load as
+  before. This root-owned protocol follows upstream capture concepts with MIT attribution in the
+  helper and `THIRD_PARTY_NOTICES.md`; it is not compatible with the upstream Python helper.
+- One-use, expiring pairing codes issue a private helper ticket; renewal binds to the same account.
+  Replacement/reset invalidate stale verification, preserve old credentials until successful save,
+  and revoke prior helper ownership. Host/Origin checks, strict bounds, redacted state, and disabled
+  redirects protect credential transfers. The account state adds only `method` for UI presentation.
+- Image `dockdrops:local`, container `dockdrops`, and network `dockdrops` replace verbose generated
+  names. Compose project/service identity and the existing `twitch-dock-drops-data` volume are retained.
+- Root Gradle `test installDist`: 165 tests passed, zero failures/errors/skips. Nine new JVM tests cover
+  context validation, Drops verification, encryption/redaction, pairing limits, redirects, HTTP routes,
+  account binding, and reset races. Two coroutine test declarations were corrected to return Unit so
+  JUnit actually discovers them. Rejected HTTP requests now close connections with unread bodies.
+- All 18 Node tests and the JavaScript syntax check passed. Native Windows Chrome helper
+  `--check-browser` passed for owned-profile launch, local CDP communication, and cleanup; this does
+  not prove Twitch acceptance. The initial sandbox attempt could not open the browser socket; the
+  authorized local-browser check passed.
+- Packaged JVM smoke: health 200, browser pairing start 202, public account method `browser`, reset
+  200. Browser QA covered real pairing, desktop 1440px, mobile 390px/320px, light/dark themes, and
+  logged-out, pairing, verifying, error, and active previews. Checked mobile layouts have no horizontal
+  overflow; no console warnings/errors were observed. Preview screenshots contain only demo data.
+- Standalone Docker Compose 5.6.0 configuration validation passed. Image build was attempted but the
+  Docker Desktop Linux daemon pipe is unavailable on this host; container build/runtime are unverified.
+- The Android reference remains clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`; untracked
+  `CLAUDE.md` is preserved. No live Twitch account login, renewal, earning, or claim was exercised.
+
+## Upstream review - 2026-10-04 (initial compatibility port)
 
 Reviewed [rangermix/TwitchDropsMiner at v2.1.1 / 1182d0172458](https://github.com/rangermix/TwitchDropsMiner/tree/1182d0172458),
 including the September auth migration and October 4 helper restoration.
@@ -87,7 +119,8 @@ including the September auth migration and October 4 helper restoration.
   Start/refresh is blocked during authorization and explicit reset still clears the session.
 - [v2.0 login migration](https://github.com/rangermix/TwitchDropsMiner/pull/124),
   [v2.1 container browser](https://github.com/rangermix/TwitchDropsMiner/pull/145), and
-  [v2.1.1 desktop fallback](https://github.com/rangermix/TwitchDropsMiner/pull/154): reviewed, not ported.
+  [v2.1.1 desktop fallback](https://github.com/rangermix/TwitchDropsMiner/pull/154): reviewed but not
+  ported in the initial compatibility commit; the browser-helper follow-up is recorded above.
   They require an interactive browser, integrity context capture, protected helper admission,
   server-side browser verification, and renewable credential storage. This patch preserves the
   independent non-root headless JVM deployment and does not claim equivalent new-login support.
@@ -544,10 +577,14 @@ root build.
 
 ## Known external risks
 
-- Fresh Android-client device authorization can be rejected by Twitch. Browser login, integrity
-  context capture/renewal, and upstream desktop-helper compatibility are not implemented. Preserving
-  saved Android sessions and fixing response parsing does not resolve this upstream restriction.
-  No live account login, cross-category earning, or claim was exercised for the 2026-10-04 port.
+- Fresh Android-client device authorization can be rejected by Twitch. The new browser helper avoids
+  that endpoint, but live account login, integrity renewal, earning, and claims remain unverified.
+  Renewal requires the helper computer to stay running; reconnect after server restart or helper
+  failure. There is no container-side Chromium renewal, Firefox support, or upstream-helper protocol
+  compatibility. Native helper launch was checked only on Windows. Different browser/miner network
+  routes or Twitch browser challenges can reject capture or server-side verification.
+- Docker image build/runtime for the browser-login follow-up could not be verified because this host
+  has no available Docker daemon. Compose configuration and the packaged JVM were verified separately.
 - Reward-campaign visibility has fixture coverage and public Twitch client schema inspection, but
   has not been verified with an authenticated real-account reward listing. Twitch's private persisted
   query can change. These campaigns are view-only: reward progress, automatic earning/claiming, and
