@@ -26,7 +26,7 @@ changes.
 - [x] Desktop browser login, complete integrity context, protected pairing, and helper-driven renewal
 - [x] Optional isolated Docker browser service and dashboard login chooser with desktop fallback
 - [x] Recoverable Chromium response-body capture failures no longer abort the desktop helper
-- [x] Dashboard Finish observes proof before login and captures the seed in the authenticated browser
+- [x] Dashboard Finish observes proof before login and preserves the authenticated browser through capture
 - [x] Encrypted scoped SDK seed, independent browser issuance, restart recovery and bounded renewal retries
 - [x] Linux container capture/navigation and renewal verified with offline synthetic Chromium traffic
 - [x] Live Twitch dashboard login and authenticated campaign loading on Linux Docker
@@ -94,6 +94,35 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Renewal seed browser profile correction - 2026-10-05
+
+- The user's retry reached `seed_failed`: Drops evidence was captured, but cookie lookup/bootstrap
+  did not complete. This narrows the failure to seed preparation; the exact SDK/browser failure was
+  still hidden. It does not establish a container resource or Chromium-package problem.
+- Found a likely cookie-policy conflict: `Target.createBrowserContext` creates Incognito storage,
+  and Chrome blocks third-party cookies there by default. The SDK cookie host `k.twitchcdn.net` is
+  cross-site from the `www.twitch.tv` bootstrap page. Sources: [CDP Target](https://chromedevtools.github.io/devtools-protocol/tot/Target/#method-createBrowserContext)
+  and [Chrome cookie settings](https://support.google.com/chrome/answer/95647?hl=en).
+- Missing-cookie bootstrap now uses a separate headed Chromium process with an empty regular
+  temporary profile. The signed-in browser remains intact until seed preparation completes; no login
+  cookie jar is copied. Cleanup, cancellation, independent issuance, and JVM account/Drops verification
+  remain required. This briefly adds one browser process tree under the existing container limits;
+  no image base, resource allowance, cookie-policy override or container privilege was changed.
+- Added fixed, allowlisted SDK reasons for initialization/timeout, network fetch, rejected response,
+  unusable cookie and unverifiable proof. Unknown errors still use generic safe messages. Tests cover
+  the private worker and JVM public bridge to ensure these diagnostics cannot expose upstream secrets.
+- Root JDK 21 `test installDist`: **184 tests passed**, no failures/errors/skips. Node suite:
+  **43 tests passed**; changed-script syntax and diff checks passed. Both affected images built once;
+  brief disposable container startup passed app health and browser-service running checks. Containers
+  were removed. No saved user data, login attempt, mutation or endurance scenario was used.
+- Corrected the optional offline bootstrap fixture to use a real `Set-Cookie` response rather than
+  direct CDP cookie injection, which bypassed the policy at issue. That fixture was syntax-checked
+  but **not executed**, following the current opt-in container-test policy. Earlier smoke results
+  do not verify this behavior. Actual response-cookie acceptance and the user's Finish sign-in retry,
+  renewal after expiry/restart, earning and claims remain manual and unverified for this change.
+- Android reference unchanged and clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`; the root
+  working tree was clean at task start. No push or deployment was performed.
 
 ## Finish sign-in missing-seed bootstrap - 2026-10-05
 

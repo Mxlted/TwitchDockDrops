@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {once} from 'node:events';
 import {BrowserWorker, createWorkerServer, validateInput} from '../../../browser/worker.mjs';
 import {setTimeout as sleep} from 'node:timers/promises';
+import {SeedFailure} from '../../../browser/renewal.mjs';
 
 test('input allows bounded typing and navigation, never arbitrary browser commands or shortcuts', () => {
   for (const value of [{kind:'text',text:' '},{kind:'text',text:'Twitch'},{kind:'key',key:'Tab',shift:true},{kind:'click',x:1099,y:759},{kind:'wheel',delta:-100}]) assert.equal(validateInput(value),value);
@@ -36,8 +37,8 @@ test('Finish bootstraps a missing SDK cookie before closing the signed-in browse
   let closed = false, bootstrapped = false;
   const captured = {headers:{'client-integrity':'captured'}};
   const worker = new BrowserWorker({
-    bootstrap:async (port,context,signal) => {
-      assert.equal(closed,false); assert.equal(port,1234); assert.equal(context,captured);
+    bootstrap:async (executable,args,context,signal) => {
+      assert.equal(closed,false); assert.equal(executable,worker.executable); assert.equal(args,worker.browserArgs); assert.equal(context,captured);
       signal.throwIfAborted(); bootstrapped = true;
       return {...context,sdk_cookie:{value:'new-cookie'}};
     },
@@ -54,6 +55,19 @@ test('Finish bootstraps a missing SDK cookie before closing the signed-in browse
   while (s.sequence !== 1) await sleep(5);
   assert.equal(s.state,'capturing'); s.accepted = 1; await task;
   assert.equal(s.state,'ready');
+});
+
+test('SDK failures disclose only allowlisted reasons through private worker status', async () => {
+  for (const code of ['sdk_timeout','sdk_script','sdk_fetch','sdk_rejected','sdk_cookie','sdk_proof','private-token']) {
+    const worker = new BrowserWorker();
+    worker.closeBrowser = async () => {};
+    worker.run = async s => { s.state = 'capturing'; s.stage = 'bootstrap'; throw new SeedFailure(code); };
+    await worker.start('test'); await worker.session.task;
+    assert.equal(worker.status().error,code === 'private-token' ? 'seed_failed' : code);
+    assert.equal(worker.status().context,undefined);
+    assert.ok(!JSON.stringify(worker.status()).includes('private-token'));
+    await worker.cancel();
+  }
 });
 
 test('Finish reports fixed stage errors and never publishes failed or cancelled proof', async () => {

@@ -85,6 +85,12 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
             "capture_failed" -> "The signed-in browser did not return verified Drops access. Complete Twitch verification before Finish sign-in, or try the desktop helper."
             "seed_failed" -> "Drops access was captured, but the browser could not prepare a renewal seed. Retry sign-in or use the desktop helper. Saved credentials were preserved."
             "issuance_failed" -> "Drops access was captured, but the separate renewal browser could not obtain fresh Twitch proof. Retry sign-in or use the desktop helper. Saved credentials were preserved."
+            "sdk_timeout" -> "Twitch's renewal SDK did not become ready in time. Check the browser container's access to k.twitchcdn.net, then retry or use the desktop helper. Saved credentials were preserved."
+            "sdk_script" -> "Twitch's renewal SDK could not load or initialize. Check browser-container DNS or filtering for k.twitchcdn.net, then retry or use the desktop helper. Saved credentials were preserved."
+            "sdk_fetch" -> "The renewal browser could not complete Twitch's integrity request. Check its connection to gql.twitch.tv, then retry or use the desktop helper. Saved credentials were preserved."
+            "sdk_rejected" -> "Twitch did not return a successful integrity response to the renewal browser. Retry or use the desktop helper. Saved credentials were preserved."
+            "sdk_cookie" -> "Twitch's renewal SDK did not leave a usable renewal cookie. Retry or use the desktop helper. Saved credentials were preserved."
+            "sdk_proof" -> "Twitch's renewal proof was stale or could not be verified. Retry or use the desktop helper. Saved credentials were preserved."
             "acceptance_timeout" -> "Browser proof was captured, but server verification did not finish in time. Check the dashboard connection status before restarting sign-in."
             else -> "The login browser stopped. Check the browser container and retry sign-in."
         }

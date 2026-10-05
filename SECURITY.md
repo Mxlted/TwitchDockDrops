@@ -150,11 +150,13 @@ The temporary profile is on a 512 MiB tmpfs and is removed on normal cancellatio
 also discards it. Memory, shared memory, and process counts are bounded. Downloads are denied, arbitrary
 CDP/navigation commands are not relayed, and credentials are not included in browser process arguments.
 After Finish sign-in, the same headed browser completes capture before its scoped seed is tested in
-a separate temporary headless browser. When capture has no usable SDK cookie, a new empty context
-inside the owned headed browser runs the fixed SDK exchange first. It receives only the allowlisted
-OAuth/device headers, never the login cookie jar. The context is disposed explicitly and on CDP
-disconnect; the signed-in storage is left intact. Independent issuance and JVM OAuth/Drops validation
-are still mandatory. Failures expose only fixed stage messages. Both profiles are deleted. Subsequent
+a separate temporary headless browser. When capture has no usable SDK cookie, a separate headed
+browser with an empty temporary regular profile runs the fixed SDK exchange first. This avoids
+Incognito's default third-party-cookie blocking without disabling browser cookie policies or changing
+container permissions. It receives only the allowlisted OAuth/device headers, never the login cookie
+jar. Its process/profile are cleaned up on success, failure and cancellation; the signed-in storage
+is left intact. Independent issuance and JVM OAuth/Drops validation
+are still mandatory. Failures expose only fixed stage/reason messages. All owned profiles are deleted. Subsequent
 renewals create a new profile each time; they never restore the full interactive cookie jar. Viewer/input routes are disabled
 outside interactive login. The network observer retains only bounded proof/campaign evidence and
 forwards the allowlisted context plus the scoped cookie. Error codes map to fixed public messages;

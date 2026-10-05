@@ -125,9 +125,11 @@ The worker opens a headed Chromium browser under Xvfb. The UI relays JPEG frames
 click, text, scroll, and key commands. Capture starts before the login page so proof issued during
 sign-in is retained. Finish sign-in collects successful Drops evidence in that same browser and reads
 only the secure, HttpOnly `KP_UIDz-ssn` cookie for exact host `k.twitchcdn.net`, path `/`. If that cookie
-is unavailable, Finish bootstraps fresh SDK proof and a cookie in an empty, disposable context of the
-same headed browser. This context inherits no login cookies and cannot change the signed-in storage.
-It is disposed on success/failure and on control disconnect. The worker then closes
+is unavailable, Finish bootstraps fresh SDK proof and a cookie in a separate headed browser with an
+empty temporary regular profile. An Incognito context is unsuitable here because its default
+third-party-cookie blocking can prevent the SDK cookie from being stored. The regular profile
+inherits no login cookies and cannot change the signed-in storage; no cookie-policy override is used.
+Its process and profile are cleaned up on success, failure or cancellation. The worker then closes
 the interactive browser and independently issues a fresh proof in a temporary headless browser using
 that seed. The JVM validates OAuth identity, Inventory and Campaigns before accepting the result and
 atomically saving it. The dashboard transport acknowledges acceptance and closes its lease's worker;
@@ -139,7 +141,9 @@ at most 16 successful campaign requests and 16 issued proofs are retained. Initi
 two-minute deadline and reloads campaigns every 30 seconds if proof and successful campaign data
 have not yet matched. Optional bootstrap and independent SDK issuance each have a 150-second deadline.
 Fixed browser-failure codes distinguish login timeout, capture, seed bootstrap, independent issuance,
-and server acceptance timeout without forwarding diagnostics. Missing seed material is allowed only
+and server acceptance timeout. Allowlisted SDK reasons further distinguish initialization/timeout,
+fetch failure, rejected response, unusable cookie and unverifiable proof without forwarding raw diagnostics.
+Missing seed material is allowed only
 as input to initial bootstrap; renewal inputs and every bootstrap/renewal result require a valid seed.
 
 `BrowserSessionContext` optionally includes `sdk_cookie: {value, expires_at}` inside the existing

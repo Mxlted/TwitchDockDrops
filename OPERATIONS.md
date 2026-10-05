@@ -125,16 +125,21 @@ ports or network settings. It adds no published port and does not mount the mine
 3. Select **Finish sign-in** only after Twitch confirms login. The miner verifies OAuth identity and
    both private Drops queries before accepting the session. Interactive login has an eight-minute limit.
    Finish collects Drops proof and a scoped SDK cookie in the signed-in browser. If the cookie is
-   missing, it obtains one in isolated storage in that same browser before verifying independent
+   missing, it obtains one in a separate temporary regular browser profile before verifying independent
    issuance in a fresh temporary browser. Allow up to two minutes for capture, up to two and a half
    minutes each for optional seed preparation and independent issuance, plus account/Drops validation.
    A failure identifies whether capture, seed preparation, independent issuance, or server verification failed.
+   SDK failures distinguish loading/initialization, timeout, network fetch, rejected response, missing
+   usable cookie and unverifiable proof. These fixed messages contain no credentials or upstream bodies.
 4. After **Connected**, return to the dashboard. The browser service handles renewal; this page and
    your computer can be closed while Docker keeps running.
 
 The service uses a temporary profile on a 512 MiB tmpfs, 256 MiB shared memory, a 1 GiB memory limit,
-and at most 256 processes. These are limits, not steady-state requirements. It uses Chromium/Xvfb;
-there is no Android emulator or remote desktop port. The login viewer relays screenshots, bounded
+and at most 256 processes. These are limits, not steady-state requirements. It uses Chromium/Xvfb.
+Missing-cookie preparation briefly runs a second headed browser with a separate temporary profile;
+both remain inside the same container limits. It uses regular storage because Incognito blocks
+third-party cookies by default, including the SDK host's cookie when loaded from a Twitch page.
+There is no Android emulator or remote desktop port. The login viewer relays screenshots, bounded
 text, pointer clicks, and navigation keys through the same-origin JVM API. It does not offer arbitrary
 browser commands, downloads, drag gestures, popup-based social sign-in, passkeys, or OS dialogs. Use the desktop fallback if a
 Twitch challenge requires those interactions. Firefox is not supported.

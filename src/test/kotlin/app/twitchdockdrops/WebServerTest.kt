@@ -53,7 +53,10 @@ import org.junit.jupiter.api.io.TempDir
 class WebServerTest {
     @Test fun `dashboard distinguishes seed and issuance failure without forwarding worker secrets`() = runBlocking {
         for ((code, guidance) in listOf("seed_failed" to "renewal seed", "issuance_failed" to "separate renewal browser",
-            "capture_failed" to "signed-in browser", "private-token" to "login browser stopped")) {
+            "capture_failed" to "signed-in browser", "sdk_timeout" to "did not become ready",
+            "sdk_script" to "could not load or initialize", "sdk_fetch" to "integrity request",
+            "sdk_rejected" to "successful integrity response", "sdk_cookie" to "usable renewal cookie",
+            "sdk_proof" to "stale or could not be verified", "private-token" to "login browser stopped")) {
             MockWebServer().use { worker ->
                 var id = ""
                 worker.dispatcher = object : Dispatcher() {

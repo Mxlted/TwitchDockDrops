@@ -2,7 +2,7 @@
 // See OPERATIONS.md for the hardened Docker command.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
@@ -79,7 +79,7 @@ test('headed Chromium retains login issuance and captures initial and renewed Dr
     }
   });
 
-test('headed bootstrap starts without cookies and disposes only its isolated context on success failure and cancellation',
+test('regular-profile bootstrap accepts a response cookie and cleans up on success failure and cancellation',
   {skip:process.env.DOCKDROPS_BROWSER_TEST !== '1',timeout:45000}, async () => {
     const profile = await mkdtemp(join(tmpdir(),'dockdrops-bootstrap-test-'));
     const port = await browserPort(), stop = new AbortController();
@@ -105,9 +105,10 @@ test('headed bootstrap starts without cookies and disposes only its isolated con
       await original.command('Network.setCookies',{cookies:[{name:'auth-marker',value:'keep-original',
         domain:'www.twitch.tv',path:'/',secure:true,httpOnly:true}]});
       const contexts = (await controller.command('Target.getBrowserContexts')).browserContextIds;
+      const profiles = (await readdir(tmpdir())).filter(name => name.startsWith('dockdrops-renew-')).sort();
       for (const outcome of ['success','failure','cancel']) {
         const attempt = new AbortController();
-        const task = bootstrapSeed(port,captured,attempt.signal,async (cdp,bundle,signal,initial) => {
+        const task = bootstrapSeed('/usr/bin/chromium',['--no-sandbox'],captured,attempt.signal,async (cdp,bundle,signal,initial) => {
           assert.equal(initial,true);
           const command = cdp.command.bind(cdp), event = cdp.event.bind(cdp);
           const cookies = await command('Network.getCookies',{urls:['https://www.twitch.tv/','https://k.twitchcdn.net/']});
@@ -121,9 +122,10 @@ test('headed bootstrap starts without cookies and disposes only its isolated con
               if (message?.method !== 'Fetch.requestPaused' || message.params.request.url === 'https://www.twitch.tv/') return message;
               const {requestId,request} = message.params;
               let body = '', type = 'text/plain';
+              const responseCookies = [];
               if (request.url === SDK_URL) {
-                await command('Network.setCookies',{cookies:[{name:'KP_UIDz-ssn',value:'bootstrapped-cookie',
-                  domain:'k.twitchcdn.net',path:'/',secure:true,httpOnly:true,sameSite:'None',expires:now+86400}]});
+                // Real response-cookie acceptance, not CDP injection that bypasses cookie policy.
+                responseCookies.push({name:'Set-Cookie',value:'KP_UIDz-ssn=bootstrapped-cookie; Path=/; Max-Age=86400; Secure; HttpOnly; SameSite=None'});
                 type = 'text/javascript';
                 body = "window.KPSDK={configure:()=>{}};document.dispatchEvent(new Event('kpsdk-load'));document.dispatchEvent(new Event('kpsdk-ready'));";
               } else if (request.url === 'https://gql.twitch.tv/integrity' && request.method === 'POST') {
@@ -131,6 +133,7 @@ test('headed bootstrap starts without cookies and disposes only its isolated con
                 type = 'application/json'; body = JSON.stringify({token:'bootstrap-proof',expiration:(now+3600)*1000});
               }
               await command('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[
+                ...responseCookies,
                 {name:'Content-Type',value:type},{name:'Access-Control-Allow-Origin',value:'*'},
                 {name:'Access-Control-Allow-Methods',value:'POST,GET,OPTIONS'},
                 {name:'Access-Control-Allow-Headers',value:'authorization,client-id,x-device-id'},
@@ -145,11 +148,7 @@ test('headed bootstrap starts without cookies and disposes only its isolated con
           assert.equal(seed.headers['client-integrity'],'bootstrap-proof');
           assert.ok(!seed.user_agent.includes('HeadlessChrome'));
         } else await assert.rejects(task);
-        // disposeOnDetach cleanup can complete after the aborted socket closes.
-        for (let n = 0; n < 100; n++) {
-          if (JSON.stringify((await controller.command('Target.getBrowserContexts')).browserContextIds) === JSON.stringify(contexts)) break;
-          await sleep(20);
-        }
+        assert.deepEqual((await readdir(tmpdir())).filter(name => name.startsWith('dockdrops-renew-')).sort(),profiles);
         assert.deepEqual((await controller.command('Target.getBrowserContexts')).browserContextIds,contexts);
         const cookies = (await original.command('Network.getCookies',{urls:['https://www.twitch.tv/','https://k.twitchcdn.net/']})).cookies;
         assert.equal(cookies.find(c => c.name === 'auth-marker')?.value,'keep-original');

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {validateSeed,readSdkCookie,acquireSeed} from '../../../browser/renewal.mjs';
+import {validateSeed,readSdkCookie,acquireSeed,seedFailureCode,SeedFailure} from '../../../browser/renewal.mjs';
 import {BrowserWorker} from '../../../browser/worker.mjs';
 
 const now = Math.floor(Date.now()/1000);
@@ -63,7 +63,7 @@ test('a restarted JVM can replace an orphaned renewal but never an interactive l
   assert.equal(worker.status().id,'interactive');
 });
 
-function protocol({cached=false,mismatch=false,replay=false,cookieStale=false,noPreviousCookie=false,noReturnedCookie=false}={}) {
+function protocol({cached=false,mismatch=false,replay=false,cookieStale=false,noPreviousCookie=false,noReturnedCookie=false,sdkFailure=null,rejected=false}={}) {
   const events = [], waiters = [];
   const emit = value => waiters.length ? waiters.shift()(value) : events.push(value);
   const data = {token:replay ? 'old-proof' : 'new-proof',expiration:(now+3600)*1000};
@@ -76,6 +76,8 @@ function protocol({cached=false,mismatch=false,replay=false,cookieStale=false,no
       if (method === 'Runtime.evaluate') return {result:args.expression === 'globalThis' ? {objectId:'global'} : {value:'Chrome/test'}};
       if (method === 'Runtime.callFunctionOn') {
         assert.ok(!('client-integrity' in args.arguments[0].value));
+        if (sdkFailure) return {result:{value:{failure:sdkFailure}}};
+        if (rejected) return {result:{value:{status:403,data:{private:'private-token'}}}};
         emit({method:'Network.requestWillBeSent',params:{requestId:'i',request:{url:'https://gql.twitch.tv/integrity',method:'POST'}}});
         emit({method:'Network.responseReceived',params:{requestId:'i',response:{url:'https://gql.twitch.tv/integrity',status:200,fromDiskCache:cached}}});
         emit({method:'Network.loadingFinished',params:{requestId:'i'}});
@@ -96,6 +98,22 @@ test('SDK acceptance requires fresh uncached correlated issuance and rotated coo
   for (const option of [{cached:true},{mismatch:true},{replay:true},{cookieStale:true}]) {
     await assert.rejects(acquireSeed(protocol(option),seed(),AbortSignal.timeout(1000)));
   }
+});
+
+test('SDK acquisition distinguishes timeout script network rejection and cookie failures safely', async () => {
+  for (const [option,code] of [
+    [{sdkFailure:'sdk_timeout'},'sdk_timeout'],[{sdkFailure:'sdk_script'},'sdk_script'],
+    [{sdkFailure:'sdk_fetch'},'sdk_fetch'],[{rejected:true},'sdk_rejected'],
+    [{noReturnedCookie:true},'sdk_cookie'],[{replay:true},'sdk_proof'],
+    [{sdkFailure:'private-token'},null],
+  ]) {
+    await assert.rejects(acquireSeed(protocol(option),seed(),AbortSignal.timeout(1000)),error => {
+      assert.equal(seedFailureCode(error),code); assert.ok(!error.message.includes('private-token')); return true;
+    });
+  }
+  const changed = new SeedFailure('sdk_cookie'); changed.code = 'private-token';
+  assert.equal(seedFailureCode(changed),null);
+  assert.equal(seedFailureCode(Object.assign(Error('private-token'),{code:'sdk_cookie'})),null);
 });
 
 test('only initial bootstrap accepts missing cookie and must obtain a verified fresh seed', async () => {

@@ -28,7 +28,14 @@ export function validateSeed(seed, now = Date.now()/1000, allowMissingCookie = f
   return seed;
 }
 
-export class SdkCookieUnavailable extends Error {}
+const SEED_FAILURES = new Set(['sdk_timeout','sdk_script','sdk_fetch','sdk_rejected','sdk_cookie','sdk_proof']);
+export class SeedFailure extends Error {
+  constructor(code) { super('Browser seed acquisition failed'); this.code = SEED_FAILURES.has(code) ? code : null; }
+}
+export function seedFailureCode(error) { return error instanceof SeedFailure && SEED_FAILURES.has(error.code) ? error.code : null; }
+export class SdkCookieUnavailable extends SeedFailure {
+  constructor() { super('sdk_cookie'); this.message = 'SDK cookie unavailable'; }
+}
 
 export async function readSdkCookie(cdp, now = Date.now()/1000) {
   const result = await cdp.command('Network.getCookies',{urls:[COOKIE_URL]});
@@ -45,21 +52,22 @@ export async function readSdkCookie(cdp, now = Date.now()/1000) {
 // arguments to a fixed function, never interpolated into executable code or arbitrary URLs.
 const ISSUE = `async function(headers, sdk) {
   return await new Promise(resolve => {
-    const timer = setTimeout(() => resolve({failure:true}), 90000);
+    const timer = setTimeout(() => resolve({failure:'sdk_timeout'}), 90000);
     const finish = value => { clearTimeout(timer); resolve(value); };
-    document.addEventListener('kpsdk-load', () => window.KPSDK.configure([
-      {protocol:'https:', method:'POST', domain:'gql.twitch.tv', path:'/integrity'}
-    ]), {once:true});
+    document.addEventListener('kpsdk-load', () => {
+      try { window.KPSDK.configure([{protocol:'https:', method:'POST', domain:'gql.twitch.tv', path:'/integrity'}]); }
+      catch { finish({failure:'sdk_script'}); }
+    }, {once:true});
     document.addEventListener('kpsdk-ready', async () => {
       try {
         const r = await fetch('https://gql.twitch.tv/integrity', {
           method:'POST', headers, body:null, credentials:'omit', mode:'cors', redirect:'error', signal:AbortSignal.timeout(30000)
         });
         finish({status:r.status, data:await r.json()});
-      } catch { finish({failure:true}); }
+      } catch { finish({failure:'sdk_fetch'}); }
     }, {once:true});
     const script = document.createElement('script');
-    script.onerror = () => finish({failure:true}); script.src = sdk; document.body.appendChild(script);
+    script.onerror = () => finish({failure:'sdk_script'}); script.src = sdk; document.body.appendChild(script);
   });
 }`;
 
@@ -82,10 +90,11 @@ export async function acquireSeed(cdp, seed, signal, initial = false) {
       else if (method === 'Network.requestWillBeSent' && p.request.url === INTEGRITY && p.request.method === 'POST') posts.add(id);
       else if (method === 'Network.requestServedFromCache') cached.add(id);
       else if (method === 'Network.responseReceived' && posts.has(id)) responses.set(id,p.response);
-      else if (method === 'Network.loadingFailed' && posts.has(id)) throw Error('SDK issuance failed');
+      else if (method === 'Network.loadingFailed' && posts.has(id)) throw new SeedFailure('sdk_fetch');
       else if (method === 'Network.loadingFinished' && posts.has(id)) {
         const response = responses.get(id);
-        if (response?.url !== INTEGRITY || response.status !== 200 || response.fromDiskCache || response.fromServiceWorker || cached.has(id)) throw Error('SDK issuance failed');
+        if (response?.url !== INTEGRITY || response.status !== 200) throw new SeedFailure('sdk_rejected');
+        if (response.fromDiskCache || response.fromServiceWorker || cached.has(id)) throw new SeedFailure('sdk_proof');
         proof = await cdp.body(id);
       }
       if (posts.size + responses.size + cached.size > 256) throw Error('SDK capture limit');
@@ -114,13 +123,15 @@ export async function acquireSeed(cdp, seed, signal, initial = false) {
     const result = await cdp.command('Runtime.callFunctionOn',{objectId:global.result.objectId,functionDeclaration:ISSUE,
       arguments:[{value:headers},{value:SDK_URL}],awaitPromise:true,returnByValue:true},110000);
     const data = result.result?.value?.data;
-    if (result.exceptionDetails || result.result?.value?.status !== 200 || !data) throw Error('SDK issuance failed');
+    if (result.exceptionDetails) throw new SeedFailure('sdk_script');
+    if (result.result?.value?.failure) throw new SeedFailure(result.result.value.failure);
+    if (result.result?.value?.status !== 200 || !data) throw new SeedFailure('sdk_rejected');
     await waitFor(() => proof);
-    if (data.token !== proof.token || data.expiration !== proof.expiration || !Number.isFinite(data.expiration)) throw Error('Unverified SDK issuance');
+    if (data.token !== proof.token || data.expiration !== proof.expiration || !Number.isFinite(data.expiration)) throw new SeedFailure('sdk_proof');
     const now = Math.floor(Date.now()/1000), expiry = Math.floor(data.expiration/1000);
-    if (data.token === seed.headers['client-integrity'] || expiry <= Math.max(now+60,initial ? 0 : seed.expires_at)) throw Error('Stale SDK issuance');
+    if (data.token === seed.headers['client-integrity'] || expiry <= Math.max(now+60,initial ? 0 : seed.expires_at)) throw new SeedFailure('sdk_proof');
     const cookie = await readSdkCookie(cdp);
-    if (cookie.expires_at <= Math.max(expiry,initial ? 0 : seed.sdk_cookie.expires_at)) throw Error('Stale SDK cookie');
+    if (cookie.expires_at <= Math.max(expiry,initial ? 0 : seed.sdk_cookie.expires_at)) throw new SeedFailure('sdk_cookie');
     return validateSeed({version:1,captured_at:now,expires_at:expiry,user_agent:userAgent,
       headers:{...headers,'client-integrity':data.token},sdk_cookie:cookie});
   } finally {
@@ -129,36 +140,19 @@ export async function acquireSeed(cdp, seed, signal, initial = false) {
   }
 }
 
-// A valid signed-in profile need not contain the SDK renewal cookie. Bootstrap in an empty
-// context of the same headed browser, never copy or clear the interactive cookie jar.
-export async function bootstrapSeed(port, captured, parentSignal, acquire = acquireSeed) {
+// Use an empty regular profile: an Incognito BrowserContext blocks third-party SDK cookies
+// by default. Keep the signed-in browser intact; never copy or clear its cookie jar.
+export async function bootstrapSeed(executable, browserArgs, captured, parentSignal, acquire = acquireSeed) {
   validateSeed(captured, Date.now()/1000, true);
-  const signal = AbortSignal.any([parentSignal,AbortSignal.timeout(150000)]);
-  const response = await fetch(`http://127.0.0.1:${port}/json/version`,{redirect:'error',signal});
-  if (!response.ok) throw Error('Browser unavailable');
-  const version = await response.json();
-  const controller = await Cdp.open(version.webSocketDebuggerUrl,port,signal);
-  let contextId, cdp;
-  try {
-    const context = await controller.command('Target.createBrowserContext',{disposeOnDetach:true});
-    contextId = context.browserContextId;
-    if (typeof contextId !== 'string' || !/^[a-zA-Z0-9-]+$/.test(contextId)) throw Error('Invalid browser context');
-    const {targetId} = await controller.command('Target.createTarget',{url:'about:blank',browserContextId:contextId});
-    if (typeof targetId !== 'string' || !/^[a-zA-Z0-9-]+$/.test(targetId)) throw Error('Invalid browser target');
-    cdp = await Cdp.open(`ws://127.0.0.1:${port}/devtools/page/${targetId}`,port,signal,
-      ['Fetch.requestPaused','Page.loadEventFired','Network.requestServedFromCache']);
-    const seed = await acquire(cdp,captured,signal,true);
-    signal.throwIfAborted();
-    return validateSeed(seed);
-  } finally {
-    cdp?.close();
-    if (contextId) await controller.command('Target.disposeBrowserContext',{browserContextId:contextId}).catch(() => {});
-    controller.close(); // disposeOnDetach also covers cancellation/disconnection.
-  }
+  return runSeedBrowser(executable,browserArgs,captured,parentSignal,true,false,acquire);
 }
 
 export async function issueSeed(executable, browserArgs, seed, parentSignal, initial = false) {
   validateSeed(seed);
+  return runSeedBrowser(executable,browserArgs,seed,parentSignal,initial,true,acquireSeed);
+}
+
+async function runSeedBrowser(executable, browserArgs, seed, parentSignal, initial, headless, acquire) {
   const signal = AbortSignal.any([parentSignal,AbortSignal.timeout(150000)]);
   signal.throwIfAborted();
   const profile = await mkdtemp(join(tmpdir(),'dockdrops-renew-'));
@@ -166,7 +160,7 @@ export async function issueSeed(executable, browserArgs, seed, parentSignal, ini
   try {
     await chmod(profile,0o700);
     const port = await browserPort(); signal.throwIfAborted();
-    child = await startBrowser(executable,profile,[...browserArgs,'--headless=new',
+    child = await startBrowser(executable,profile,[...browserArgs,...(headless ? ['--headless=new'] : []),
       '--remote-debugging-address=127.0.0.1',`--remote-debugging-port=${port}`,'--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled','about:blank']);
     for (let n = 0; n < 200; n++) {
@@ -180,7 +174,9 @@ export async function issueSeed(executable, browserArgs, seed, parentSignal, ini
       } catch {}
       if (target) {
         cdp = await Cdp.open(target.webSocketDebuggerUrl,port,signal,['Fetch.requestPaused','Page.loadEventFired','Network.requestServedFromCache']);
-        return await acquireSeed(cdp,seed,signal,initial);
+        const result = await acquire(cdp,seed,signal,initial);
+        signal.throwIfAborted();
+        return validateSeed(result);
       }
       await sleep(100,undefined,{signal});
     }

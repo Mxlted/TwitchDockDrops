@@ -6,7 +6,7 @@ import {join, resolve, dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {Cdp, BrowserCapture, browserPort, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
-import {issueSeed, readSdkCookie, validateSeed, bootstrapSeed, SdkCookieUnavailable} from './renewal.mjs';
+import {issueSeed, readSdkCookie, validateSeed, bootstrapSeed, SdkCookieUnavailable, seedFailureCode} from './renewal.mjs';
 
 const executable = process.env.DOCKDROPS_CHROMIUM || '/usr/bin/chromium';
 // This browser is confined by its own non-root, read-only container without the miner volume.
@@ -51,11 +51,13 @@ export class BrowserWorker {
     await this.cancel();
     const s = {id, state:'starting', stop:new AbortController(), sequence:0, context:null, cdp:null, child:null, profile:null};
     this.session = s;
-    s.task = this.run(s).catch(() => {
+    s.task = this.run(s).catch(error => {
       if (!s.stop.signal.aborted) {
         // Fixed codes only; CDP errors and upstream responses may contain credentials.
         s.error = s.state === 'interactive' ? 'login_timeout' : s.state === 'capturing'
           ? ({bootstrap:'seed_failed',issuance:'issuance_failed',acceptance:'acceptance_timeout'}[s.stage] || 'capture_failed') : 'browser_failed';
+        const detail = seedFailureCode(error);
+        if (detail && ['bootstrap','issuance'].includes(s.stage)) s.error = detail;
         s.state = 'failed';
       }
     }).finally(async () => {
@@ -112,7 +114,7 @@ export class BrowserWorker {
     try { seed = {...captured,sdk_cookie:await readSdkCookie(s.cdp)}; }
     catch (error) {
       if (!(error instanceof SdkCookieUnavailable)) throw error;
-      seed = await this.bootstrap(s.port,captured,s.stop.signal);
+      seed = await this.bootstrap(this.executable,this.browserArgs,captured,s.stop.signal);
     }
     s.stop.signal.throwIfAborted();
     await this.closeBrowser(s);
