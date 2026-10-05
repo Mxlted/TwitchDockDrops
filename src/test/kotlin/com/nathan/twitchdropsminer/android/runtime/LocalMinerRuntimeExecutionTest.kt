@@ -48,6 +48,85 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test fun `shutdown ignores queued start and inventory commands without changing saved intent`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession())
+        val settings = SettingsRepository(directory)
+        settings.update { it.copy(miningRequested=false) }
+        val requests = AtomicInteger()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun fetchCampaignInventory(session: StoredTwitchSession): CampaignInventory {
+                requests.incrementAndGet(); return CampaignInventory(emptyList())
+            }
+        }
+        val runtime = runtime(store,api,settings)
+        runtime.stopMiningAndJoin(shutdown=true)
+        // Renewal acceptance can enqueue these behind an already queued shutdown command.
+        runtime.startMining(); runtime.refreshInventory()
+        runtime.stopMiningAndJoin(shutdown=true) // Drain those commands before checking.
+        assertFalse(settings.settings.value.miningRequested)
+        assertEquals(0,requests.get())
+        assertFalse(runtime.snapshot.value.miningActive)
+    }
+
+    private fun retainedContext(renewed: Boolean = false): BrowserSessionContext = BrowserSessionContext.parse(
+        kotlinx.serialization.json.JsonObject(renewableContext(renewed).toJson() - "sdk_cookie" +
+            ("browser_lease" to kotlinx.serialization.json.JsonPrimitive("12345678-1234-1234-1234-123456789abc"))))
+
+    @Test fun `retained Docker renewal persists fresh proof and reset revokes its encrypted lease`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession().copy(browserContext=retainedContext()))
+        val revoked = CopyOnWriteArrayList<String>()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(browserContext=context)
+        }
+        val runtime = runtime(store,api,browserRenewal={ retainedContext(true) },browserLeaseRevoke={ revoked.add(it) })
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { while (store.twitchSession()?.browserContext?.headers?.get("client-integrity") != "new-proof") delay(10) }
+            assertTrue(runtime.snapshot.value.account.statusText.contains("Docker browser renewal"))
+            runtime.stopMiningAndJoin()
+            assertTrue(revoked.isEmpty()) // Stop keeps authentication renewal alive.
+            runtime.resetSessionAndJoin()
+            assertEquals(listOf(retainedContext().browserLease),revoked)
+            assertNull(store.twitchSession())
+        } finally { runtime.stopMiningAndJoin(shutdown=true) }
+    }
+
+    @Test fun `missing retained browser preserves credentials and requests reconnect instead of endless retries`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession().copy(browserContext=retainedContext()))
+        val attempts = AtomicInteger()
+        val runtime = runtime(store,AuthenticationTwitchApi(),browserRenewal={
+            attempts.incrementAndGet()
+            throw com.nathan.twitchdropsminer.android.data.model.BrowserLeaseUnavailableException()
+        })
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { runtime.snapshot.first { it.error?.contains("Docker login browser") == true } }
+            assertEquals("old-proof",store.twitchSession()?.browserContext?.headers?.get("client-integrity"))
+            assertEquals(1,attempts.get())
+        } finally { runtime.stopMiningAndJoin(shutdown=true) }
+    }
+
+    @Test fun `retained renewal rejects changed leases and replacement revokes only the previous browser`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession().copy(browserContext=retainedContext()))
+        val revoked = CopyOnWriteArrayList<String>()
+        val runtime = runtime(store,AuthenticationTwitchApi(),browserRenewal={
+            BrowserSessionContext.parse(kotlinx.serialization.json.JsonObject(retainedContext(true).toJson() +
+                ("browser_lease" to kotlinx.serialization.json.JsonPrimitive("00000000-0000-0000-0000-000000000000"))))
+        },browserLeaseRevoke={ revoked.add(it) })
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { runtime.snapshot.first { it.error?.contains("renewal is temporarily") == true } }
+            assertEquals(retainedContext().browserLease,store.twitchSession()?.browserContext?.browserLease)
+            runtime.startManagedBrowserAuthentication()
+            assertEquals(listOf(retainedContext().browserLease),revoked)
+            assertEquals("old-proof",store.twitchSession()?.browserContext?.headers?.get("client-integrity"))
+        } finally { runtime.stopMiningAndJoin(shutdown=true) }
+    }
+
     private fun renewableContext(renewed: Boolean = false): BrowserSessionContext {
         val time = Instant.now().epochSecond
         return BrowserSessionContext.parse(kotlinx.serialization.json.Json.parseToJsonElement("""{
@@ -198,12 +277,16 @@ class LocalMinerRuntimeExecutionTest {
         store.saveTwitchSession(saved)
         val runtime = runtime(store, AuthenticationTwitchApi())
         val cancelled = AtomicBoolean()
+        var viewId = ""
         val server = okhttp3.mockwebserver.MockWebServer()
         server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
             override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): okhttp3.mockwebserver.MockResponse {
                 if (request.path == "/cancel") cancelled.set(true)
+                if (request.path == "/start") viewId = kotlinx.serialization.json.Json.parseToJsonElement(request.body.readUtf8()).let {
+                    (it as kotlinx.serialization.json.JsonObject)["id"].toString().trim('"')
+                }
                 return okhttp3.mockwebserver.MockResponse().setBody(if (request.path == "/status")
-                    """{"state":"failed","sequence":0,"error":"capture_failed","detail":"secret-upstream-body"}""" else "{}")
+                    """{"id":"$viewId","state":"failed","sequence":0,"error":"capture_failed","detail":"secret-upstream-body"}""" else "{}")
             }
         }
         server.start()
@@ -228,19 +311,28 @@ class LocalMinerRuntimeExecutionTest {
             }
             override suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign> = emptyList()
         }
-        val runtime = runtime(store, api)
+        val renew = CompletableDeferred<Unit>()
+        val cancelled = AtomicBoolean()
+        val released = AtomicBoolean()
+        val initial = BrowserSessionContext.parse(kotlinx.serialization.json.JsonObject(retainedContext().toJson() +
+            ("expires_at" to kotlinx.serialization.json.JsonPrimitive(Instant.now().plusSeconds(120).epochSecond))))
+        val runtime = runtime(store, api, browserRenewal={ renew.await(); retainedContext(true) },browserLeaseRevoke={
+            assertEquals(initial.browserLease,it); cancelled.set(true)
+        })
         val phase = AtomicReference("capturing")
         val sequence = AtomicInteger(1)
         val withContext = AtomicBoolean(true)
-        val cancelled = AtomicBoolean()
+        var viewId = ""
         val server = okhttp3.mockwebserver.MockWebServer()
         server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
             override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): okhttp3.mockwebserver.MockResponse {
                 assertEquals("1", request.getHeader("X-DockDrops-Internal"))
                 val body = when (request.path) {
-                    "/status" -> """{"state":"${phase.get()}","sequence":${sequence.get()}${if (withContext.get()) ",\"context\":${browserContext().toJson()}" else ""}}"""
+                    "/start" -> { viewId = (kotlinx.serialization.json.Json.parseToJsonElement(request.body.readUtf8()) as kotlinx.serialization.json.JsonObject)["id"].toString().trim('"'); "{}" }
+                    "/status" -> """{"id":"$viewId","state":"${phase.get()}","sequence":${sequence.get()}${if (withContext.get()) ",\"context\":${initial.toJson()}" else ""}}"""
                     "/accepted" -> { assertTrue(withContext.get()); phase.set("ready"); withContext.set(false); "{}" }
                     "/cancel" -> { cancelled.set(true); "{}" }
+                    "/release" -> { released.set(true); "{}" }
                     else -> "{}"
                 }
                 return okhttp3.mockwebserver.MockResponse().setBody(body)
@@ -255,16 +347,16 @@ class LocalMinerRuntimeExecutionTest {
             assertEquals(1, validations.get())
             assertFalse(bridge.view().toString().contains("test-token"))
             assertFalse(bridge.view().toString().contains(ticket))
-            // A renewal capture starts without a new context. Do not acknowledge the old sequence.
-            phase.set("capturing")
-            delay(1000)
-            sequence.incrementAndGet(); withContext.set(true)
-            withTimeout(8000) { while (validations.get() < 2 || phase.get() != "ready") delay(20) }
+            assertFalse(bridge.view().toString().contains(initial.browserLease!!))
+            withTimeout(3000) { while (!released.get()) delay(10) }
+            assertFalse(cancelled.get())
+            renew.complete(Unit)
+            withTimeout(8000) { while (validations.get() < 2 || store.twitchSession()?.browserContext?.headers?.get("client-integrity") != "new-proof") delay(20) }
             assertEquals(2, validations.get())
             runtime.resetSessionAndJoin()
             withTimeout(8000) { while (!cancelled.get()) delay(20) }
             assertNull(store.twitchSession())
-        } finally { bridge.close(); server.close() }
+        } finally { renew.complete(Unit); bridge.close(); runtime.stopMiningAndJoin(shutdown=true); server.close() }
     }
 
     @Test fun `managed login atomically owns its ticket and reset or replacement revokes it`(): Unit = runBlocking {
@@ -972,6 +1064,7 @@ class LocalMinerRuntimeExecutionTest {
         channelStatusCheckInterval: Duration = Duration.ofMinutes(3),
         clock: () -> Instant = Instant::now,
         browserRenewal: (suspend (BrowserSessionContext) -> BrowserSessionContext)? = null,
+        browserLeaseRevoke: (suspend (String) -> Unit)? = null,
     ) = LocalMinerRuntime(
         settingsRepository = settings,
         secureSessionStore = store,
@@ -984,6 +1077,7 @@ class LocalMinerRuntimeExecutionTest {
         clock = clock,
         browserRenewal = browserRenewal,
         browserRenewalMinimumDelay = Duration.ofMillis(10),
+        browserLeaseRevoke = browserLeaseRevoke,
     )
 
     private fun sessionStore(): SecureSessionStore {

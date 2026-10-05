@@ -12,6 +12,7 @@ class BrowserSessionContext private constructor(
     val userAgent: String,
     val headers: Map<String, String>,
     val sdkCookie: BrowserSdkCookie? = null,
+    val browserLease: String? = null,
 ) {
     val accessToken: String get() = headers.getValue("authorization").removePrefix("OAuth ")
     val deviceId: String get() = headers["x-device-id"] ?: headers.getValue("device-id")
@@ -25,6 +26,7 @@ class BrowserSessionContext private constructor(
         put("user_agent", userAgent)
         put("headers", buildJsonObject { headers.forEach { (name, value) -> put(name, value) } })
         sdkCookie?.let { put("sdk_cookie", it.toJson()) }
+        browserLease?.let { put("browser_lease", it) }
     }
     override fun toString() = "BrowserSessionContext(redacted)"
 
@@ -33,7 +35,7 @@ class BrowserSessionContext private constructor(
             "client-session-id", "x-device-id", "device-id", "accept-language")
         fun parse(value: JsonObject, now: Instant = Instant.now()): BrowserSessionContext {
             try {
-                require(value.keys - "sdk_cookie" == setOf("version", "captured_at", "expires_at", "user_agent", "headers"))
+                require(value.keys - setOf("sdk_cookie", "browser_lease") == setOf("version", "captured_at", "expires_at", "user_agent", "headers"))
                 require(value.toString().toByteArray().size <= 36 * 1024)
                 require(value["version"] == JsonPrimitive(1))
                 fun seconds(name: String): Long {
@@ -60,13 +62,19 @@ class BrowserSessionContext private constructor(
                 require(!(headers["x-device-id"] ?: headers["device-id"]).isNullOrBlank())
                 val cookie = value["sdk_cookie"]?.let { BrowserSdkCookie.parse(it as JsonObject) }
                 require(cookie == null || cookie.expiresAt > expires)
-                return BrowserSessionContext(captured, expires, agent, headers, cookie)
+                val lease = value["browser_lease"]?.let { text(it).also { id ->
+                    require(id.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))
+                } }
+                require(cookie == null || lease == null)
+                return BrowserSessionContext(captured, expires, agent, headers, cookie, lease)
             } catch (_: Exception) {
                 throw IllegalArgumentException("Invalid browser session context.")
             }
         }
     }
 }
+
+class BrowserLeaseUnavailableException : IllegalStateException("The Docker login browser is no longer available. Reconnect Twitch; saved credentials were preserved.")
 
 /** The only persisted browser cookie: fixed SDK host/name/path, never a general cookie jar. */
 class BrowserSdkCookie private constructor(val value: String, val expiresAt: Instant) {

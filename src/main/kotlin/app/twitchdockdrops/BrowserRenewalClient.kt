@@ -1,6 +1,7 @@
 package app.twitchdockdrops
 
 import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
+import com.nathan.twitchdropsminer.android.data.model.BrowserLeaseUnavailableException
 import java.time.Duration
 import java.util.UUID
 import kotlinx.coroutines.*
@@ -25,6 +26,7 @@ class BrowserRenewalClient(private val port: Int = 8091) : AutoCloseable {
                     currentCoroutineContext().ensureActive()
                     val response = request("status")
                     check(response["id"]?.jsonPrimitive?.content == id) { "Browser renewal was replaced." }
+                    if (response["error"]?.jsonPrimitive?.content == "browser_missing") throw BrowserLeaseUnavailableException()
                     check(response["state"]?.jsonPrimitive?.content != "failed") { "Browser renewal temporarily unavailable." }
                     val captured = response["context"] as? JsonObject
                     if (captured != null) return@withTimeoutOrNull BrowserSessionContext.parse(captured)
@@ -34,9 +36,14 @@ class BrowserRenewalClient(private val port: Int = 8091) : AutoCloseable {
             } ?: error("Browser renewal timed out.")
         } finally {
             withContext(NonCancellable) {
-                runCatching { request("cancel", buildJsonObject { put("id", id) }) }
+                runCatching { request("release", buildJsonObject { put("id", id) }) }
             }
         }
+    }
+
+    suspend fun revoke(lease: String) = withContext(Dispatchers.IO) {
+        request("revoke", buildJsonObject { put("id", UUID.randomUUID().toString()); put("lease", lease) })
+        Unit
     }
 
     private fun request(action: String, body: JsonObject? = null): JsonObject {

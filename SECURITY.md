@@ -55,13 +55,13 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
 - Browser context is strictly bounded and encrypted with the session; state, events, logs, and errors
   exclude it. The server checks OAuth identity and both private Drops queries before accepting it.
   Expired proof blocks authenticated requests while preserving encrypted credentials.
-- Dashboard login also stores one scoped SDK cookie in that encrypted context: `KP_UIDz-ssn`, exact
-  host `k.twitchcdn.net`, secure/HttpOnly, path `/`. Only its bounded value and expiry are accepted;
+- When independently verified, dashboard login stores one scoped SDK cookie in the encrypted context:
+  `KP_UIDz-ssn`, exact host `k.twitchcdn.net`, secure/HttpOnly, path `/`. Only its bounded value and expiry are accepted;
   callers cannot supply a host, URL, cookie name or cookie jar. It is credential material, never public
   state. This replaces dependence on a continuously running signed-in browser and permits renewal
   after JVM/companion restart while the seed is fresh. The browser still receives no miner volume,
   encryption key or environment secrets; the JVM transfers only the renewal context over loopback.
-- Each renewal uses an owned temporary profile, a fixed empty Twitch-origin document and the fixed
+- Each SDK renewal uses an owned temporary profile, a fixed empty Twitch-origin document and the fixed
   Twitch SDK URL. OAuth headers go only to Twitch's fixed integrity endpoint. Uncached network proof,
   token/expiry rotation, same-account OAuth validation and both Drops queries are required before
   atomic replacement. Transient failures retain the old encrypted seed; reset/replacement/shutdown
@@ -149,18 +149,23 @@ does not fit the deployment. Do not grant privileged mode or mount the miner vol
 The temporary profile is on a 512 MiB tmpfs and is removed on normal cancellation/exit; container removal
 also discards it. Memory, shared memory, and process counts are bounded. Downloads are denied, arbitrary
 CDP/navigation commands are not relayed, and credentials are not included in browser process arguments.
-After Finish sign-in, the same headed browser completes capture before its scoped seed is tested in
-a separate temporary headless browser. When capture has no usable SDK cookie, a separate headed
-browser with an empty temporary regular profile runs the fixed SDK exchange first. This avoids
-Incognito's default third-party-cookie blocking without disabling browser cookie policies or changing
-container permissions. It receives only the allowlisted OAuth/device headers, never the login cookie
-jar. Its process/profile are cleaned up on success, failure and cancellation; the signed-in storage
-is left intact. Independent issuance and JVM OAuth/Drops validation
-are still mandatory. Failures expose only fixed stage/reason messages. All owned profiles are deleted. Subsequent
-renewals create a new profile each time; they never restore the full interactive cookie jar. Viewer/input routes are disabled
-outside interactive login. The network observer retains only bounded proof/campaign evidence and
-forwards the allowlisted context plus the scoped cookie. Error codes map to fixed public messages;
-raw browser diagnostics are never relayed.
+After Finish sign-in, the same headed browser completes capture. If a scoped SDK cookie is available,
+a separate temporary headless browser tests independent issuance without closing the login browser
+first. Missing seed material or failed issuance falls back to retaining the authenticated browser
+inside the same isolated container. This avoids making SDK-cookie acquisition mandatory without
+granting privileges or weakening account/Drops verification. All accepted contexts still require JVM
+OAuth identity, Inventory and Campaigns validation; subsequent proof must differ and advance expiry.
+
+The retained browser stays on tmpfs, with no durable profile, exported login cookie jar, or new port.
+Its random private `browser_lease` is mutually exclusive with `sdk_cookie` in the encrypted context;
+neither is public. Lease renewal is bound to the original OAuth/client/device and validated account.
+Only the runtime schedules it. Fixed private `/release` and `/revoke` routes separate transfer cleanup
+from disposal: revocation requires the matching lease, and stale transfer IDs cannot close a newer
+browser. Reset, replacement, authoritative expiry and orderly shutdown revoke it and remove the owned
+profile; Stop keeps renewal available. Browser restart requires login again in this mode. Transient
+capture failure preserves credentials and the browser for retry. SDK renewal still creates/removes
+an empty profile each time. Viewer/input routes are disabled outside interactive login. The network
+observer retains bounded evidence only, and fixed errors never expose raw browser diagnostics.
 The public viewer returns only fixed status fields and bounded JPEG frames with `no-store`; its
 mutation routes retain normal Host/Origin, JSON, and size checks. Passwords entered into this viewer
 traverse the dashboard connection, so trusted-LAN HTTP has the same local-network exposure as other

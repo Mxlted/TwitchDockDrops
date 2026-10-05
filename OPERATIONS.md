@@ -17,18 +17,19 @@ Twitch Dock Drops. For the user-facing project overview, start with the [README]
 git clone https://github.com/Mxlted/TwitchDockDrops.git
 cd TwitchDockDrops
 cp .env.example .env
-docker compose up --build -d
+docker compose -f compose.yaml -f compose.browser.yaml up --build -d
 ```
 
 On PowerShell, use:
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up --build -d
+docker compose -f compose.yaml -f compose.browser.yaml up --build -d
 ```
 
 Docker Compose loads `.env` from the project directory automatically. The supplied example publishes
-the app on port 8080 to the Docker host and trusted private LAN.
+the app on port 8080 to the Docker host and trusted private LAN. This starts the primary dashboard
+login/browser service. For a desktop-helper-only installation, omit both `-f` arguments.
 
 Open one of these addresses:
 
@@ -124,36 +125,40 @@ ports or network settings. It adds no published port and does not mount the mine
    The browser panel scrolls horizontally on narrow screens; Zoom and Scroll up/down are available.
 3. Select **Finish sign-in** only after Twitch confirms login. The miner verifies OAuth identity and
    both private Drops queries before accepting the session. Interactive login has an eight-minute limit.
-   Finish collects Drops proof and a scoped SDK cookie in the signed-in browser. If the cookie is
-   missing, it obtains one in a separate temporary regular browser profile before verifying independent
-   issuance in a fresh temporary browser. Allow up to two minutes for capture, up to two and a half
-   minutes each for optional seed preparation and independent issuance, plus account/Drops validation.
-   A failure identifies whether capture, seed preparation, independent issuance, or server verification failed.
-   SDK failures distinguish loading/initialization, timeout, network fetch, rejected response, missing
-   usable cookie and unverifiable proof. These fixed messages contain no credentials or upstream bodies.
+   Finish collects verified Drops proof in the signed-in browser. If a scoped SDK cookie exists, it
+   tests independent issuance in a temporary browser. If the cookie is missing or that test fails,
+   it retains the authenticated Docker browser for renewal instead. Allow up to two minutes for
+   capture, up to two and a half minutes for optional independent issuance, plus account/Drops validation.
+   Failures still use fixed messages without credentials or upstream bodies.
 4. After **Connected**, return to the dashboard. The browser service handles renewal; this page and
    your computer can be closed while Docker keeps running.
 
 The service uses a temporary profile on a 512 MiB tmpfs, 256 MiB shared memory, a 1 GiB memory limit,
 and at most 256 processes. These are limits, not steady-state requirements. It uses Chromium/Xvfb.
-Missing-cookie preparation briefly runs a second headed browser with a separate temporary profile;
-both remain inside the same container limits. It uses regular storage because Incognito blocks
-third-party cookies by default, including the SDK host's cookie when loaded from a Twitch page.
+Optional SDK verification briefly runs a second browser with a separate temporary profile; both
+remain inside the same container limits. The retained-browser mode keeps one headed Chromium
+available between runtime-triggered renewals. It does not depend on a desktop helper or open dashboard.
 There is no Android emulator or remote desktop port. The login viewer relays screenshots, bounded
 text, pointer clicks, and navigation keys through the same-origin JVM API. It does not offer arbitrary
 browser commands, downloads, drag gestures, popup-based social sign-in, passkeys, or OS dialogs. Use the desktop fallback if a
 Twitch challenge requires those interactions. Firefox is not supported.
 
-**After upgrading from the previous login method, reconnect once through dashboard login.** New
-logins save one scoped SDK renewal cookie alongside the context in the encrypted miner session.
-The interactive browser closes after capture; disposable headless browsers issue replacements. The
-runtime starts renewal five minutes before proof expiry and retries temporary failures with backoff.
-Closing the dashboard or restarting the JVM/browser service no longer inherently ends renewal.
-Keep the same data volume and key and keep both services available. Extended downtime beyond the
-SDK cookie's expiry (normally about a day in upstream's observations), revoked OAuth, or a Twitch
-challenge can still require sign-in. This is not a guarantee of indefinite login. Existing sessions
-without a seed remain readable but still require reconnecting to gain durable renewal. Cancel stops
-interactive login without deleting the saved credential; **Reset Twitch Session** signs the miner out.
+**After upgrading, reconnect once through dashboard login.** Settings identifies the selected mode:
+
+- **Restart-capable Docker renewal:** the independently verified SDK cookie is encrypted with the
+  session, the interactive browser closes, and disposable browsers issue replacements. Keep the data
+  volume/key; restarts can recover while the seed remains valid.
+- **Docker browser renewal:** the signed-in browser stays inside Docker, and a private encrypted
+  lease lets the runtime request fresh proof from it. Your PC and dashboard can be off. Its profile
+  stays temporary: reconnect after the browser service restarts or an orderly app shutdown. An
+  unexpected app restart can reuse a browser that survived, but do not rely on that for maintenance.
+
+Both modes start renewal five minutes before proof expiry, retry temporary failures with backoff,
+and require matching account/Drops verification before saving. SDK expiry, revoked OAuth or a Twitch
+challenge can still require sign-in. A missing retained browser reports reconnect guidance and keeps
+saved credentials. Neither mode guarantees indefinite login. Cancel stops interactive login without
+deleting the saved credential; **Reset Twitch Session** signs out and closes the retained browser.
+Stop mining keeps renewal available. Desktop-helper sessions retain their existing behavior.
 
 If startup fails, check `docker compose -f compose.yaml -f compose.browser.yaml logs browser` and
 confirm the browser service is running. Health remains a check of the JVM's local readiness, independent
@@ -203,8 +208,9 @@ explicit Edge/Chrome executable. Users with a trusted repository checkout can ru
 `node src/main/resources/web/login-helper.mjs` directly without a separate download.
 
 The dashboard observes integrity issuance before sign-in and completes campaign capture in the login
-browser. It now carries the scoped SDK seed into independent server issuance, following upstream's
-`server_seed.py` and `server_renewal.py` at `1182d0172458`. Simply opening an empty headless browser or
+browser. When possible it carries the scoped SDK seed into independent server issuance, following
+upstream's `server_seed.py` and `server_renewal.py` at `1182d0172458`; otherwise it retains the working
+Docker browser for server-owned capture. Simply opening an empty headless browser or
 refreshing `/integrity` over plain HTTP does not establish accepted Drops access. The desktop helper
 continues to use regular browser captures and must stay running. Every accepted context still passes
 the server's account, Inventory, and Campaigns checks. Upstream documents the distinction in its
@@ -214,19 +220,19 @@ the server's account, Inventory, and Campaigns checks. Upstream documents the di
 
 ```bash
 # Start or rebuild in the background
-docker compose up --build -d
+docker compose -f compose.yaml -f compose.browser.yaml up --build -d
 
 # Show container and health status
-docker compose ps
+docker compose -f compose.yaml -f compose.browser.yaml ps
 
 # Follow application logs
-docker compose logs -f app
+docker compose -f compose.yaml -f compose.browser.yaml logs -f app
 
 # Stop without deleting the saved Twitch session
-docker compose down
+docker compose -f compose.yaml -f compose.browser.yaml down
 
 # Validate the resolved Compose configuration
-docker compose config
+docker compose -f compose.yaml -f compose.browser.yaml config --quiet
 ```
 
 `docker compose down -v` also deletes the persistent volume. That removes the encrypted session,

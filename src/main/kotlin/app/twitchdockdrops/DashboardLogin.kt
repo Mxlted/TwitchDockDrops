@@ -33,15 +33,16 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
         status = View(id, "starting", "")
         job = scope.launch {
             lifecycle.withLock {
+                var accepted = false
                 try {
                     runtime.browserLoginStatus(ticket) // A superseded start must not open a browser.
                     request("start", buildJsonObject { put("id", id) })
                     var submitted = 0
-                    var durable = false
                     while (isActive) {
                         val admission = runtime.browserLoginStatus(ticket)
-                        if (admission == "failed") throw LoginFailure("Twitch rejected account or Drops verification. Retry sign-in using the desktop helper; saved credentials were preserved.")
+                        if (admission == "failed") throw LoginFailure("Twitch rejected account or Drops verification. Retry dashboard sign-in, or use the desktop helper. Saved credentials were preserved.")
                         val response = request("status")
+                        check(response["id"]?.jsonPrimitive?.content == id) { "Browser login was replaced." }
                         val state = response["state"]?.jsonPrimitive?.content
                         when (state) {
                             "interactive", "starting", "capturing", "ready" -> publish(id, state)
@@ -53,14 +54,14 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
                             val context = BrowserSessionContext.parse(response["context"] as? JsonObject ?: error("Missing context"))
                             context.requireFresh()
                             runtime.submitBrowserSession(ticket, context)
-                            durable = context.sdkCookie != null
                             submitted = sequence
                         }
                         if (submitted > 0 && response["context"] is JsonObject && runtime.browserLoginStatus(ticket) == "ready" && state == "capturing") {
                             request("accepted", buildJsonObject { put("id", id); put("sequence", submitted) })
+                            accepted = true
                             publish(id, "ready")
-                            // Runtime owns durable renewal independently of this view and lease.
-                            if (durable) return@withLock
+                            // Runtime owns both seed and retained-browser renewal, independently of the viewer.
+                            return@withLock
                         }
                         delay(if (state == "ready") 5_000 else 750)
                     }
@@ -70,7 +71,7 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
                     publish(id, "failed", "Dashboard browser or Twitch verification failed. Retry sign-in, or use the desktop helper. Check that the browser service is running.")
                 } finally {
                     withContext(NonCancellable) {
-                        runCatching { request("cancel", buildJsonObject { put("id", id) }) }
+                        runCatching { request(if (accepted) "release" else "cancel", buildJsonObject { put("id", id) }) }
                     }
                 }
             }

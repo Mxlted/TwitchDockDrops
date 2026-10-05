@@ -37,7 +37,7 @@ class BrowserRenewalClientTest {
                                 put("id", if (replace) "different-session" else id)
                                 put("state", "capturing"); put("context", context.toJson())
                             }.toString()
-                            "/cancel" -> { cancelled = body!!.getValue("id").jsonPrimitive.content; "{}" }
+                            "/release" -> { cancelled = body!!.getValue("id").jsonPrimitive.content; "{}" }
                             else -> error("Unexpected route")
                         })
                     }
@@ -62,7 +62,30 @@ class BrowserRenewalClientTest {
                 val error = assertFailsWith<IllegalStateException> { client.renew(context()) }
                 assertEquals("Browser renewal temporarily unavailable.",error.message)
             }
-            assertEquals("/cancel",server.takeRequest().let { server.takeRequest().path })
+            assertEquals("/release",server.takeRequest().let { server.takeRequest().path })
+        }
+    }
+
+    @Test fun `missing retained browser is terminal and revocation is lease scoped`() = runBlocking {
+        MockWebServer().use { server ->
+            var id = ""
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    val body = if (request.method == "POST") Json.parseToJsonElement(request.body.readUtf8()).jsonObject else null
+                    return MockResponse().setBody(when (request.path) {
+                        "/renew" -> { id = body!!.getValue("id").jsonPrimitive.content; "{}" }
+                        "/status" -> """{"id":"$id","state":"failed","error":"browser_missing"}"""
+                        "/release" -> { assertEquals(id,body!!.getValue("id").jsonPrimitive.content); "{}" }
+                        "/revoke" -> { assertEquals("12345678-1234-1234-1234-123456789abc",body!!.getValue("lease").jsonPrimitive.content); "{}" }
+                        else -> error("Unexpected route")
+                    })
+                }
+            }
+            server.start()
+            BrowserRenewalClient(server.port).use { client ->
+                assertFailsWith<com.nathan.twitchdropsminer.android.data.model.BrowserLeaseUnavailableException> { client.renew(context()) }
+                client.revoke("12345678-1234-1234-1234-123456789abc")
+            }
         }
     }
 }

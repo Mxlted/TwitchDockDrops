@@ -95,6 +95,44 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
+## Docker retained-browser renewal fallback - 2026-10-05
+
+- The user reports the seed-preparation failure on the latest deployed build and confirms the desktop
+  helper works. The exact SDK failure remains unknown; this message does not establish a container
+  permission or networking defect. Compose already shares the app/browser network namespace.
+- Rechecked current upstream [SDK issuance](https://github.com/rangermix/TwitchDropsMiner/blob/main/src/auth/server_renewal.py),
+  [capture](https://github.com/rangermix/TwitchDropsMiner/blob/main/src/auth/session_helper.py),
+  [authentication evidence](https://github.com/rangermix/TwitchDropsMiner/issues/118), CDP documentation
+  through Context7, and [Twitch refresh-token requirements](https://dev.twitch.tv/docs/authentication/refresh-tokens/).
+  Plain OAuth refresh is not a demonstrated replacement for the protected Drops integrity context.
+- Finish no longer requires missing-cookie bootstrap. A present seed can still enable independently
+  verified restart-capable renewal; missing cookies or failed SDK issuance fall back to the existing
+  authenticated headed browser in Docker. The PC/helper is unnecessary for either Docker mode.
+  Initial and renewed contexts still pass JVM account, Inventory and Campaigns verification.
+- Added a mutually exclusive encrypted private browser lease, runtime-triggered renewal, bound
+  OAuth/client/device identity, advancing proof checks, transfer release and lease revocation.
+  Reset/replacement/authoritative expiry/orderly shutdown dispose the owned browser; Stop keeps it.
+  Settings identifies the mode through existing account text. No public schema, extra port, volume,
+  dependency, or container privilege was added.
+- Retained profiles remain temporary. Browser restart or orderly app shutdown requires sign-in again;
+  only SDK-seeded sessions support durable restart recovery. Transient errors preserve credentials,
+  and a missing retained browser stops retrying with reconnect guidance.
+- Linux image verification exposed an intermittent temporary-directory cleanup failure in the seed
+  renewal test. Inspection found that renewal acceptance can enqueue Start/Refresh behind shutdown;
+  those commands could start work or change saved intent after cleanup. Start/Refresh now refuse work
+  once shutdown begins, with a regression covering unchanged intent and no inventory work.
+- Verification after correction: root JDK 21 `test installDist` passes **190 JVM tests**, zero
+  failures/errors/skips; **47 Node tests pass**, as do changed-script syntax and diff checks.
+  Browser-enabled Compose validates; both images build, with the final app image passing its Linux
+  clean test/distribution build. Brief disposable startup passes the existing app health check and
+  browser running/zero-restart check. Test containers and the temporary diagnostic Dockerfile were
+  removed. No live login, offline Chromium scenario, mutation, or endurance test was run.
+- Manual/unverified: Finish sign-in on the user's latest deployment; renew past the original proof
+  expiry with the PC off; both modes after service restart; earning/claims; desktop/mobile Settings
+  copy in both themes and keyboard navigation. Synthetic evidence does not prove live Twitch acceptance.
+- Starting root tree clean on `main`; Android clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
+  Local commit only; no push/deployment requested.
+
 ## Renewal seed browser profile correction - 2026-10-05
 
 - The user's retry reached `seed_failed`: Drops evidence was captured, but cookie lookup/bootstrap
@@ -777,8 +815,10 @@ root build.
 - Fresh Android-client device authorization can be rejected by Twitch. The previous dashboard browser
   capture has live account/campaign evidence on Linux Docker; desktop-helper account acceptance, unattended
   integrity renewal, earning, and claims remain unverified.
-  New dashboard logins store an encrypted SDK seed for server renewal across JVM/browser restarts;
-  temporary failures retry while that seed remains valid. The new path still needs live acceptance
+  New dashboard logins use a verified encrypted SDK seed when available, or retain the authenticated
+  Docker browser without requiring the PC. Retained-browser mode requires reconnecting after service
+  restart; temporary failures retry while its browser survives. SDK mode can recover across restarts
+  while its seed remains valid. Both new paths still need live acceptance
   and endurance testing. Older dashboard logins need one reconnection after upgrade. Desktop-helper
   logins still require the helper running and reconnecting after server restart. Firefox,
   popup-based social sign-in in the dashboard viewer, and upstream-helper protocol compatibility are

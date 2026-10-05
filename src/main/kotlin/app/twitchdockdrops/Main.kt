@@ -35,6 +35,7 @@ fun main() {
         twitchApiClient = TwitchApiClient(httpClient),
         networkStatusProvider = networkStatusProvider,
         browserRenewal = browserRenewal?.let { client -> { context -> client.renew(context) } },
+        browserLeaseRevoke = browserRenewal?.let { client -> { lease -> client.revoke(lease) } },
     )
 
     runBlocking {

@@ -86,8 +86,10 @@ the [Operator Guide](./OPERATIONS.md#network-access) for loopback-only and rever
 Twitch Dock Drops refreshes your campaigns, chooses an eligible live channel, reports watch progress,
 recovers from stalled channels, and claims completed Drops. Your saved session is restored after a
 container restart, and the miner resumes automatically if it was running before the restart. New dashboard
-logins save an encrypted renewal seed, so renewal can resume after server/browser restarts while that seed
-is valid. After upgrading from the older login method, reconnect once to enable this.
+logins renew entirely inside Docker. When SDK seed verification succeeds, renewal can resume after
+server/browser restarts while the seed is valid. Otherwise the service retains its signed-in browser
+for renewal; your computer can be off, but reconnect after either Docker service restarts. Settings
+shows the active renewal mode. Reconnect once after upgrading to use this behavior.
 See [browser login](./OPERATIONS.md#browser-login) for setup and troubleshooting.
 For Debian running inside Proxmox LXC, see the [LXC setup notes](./OPERATIONS.md#debian-docker-inside-proxmox-lxc).
 

@@ -109,6 +109,24 @@ class BrowserAuthenticationTest {
         assertNull(BrowserSessionContext.parse(context()).sdkCookie)
     }
 
+    @Test fun `retained browser lease is bounded encrypted and mutually exclusive with SDK seed`() {
+        val lease = "12345678-1234-1234-1234-123456789abc"
+        val raw = JsonObject(context() + ("browser_lease" to JsonPrimitive(lease)))
+        val parsed = BrowserSessionContext.parse(raw)
+        assertEquals(lease,parsed.browserLease)
+        val key = Base64.getEncoder().encodeToString(ByteArray(32) { it.toByte() })
+        SecureSessionStore(directory,key).saveTwitchSession(StoredTwitchSession(parsed.accessToken,"12345",parsed.deviceId,now,parsed))
+        assertEquals(raw,SecureSessionStore(directory,key).twitchSession()?.browserContext?.toJson())
+        assertFalse(Files.readString(directory.resolve("session.enc")).contains(lease))
+        assertFalse(parsed.toString().contains(lease))
+        for (value in listOf(JsonPrimitive("bad"),JsonNull,JsonPrimitive(123))) {
+            assertFailsWith<IllegalArgumentException> { BrowserSessionContext.parse(JsonObject(context() + ("browser_lease" to value))) }
+        }
+        assertFailsWith<IllegalArgumentException> { BrowserSessionContext.parse(JsonObject(raw + ("sdk_cookie" to buildJsonObject {
+            put("value","fixture"); put("expires_at",now.plusSeconds(86400).epochSecond)
+        }))) }
+    }
+
     @Test fun `pairing is single owner bounded and reset revokes renewal`() {
         var clock = now
         val admission = BrowserLoginAdmission { clock }

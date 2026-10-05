@@ -124,27 +124,24 @@ the public state. A coroutine serializes companion startup, status/context trans
 The worker opens a headed Chromium browser under Xvfb. The UI relays JPEG frames and a bounded set of
 click, text, scroll, and key commands. Capture starts before the login page so proof issued during
 sign-in is retained. Finish sign-in collects successful Drops evidence in that same browser and reads
-only the secure, HttpOnly `KP_UIDz-ssn` cookie for exact host `k.twitchcdn.net`, path `/`. If that cookie
-is unavailable, Finish bootstraps fresh SDK proof and a cookie in a separate headed browser with an
-empty temporary regular profile. An Incognito context is unsuitable here because its default
-third-party-cookie blocking can prevent the SDK cookie from being stored. The regular profile
-inherits no login cookies and cannot change the signed-in storage; no cookie-policy override is used.
-Its process and profile are cleaned up on success, failure or cancellation. The worker then closes
-the interactive browser and independently issues a fresh proof in a temporary headless browser using
-that seed. The JVM validates OAuth identity, Inventory and Campaigns before accepting the result and
-atomically saving it. The dashboard transport acknowledges acceptance and closes its lease's worker;
-the runtime owns subsequent renewal. No mining, campaign, heartbeat or claim scheduling moves to the
-companion. The desktop helper's existing live-browser lease remains supported separately.
+only the secure, HttpOnly `KP_UIDz-ssn` cookie for exact host `k.twitchcdn.net`, path `/`. If present,
+the worker attempts independent issuance in a temporary headless browser while preserving the login
+browser. If the cookie is absent or independent issuance fails, Finish uses the verified captured
+context and retains the authenticated headed browser inside Docker. Missing-cookie bootstrap is no
+longer a login prerequisite. The JVM still validates OAuth identity, Inventory and Campaigns before
+atomic save and acknowledgment in either mode. Successful SDK issuance closes the login browser;
+fallback retains it only after JVM acceptance. The dashboard releases the transfer with `/release`;
+the runtime owns all subsequent renewal timing. No mining, heartbeat or claim scheduler moves to the
+companion. The desktop helper remains a separate fallback requiring its computer to stay running.
 The capture stream only queues relevant OAuth-context request, response and completion events,
 excluding preflights and unrelated assets/telemetry. Completed non-campaign evidence is discarded;
 at most 16 successful campaign requests and 16 issued proofs are retained. Initial capture has a
 two-minute deadline and reloads campaigns every 30 seconds if proof and successful campaign data
-have not yet matched. Optional bootstrap and independent SDK issuance each have a 150-second deadline.
-Fixed browser-failure codes distinguish login timeout, capture, seed bootstrap, independent issuance,
-and server acceptance timeout. Allowlisted SDK reasons further distinguish initialization/timeout,
-fetch failure, rejected response, unusable cookie and unverifiable proof without forwarding raw diagnostics.
-Missing seed material is allowed only
-as input to initial bootstrap; renewal inputs and every bootstrap/renewal result require a valid seed.
+have not yet matched. Optional independent SDK issuance has a 150-second deadline.
+Fixed browser-failure codes distinguish login timeout, capture and server acceptance timeout.
+Legacy SDK failure codes remain recognized by the JVM bridge, but SDK failures in the current worker
+use the retained-browser fallback. No raw diagnostics are forwarded.
+SDK renewal still requires a valid seed; retained-browser renewal requires its private browser lease.
 
 `BrowserSessionContext` optionally includes `sdk_cookie: {value, expires_at}` inside the existing
 encrypted session only (36 KiB maximum context). Older contexts remain readable. This is not a
@@ -156,10 +153,27 @@ Twitch-origin document loads the fixed Twitch SDK and issues `/integrity`; accep
 matching uncached POST response, a different token, advancing proof expiry and an advancing SDK-cookie
 expiry. OAuth/device headers stay bound to the saved context. No direct HTTP-only proof refresh is used.
 
+As an alternative to `sdk_cookie`, the encrypted context may contain `browser_lease`, a random UUID
+identifying the one retained browser. These fields are mutually exclusive and absent from public
+state/events/logs. The existing account `statusText` identifies the renewal mode; no public schema
+field was added. `/renew` with a lease captures a different, advancing proof and authenticated Drops
+evidence in that browser, bound to the original OAuth token/client/device. `/release` discards a
+transfer or cancels a renewal attempt without stopping the retained browser. `/revoke` accepts only
+the matching private lease and closes its browser/profile. Reset, replacement, authoritative expiry,
+and orderly JVM shutdown revoke that lease; Stop preserves it. Stale IDs/leases cannot stop a newer
+browser. Viewer input/frames remain disabled after Finish. There is no worker renewal timer.
+
+The retained profile remains on tmpfs and is not exported. A browser-service restart or orderly JVM
+shutdown requires reconnecting in this mode. An unexpected JVM restart can reuse a surviving browser
+with the encrypted lease. Missing/dead browsers produce fixed reconnect guidance while preserving
+saved credentials; ordinary capture/transport failures retry with bounded backoff. This fallback
+removes the SDK-seed gate but does not establish live unattended Twitch acceptance.
+
 Renewal validates the same account and both Drops queries while the current miner continues. Only a
 successful, generation-checked atomic save replaces the context and restarts work with saved mining
 intent. Transient failures preserve the saved context and retry at 15 seconds, doubling to five minutes,
-until the saved SDK seed expires. Only authoritative token invalidity clears credentials. Reset,
+until the saved SDK seed expires (or while the retained browser is available). Only authoritative
+token invalidity clears credentials. Reset,
 replacement login and shutdown cancel renewal and invalidate late results; Stop preserves renewal
 but prevents it from restarting mining. Shutdown joins renewal cleanup and preserves Start/Stop intent.
 
@@ -169,9 +183,9 @@ Origin-bearing requests, require an internal header and the exact loopback Host,
 bound bodies. The JVM only calls a fixed loopback address without redirects. It never exposes arbitrary
 CDP commands or URL navigation. View IDs reject stale input and frames after replacement. Interactive
 login is limited to eight minutes; captures and verification are time-bounded. Browser profiles stay
-on tmpfs; only the scoped SDK cookie joins the encrypted context in the miner volume. JVM and companion
-restarts can recover while that seed remains fresh; extended downtime, revoked OAuth or a Twitch
-challenge can still require login. Older logins need one new dashboard sign-in to acquire the seed.
+on tmpfs; only the scoped SDK cookie or private retained-browser lease joins the encrypted context in
+the miner volume. Seed-based sessions can recover across restarts while the seed remains fresh;
+extended downtime, revoked OAuth or a Twitch challenge can still require login.
 New helper login, reset, cancellation, and shutdown stop the companion session; runtime generations
 and lease revocation independently block late credential commits. A renewal request cannot replace an
 interactive login. Original encrypted credentials survive failed replacement and transient renewal.

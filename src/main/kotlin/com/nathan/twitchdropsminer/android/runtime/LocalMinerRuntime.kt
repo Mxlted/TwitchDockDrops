@@ -79,6 +79,7 @@ class LocalMinerRuntime(
     private val clock: () -> Instant = Instant::now,
     private val browserRenewal: (suspend (BrowserSessionContext) -> BrowserSessionContext)? = null,
     private val browserRenewalMinimumDelay: Duration = Duration.ofSeconds(10),
+    private val browserLeaseRevoke: (suspend (String) -> Unit)? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runtimeCommands = CoroutineChannel<RuntimeCommand>(capacity = 32)
@@ -96,6 +97,7 @@ class LocalMinerRuntime(
     private var authJob: Job? = null
     private var inventoryRefreshJob: Job? = null
     private var browserRenewalJob: Job? = null
+    private var browserLease: String? = null
     private var shuttingDown = false
     @Volatile private var sessionGeneration = 0L
     @Volatile private var authRunGeneration = 0L
@@ -132,7 +134,7 @@ class LocalMinerRuntime(
                 } else {
                     LoginSession(
                         state = LoginState.LoggedIn,
-                        statusText = "Stored Twitch session",
+                        statusText = browserConnectionText(session, "Stored Twitch session"),
                         userId = session.userId,
                         username = session.username,
                         method = if (session.browserContext == null) "device" else "browser",
@@ -215,6 +217,7 @@ class LocalMinerRuntime(
         waitingForNetwork = false
         val existingDeviceId = secureSessionStore.twitchSession()?.deviceId
         sessionGeneration += 1L
+        revokeBrowserLease()
         // Replace atomically only after a new login succeeds. A failed device request must not
         // destroy an older credential (including one preserved because its key did not match).
         _snapshot.update {
@@ -266,7 +269,7 @@ class LocalMinerRuntime(
                 phase = RuntimePhase.Idle,
                 account = LoginSession(
                     state = LoginState.LoggedIn,
-                    statusText = "Logged in with Twitch",
+                    statusText = browserConnectionText(session, "Logged in with Twitch"),
                     userId = session.userId,
                     username = session.username,
                     method = if (session.browserContext == null) "device" else "browser",
@@ -295,6 +298,7 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleStartMining(command: RuntimeCommand.StartMining) {
+        if (shuttingDown) return
         if (command.persistIntent) {
             persistMiningIntent(requested = true)
         }
@@ -368,6 +372,7 @@ class LocalMinerRuntime(
             browserAdmission.clear()
             authRunGeneration++; sessionGeneration++; inventoryRefreshRunGeneration++
             browserRenewalJob?.cancelAndJoin(); browserRenewalJob = null
+            revokeBrowserLease()
             authJob?.cancelAndJoin(); authJob = null
             inventoryRefreshJob?.cancelAndJoin(); inventoryRefreshJob = null
         }
@@ -412,6 +417,7 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleRefreshInventory() {
+        if (shuttingDown) return
         if (authJob?.isActive == true || browserAdmission.pending()) return
         if (miningJob?.isActive == true) {
             inventoryRefreshRequests.update { it + 1L }
@@ -484,6 +490,7 @@ class LocalMinerRuntime(
         authJob = null
         miningJob = null
         inventoryRefreshJob = null
+        revokeBrowserLease()
         secureSessionStore.clear()
         settingsRepository.resetSessionSettings()
         dropsClaimedThisSession = 0
@@ -518,6 +525,7 @@ class LocalMinerRuntime(
         miningJob = null
         inventoryRefreshJob = null
         waitingForNetwork = false
+        revokeBrowserLease()
         secureSessionStore.clear()
         appendActivity(RuntimePhase.Authenticating, "Stored Twitch session expired")
         updateSnapshot(RuntimePhase.Authenticating, "Stored Twitch session needs renewal") {
@@ -573,6 +581,7 @@ class LocalMinerRuntime(
 
     private suspend fun handleStartBrowserAuthentication(managed: Boolean = false): String? {
         cancelForBrowserAuthentication()
+        revokeBrowserLease()
         val (code, expiry) = browserAdmission.open()
         val ticket = if (managed) browserAdmission.claim(code) else null
         updateSnapshot(RuntimePhase.Authenticating, if (managed) "Open dashboard login" else "Connect the browser login helper") {
@@ -605,7 +614,7 @@ class LocalMinerRuntime(
                 if (isCurrentAuthentication(generation)) {
                     browserAdmission.failed(lease.generation)
                     updateSnapshot(RuntimePhase.Error, "Browser login verification failed") {
-                        it.copy(error = "Twitch did not accept the browser session. Retry the helper; saved credentials were preserved.")
+                        it.copy(error = "Twitch did not accept the browser session. Retry dashboard sign-in or the desktop helper; saved credentials were preserved.")
                     }
                 }
             }
@@ -825,11 +834,27 @@ class LocalMinerRuntime(
         enqueueCoalesced(RuntimeCommand.RefreshInventory)
     }
 
+    private suspend fun revokeBrowserLease() {
+        val lease = browserLease ?: return
+        browserLease = null
+        try { browserLeaseRevoke?.invoke(lease) }
+        catch (error: CancellationException) { throw error }
+        catch (_: Throwable) { /* Lease and runtime generation are already revoked locally. */ }
+    }
+
+    private fun browserConnectionText(session: StoredTwitchSession, fallback: String): String = when {
+        session.browserContext?.browserLease != null -> "Connected with Docker browser renewal (reconnect after service restart)"
+        session.browserContext?.sdkCookie != null -> "Connected with restart-capable Docker renewal"
+        else -> fallback
+    }
+
     private fun scheduleBrowserRenewal(session: StoredTwitchSession) {
         browserRenewalJob?.cancel(); browserRenewalJob = null
         val renew = browserRenewal ?: return
         val context = session.browserContext ?: return
-        val cookie = context.sdkCookie ?: return // Older contexts and desktop helper leases still work.
+        val cookie = context.sdkCookie
+        browserLease = context.browserLease
+        if (cookie == null && context.browserLease == null) return // Desktop helpers own their leases.
         if (shuttingDown) return
         val generation = sessionGeneration
         browserRenewalJob = scope.launch(RuntimeOperationGuard { generation == sessionGeneration && !shuttingDown }) {
@@ -837,7 +862,7 @@ class LocalMinerRuntime(
                 .coerceAtLeast(browserRenewalMinimumDelay.toMillis()))
             var retry = 15_000L
             while (isActive && generation == sessionGeneration && !shuttingDown) {
-                if (!cookie.expiresAt.isAfter(now())) {
+                if (cookie != null && !cookie.expiresAt.isAfter(now())) {
                     updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "Browser renewal seed expired. Reconnect Twitch; saved credentials were preserved.") }
                     return@launch
                 }
@@ -845,7 +870,8 @@ class LocalMinerRuntime(
                     val refreshed = renew(context)
                     currentCoroutineContext().ensureActive()
                     refreshed.requireFresh(now())
-                    require(refreshed.sdkCookie?.expiresAt?.isAfter(cookie.expiresAt) == true &&
+                    require((if (cookie != null) refreshed.sdkCookie?.expiresAt?.isAfter(cookie.expiresAt) == true
+                        else refreshed.browserLease == context.browserLease && refreshed.sdkCookie == null) &&
                         refreshed.expiresAt > context.expiresAt &&
                         refreshed.headers["client-integrity"] != context.headers["client-integrity"] &&
                         refreshed.accessToken == context.accessToken && refreshed.deviceId == context.deviceId)
@@ -861,13 +887,17 @@ class LocalMinerRuntime(
                 } catch (error: CancellationException) { throw error }
                 catch (error: Throwable) {
                     if (generation != sessionGeneration || shuttingDown) return@launch
+                    if (error is com.nathan.twitchdropsminer.android.data.model.BrowserLeaseUnavailableException) {
+                        updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = error.message) }
+                        return@launch
+                    }
                     if (error is TwitchApiException && error.type == TwitchApiErrorType.InvalidToken) {
                         runtimeCommands.send(RuntimeCommand.ExpireSession(generation, "Twitch session expired. Reconnect Twitch."))
                         return@launch
                     }
                     // No upstream bodies, seed values or browser diagnostics enter public state/logs.
                     updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "Automatic Twitch session renewal is temporarily unavailable; retrying. Saved credentials were preserved.") }
-                    delay(minOf(retry, Duration.between(now(), cookie.expiresAt).toMillis().coerceAtLeast(1)))
+                    delay(if (cookie == null) retry else minOf(retry, Duration.between(now(), cookie.expiresAt).toMillis().coerceAtLeast(1)))
                     retry = (retry * 2).coerceAtMost(300_000)
                 }
             }

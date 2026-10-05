@@ -858,7 +858,7 @@ function renderSettings(data) {
             ${renderFactRow("Pinned games", String(settings.selectedGamePriority.length))}
             ${renderFactRow("Excluded campaigns", String(settings.excludedCampaignIds.length))}
           </div>
-          ${authenticated && snapshot.account.method === "browser" ? `<p class="field-hint">New dashboard logins renew through the browser service, including after restarts. Desktop-helper sessions need the helper running and reconnected after a server restart.</p>` : ""}
+          ${authenticated && snapshot.account.method === "browser" ? `<p class="field-hint">Dashboard login renews inside Docker; your computer can be off. If the account uses retained-browser renewal, reconnect after either service restarts. Desktop-helper sessions need the helper running.</p>` : ""}
           <div class="card-actions actions-spaced"><button class="button button-primary" data-action="connect" type="button">${linkIcon()} ${authenticated ? "Reconnect Twitch" : "Connect Twitch"}</button></div>
         </section>
       </div>

@@ -1,12 +1,24 @@
 // Private browser companion. No miner volume, saved credentials, or public listening port.
 import {createServer} from 'node:http';
+import {randomUUID} from 'node:crypto';
 import {mkdtemp, chmod, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve, dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {Cdp, BrowserCapture, browserPort, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
-import {issueSeed, readSdkCookie, validateSeed, bootstrapSeed, SdkCookieUnavailable, seedFailureCode} from './renewal.mjs';
+import {issueSeed, readSdkCookie, validateSeed, SdkCookieUnavailable, seedFailureCode} from './renewal.mjs';
+
+const LEASE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function validateLeaseContext(context) {
+  if (!LEASE.test(context?.browser_lease) || context.sdk_cookie !== undefined) throw Error('Invalid browser lease');
+  const {browser_lease, ...captured} = context;
+  validateSeed(captured,Date.now()/1000,true);
+}
+function sameIdentity(a,b) {
+  return a.headers.authorization === b.headers.authorization && a.headers['client-id'] === b.headers['client-id'] &&
+    (a.headers['x-device-id'] || a.headers['device-id']) === (b.headers['x-device-id'] || b.headers['device-id']);
+}
 
 const executable = process.env.DOCKDROPS_CHROMIUM || '/usr/bin/chromium';
 // This browser is confined by its own non-root, read-only container without the miner volume.
@@ -29,22 +41,32 @@ export class BrowserWorker {
   constructor(options = {}) {
     this.session = null; this.executable = options.executable || executable; this.browserArgs = options.browserArgs || browserArgs;
     this.issue = options.issue || issueSeed;
-    this.bootstrap = options.bootstrap || bootstrapSeed;
+    this.retained = null;
   }
   status() {
     const s = this.session;
     return s ? {id:s.id, state:s.state, sequence:s.sequence, error:s.error || '', ...(s.context ? {context:s.context} : {})} : {state:'idle',sequence:0};
   }
   async renew(id, context) {
-    validateSeed(context);
+    if (context?.browser_lease !== undefined) validateLeaseContext(context); else validateSeed(context);
     if (this.session && !this.session.renewal && !['ready','failed'].includes(this.session.state)) throw Error('Browser busy');
-    await this.cancel();
+    await this.release(this.session?.id);
     const s = {id, renewal:true, state:'capturing', stop:new AbortController(), sequence:0, context:null};
     this.session = s;
-    s.task = this.issue(this.executable,this.browserArgs,context,s.stop.signal).then(result => {
+    s.task = (async () => {
+      if (!context.browser_lease) return this.issue(this.executable,this.browserArgs,context,s.stop.signal);
+      const retained = this.retained;
+      if (!retained || retained.lease !== context.browser_lease || retained.capture.failure || retained.cdp?.closed || !sameIdentity(context,retained.boundContext)) {
+        s.error = 'browser_missing'; throw Error('Browser unavailable');
+      }
+      const captured = await retained.capture.wait(s.stop.signal,context.headers['client-integrity']);
+      if (!sameIdentity(captured,context) || captured.expires_at <= context.expires_at ||
+          captured.headers['client-integrity'] === context.headers['client-integrity']) throw Error('Browser context changed');
+      return {...captured,browser_lease:retained.lease};
+    })().then(result => {
       s.stop.signal.throwIfAborted(); s.context = result; s.sequence = 1;
     }).catch(() => {
-      if (!s.stop.signal.aborted) { s.error = 'renewal_failed'; s.state = 'failed'; }
+      if (!s.stop.signal.aborted) { s.error ||= 'renewal_failed'; s.state = 'failed'; }
     });
   }
   async start(id) {
@@ -61,12 +83,8 @@ export class BrowserWorker {
         s.state = 'failed';
       }
     }).finally(async () => {
-      await this.closeBrowser(s);
-      // Only delete the profile created by this invocation, under the resolved temporary root.
-      if (s.profile && dirname(s.profile) === resolve(tmpdir()) && s.profile.startsWith(join(tmpdir(),'dockdrops-browser-'))) {
-        await rm(s.profile,{recursive:true,force:true,maxRetries:5,retryDelay:200}).catch(() => {});
-      }
-      s.context = null;
+      if (this.retained !== s) await this.disposeBrowser(s);
+      if (this.retained !== s) s.context = null;
     });
   }
   async run(s) {
@@ -109,20 +127,25 @@ export class BrowserWorker {
   async maintainSession(s) {
     s.stage = 'capture';
     const captured = await s.capture.wait(s.stop.signal);
-    s.stage = 'bootstrap';
-    let seed;
-    try { seed = {...captured,sdk_cookie:await readSdkCookie(s.cdp)}; }
+    let context;
+    // Durable SDK renewal is an optimization, not a prerequisite for a verified login.
+    // Never destroy the signed-in browser until independent issuance has succeeded.
+    s.stage = 'issuance';
+    try {
+      const seed = {...captured,sdk_cookie:await readSdkCookie(s.cdp)};
+      context = await this.issue(this.executable,this.browserArgs,seed,s.stop.signal,true);
+    }
     catch (error) {
-      if (!(error instanceof SdkCookieUnavailable)) throw error;
-      seed = await this.bootstrap(this.executable,this.browserArgs,captured,s.stop.signal);
+      s.stop.signal.throwIfAborted();
+      // No SDK cookie, rejected SDK, or failed separate browser: retain the working browser.
+      // Recheck capture freshness after a potentially slow independent issuance attempt.
+      s.stage = 'capture';
+      const fresh = error instanceof SdkCookieUnavailable ? captured : await s.capture.wait(s.stop.signal);
+      s.lease = randomUUID(); s.boundContext = fresh;
+      context = {...fresh,browser_lease:s.lease};
     }
     s.stop.signal.throwIfAborted();
-    await this.closeBrowser(s);
-    // Prove independent issuance before accepting login; persisting a browser's first proof
-    // alone does not establish that its session can be renewed on the server.
-    s.stage = 'issuance';
-    const context = await this.issue(this.executable,this.browserArgs,seed,s.stop.signal,true);
-    s.stop.signal.throwIfAborted();
+    if (!s.lease) await this.closeBrowser(s);
     s.context = context;
     s.sequence++;
     s.stage = 'acceptance';
@@ -132,6 +155,29 @@ export class BrowserWorker {
       await sleep(500,undefined,{signal:s.stop.signal});
     }
     s.state = 'ready';
+    if (s.lease) this.retained = s;
+  }
+  async disposeBrowser(s) {
+    s.stop.abort(); await this.closeBrowser(s);
+    if (s.profile && dirname(s.profile) === resolve(tmpdir()) && s.profile.startsWith(join(tmpdir(),'dockdrops-browser-'))) {
+      await rm(s.profile,{recursive:true,force:true,maxRetries:5,retryDelay:200});
+    }
+    s.context = null; s.boundContext = null;
+  }
+  async release(id) {
+    const s = this.session;
+    if (!s || s.id !== id) return;
+    // Initial login may keep its CDP lifetime only after the JVM accepts it.
+    if (!s.renewal && !(s.accepted > 0 && s.accepted === s.sequence)) return this.cancel(id);
+    if (s.renewal) s.stop.abort();
+    await s.task;
+    s.context = null;
+    if (this.session === s) this.session = null;
+  }
+  async revoke(lease) {
+    const retained = this.retained;
+    if (!retained || retained.lease !== lease) return;
+    await this.cancel();
   }
   async closeBrowser(s) {
     if (s.cdp) { await s.cdp.command('Browser.close').catch(() => {}); s.cdp.close(); s.cdp = null; }
@@ -139,10 +185,13 @@ export class BrowserWorker {
   }
   async cancel(id) {
     const s = this.session;
-    if (!s || (id && s.id !== id)) return;
-    s.stop.abort(); await s.task;
-    s.context = null;
-    if (this.session === s) this.session = null;
+    if (id && s?.id !== id) return;
+    if (s) {
+      s.stop.abort(); await s.task; s.context = null;
+      if (this.session === s) this.session = null;
+    }
+    const retained = this.retained; this.retained = null;
+    if (retained) await this.disposeBrowser(retained);
   }
   sessionFor(id) {
     const s = this.session;
@@ -197,16 +246,18 @@ export function createWorkerServer(worker = new BrowserWorker(), port = 8091) {
     if (busy) { req.resume(); return send(429,{error:'Browser busy.'}); }
     busy = true;
     try {
-      if (req.method !== 'POST' || !['/start','/renew','/cancel','/finish','/input','/accepted'].includes(req.url)) return send(405,{error:'Method not allowed.'});
+      if (req.method !== 'POST' || !['/start','/renew','/release','/revoke','/cancel','/finish','/input','/accepted'].includes(req.url)) return send(405,{error:'Method not allowed.'});
       if (req.headers['content-type']?.split(';')[0] !== 'application/json') return send(415,{error:'JSON required.'});
       let size = 0; const chunks = [];
       for await (const chunk of req) { size += chunk.length; if (size > (req.url === '/renew' ? 40*1024 : 4096)) throw Error('Too large'); chunks.push(chunk); }
       const body = JSON.parse(Buffer.concat(chunks).toString());
       if (typeof body.id !== 'string' || !/^[0-9a-f-]{36}$/.test(body.id)) throw Error('Invalid id');
-      if (req.url !== '/input' && Object.keys(body).some(k => !['id',...(req.url === '/accepted' ? ['sequence'] : []),...(req.url === '/renew' ? ['context'] : [])].includes(k))) throw Error('Invalid fields');
+      if (req.url !== '/input' && Object.keys(body).some(k => !['id',...(req.url === '/accepted' ? ['sequence'] : []),...(req.url === '/renew' ? ['context'] : []),...(req.url === '/revoke' ? ['lease'] : [])].includes(k))) throw Error('Invalid fields');
       if (req.url === '/start') await worker.start(body.id);
       if (req.url === '/renew') await worker.renew(body.id,body.context);
       if (req.url === '/cancel') await worker.cancel(body.id);
+      if (req.url === '/release') await worker.release(body.id);
+      if (req.url === '/revoke') { if (!LEASE.test(body.lease)) throw Error('Invalid lease'); await worker.revoke(body.lease); }
       if (req.url === '/finish') { const s = worker.sessionFor(body.id); if (s.state !== 'interactive') throw Error('Not interactive'); s.finished = true; }
       if (req.url === '/input') await worker.input(body);
       if (req.url === '/accepted') {
