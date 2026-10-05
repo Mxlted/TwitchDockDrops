@@ -3,6 +3,17 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## Verification scope - 2026-10-05
+
+- Routine Docker Desktop verification is limited to affected image builds and brief isolated
+  container startup, including the existing app health check. Deeper container scenarios and offline
+  Chromium smoke tests are opt-in when the user requests them.
+- The user handles manual UI and live Twitch testing, including Finish sign-in, renewal, earning,
+  failover, and claims. Build/startup and synthetic test results do not confirm those flows or resolve
+  the reported login failure. Earlier verification records remain historical evidence only.
+- This instruction-only update was reviewed with `git diff --check`; no application builds or
+  container tests were run.
+
 ## Implementation checklist
 
 - [x] Published `deployment` branch keeps server build/runtime inputs and excludes environment files

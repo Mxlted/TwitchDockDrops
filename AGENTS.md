@@ -165,22 +165,17 @@ Docker Desktop was verified installed and running on 2026-10-04: Desktop 4.93.0,
 Compose v5.5.1, with a reachable Linux engine in the `desktop-linux` context. Its installation is
 `%LOCALAPPDATA%\Programs\DockerDesktop`; these are observed host facts, not project version requirements.
 
-Before declaring Docker unavailable or skipping container verification:
+When container verification is relevant, check the selected context and engine once. If `docker` is
+absent from PATH, use `resources\bin\docker.exe` under the installation above or
+`%ProgramFiles%\Docker\Docker`, invoked as `& $dockerCli` in PowerShell. Do not silently switch
+contexts, reinstall Docker, or change global PATH. Investigate installation/process state only if
+that check fails; distinguish access denial from a missing installation or stopped engine.
 
-1. Check Docker Desktop itself, not just `Get-Command docker`. Inspect the observed installation above
-   and the standard `%ProgramFiles%\Docker\Docker` location for `Docker Desktop.exe`; check the
-   `Docker Desktop` and `com.docker.backend` processes. Installed, running, and engine-ready are separate states.
-2. If `docker` is absent from PATH, use `resources\bin\docker.exe` beneath the discovered installation.
-   In PowerShell invoke it with `& $dockerCli`; do not reinstall Docker or change global PATH merely
-   because the current shell cannot resolve the command.
-3. Run `version`, `compose version`, and `context show` through that CLI. A client version alone does
-   not prove engine connectivity. Inspect the selected context before assuming it is local; do not
-   silently switch contexts or target another daemon.
-4. Distinguish sandbox/executable or named-pipe access denial from a missing installation or stopped
-   engine. Retry required read-only checks through the permitted approval flow when blocked. Report
-   the actual failure if access remains unavailable; do not label Docker Desktop as absent.
-
-Recheck readiness when container work starts; this dated observation does not guarantee future state.
+Keep routine Docker Desktop verification to affected image builds and a brief isolated container
+startup check (running without a restart loop, and the app's existing health check). Stop there unless
+the user asks for deeper testing. Do not routinely run offline Chromium capture tests, login attempts,
+mutation scenarios, restart/renewal exercises, or endurance tests in Docker. Build/startup success
+confirms packaging and local readiness only; it does not establish working Twitch login or mining.
 
 ## Verification by change
 
@@ -188,15 +183,20 @@ Use the union of applicable rows. Add focused regression tests for bugs and nont
 security, or lifecycle changes. Keep verification proportional; documentation-only edits do not need
 an application build. Never report an unavailable or skipped check as passed.
 
+The user owns manual UI and real-account testing by default, including sign-in through Finish sign-in,
+renewal, earning, failover, and claims. List the affected manual checks in the handoff; do not attempt
+them or expand container testing unless requested. Synthetic tests remain useful code checks, but do
+not substitute for the user's live results or prove a reported login failure is fixed.
+
 | Changed area | Required checks |
 | --- | --- |
 | Documentation/instructions only | Verify referenced paths, commands, and claims; review Markdown and `git diff --check` |
-| JVM server, API, serializer, storage, miner core | Root Gradle tests and distribution build; isolated health and at least one mutation smoke check for server changes |
+| JVM server, API, serializer, storage, miner core | Root Gradle tests and distribution build; additional runtime scenarios only when requested |
 | Web JavaScript or login helper/worker | Node regression suite and syntax checks on changed scripts; JVM checks too if contract/server changes |
-| Client HTML/CSS/interaction | Desktop and mobile visual inspection, both themes; affected empty, loading, logged-out, active, and error states; keyboard/focus checks |
+| Client HTML/CSS/interaction | Review markup/styles and affected automated tests; hand off desktop/mobile, both themes, affected states, and keyboard/focus checks for manual testing |
 | Compose | Validate each affected base/merged configuration |
-| Dockerfile, dependencies, distribution | Build affected images; check health/runtime when behavior changes |
-| Browser capture/login | Relevant JVM and Node tests; offline Chromium smoke test from `OPERATIONS.md` when capture/navigation/renewal changes |
+| Dockerfile, dependencies, distribution | Build affected images once; brief isolated startup check and existing app health check |
+| Browser capture/login | Relevant JVM and Node tests; user tests actual login/renewal; offline Chromium smoke test only when requested |
 
 Run from the root; Node tests need no package installation:
 
@@ -212,17 +212,19 @@ docker compose -f compose.yaml -f compose.browser.yaml build
 
 These are a command menu, not a requirement to run every command on every task. Use
 `gradle clean test installDist` for clean-build verification. Run `node --check` for other changed
-scripts too. Quiet Compose validation avoids printing interpolated secrets.
+scripts too. Quiet Compose validation avoids printing interpolated secrets. Choose the relevant base
+or browser-enabled build; do not rebuild the same app image through both configurations without need.
 
 Use disposable data and an unused loopback port for smoke tests; never mutate a saved user session or
 reset live settings to test an endpoint. Compose has explicit container/network/volume names, so a
 different project name alone does not isolate it: override those resources or use a disposable local
-JVM host. Send the expected Origin and JSON headers and verify mutation results through state.
+JVM host. For explicitly requested mutation smoke tests, send the expected Origin and JSON headers
+and verify results through state.
 Clean up only resources created by the task.
 
 For visual fixtures use `/?preview=active`, `/?preview=loggedout`, `/?preview=preparing`,
 `/?preview=code`, or `/?preview=expired`. Preview controls do not verify real mutations or Twitch
-behavior. See `OPERATIONS.md` for the offline Chromium test and deployment commands.
+behavior. See `OPERATIONS.md` for optional offline Chromium testing and deployment commands.
 
 ## Finish and handoff
 
