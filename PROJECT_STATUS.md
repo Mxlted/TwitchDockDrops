@@ -95,6 +95,35 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
+## Explicit live Docker login and renewal check - 2026-10-05
+
+- The user explicitly requested a real-account test and supplied the email verification code.
+  Tested commit `e782da6` in disposable Linux Docker app/browser containers on loopback port 18080;
+  both used the existing non-root/read-only/capability restrictions, with session data and browser
+  profiles on tmpfs. No existing user session, volume, or deployment was modified.
+- Twitch email verification and **Finish sign-in** succeeded. The JVM accepted the account and
+  protected Drops endpoints, loaded **105 campaigns**, and reported retained **Docker browser renewal**.
+  Mining remained stopped and public state had no error. This exercises the no-SDK-seed fallback;
+  it does not establish the underlying SDK-cookie failure's cause or SDK restart recovery.
+- A temporary credential-free Java probe ran inside the app container, using production
+  `SecureSessionStore`, `BrowserRenewalClient.renew` and `TwitchApiClient.validateBrowserContext`.
+  One explicitly triggered renewal rotated the proof, advanced expiry from **09:41:34 UTC** to
+  **09:45:35 UTC**, preserved account/token/device identity, and passed Inventory and Campaigns
+  verification. The probe did not save its returned context or alter the runtime timer; the normal
+  timer was still about 51 minutes away. Credentials stayed inside the test containers.
+- Corrected the login chooser/viewer's unconditional restart-recovery wording. Both now direct
+  users to Settings for the active mode's restart behavior. No runtime or state-contract change.
+- Both image builds succeeded using cached build/test layers; these were not fresh JVM test runs.
+  App health was healthy; both containers were running with zero restarts. The temporary probe
+  compiled and passed, and both disposable containers were removed after the test.
+- Verification of the copy changes: **47 Node tests passed**, JavaScript syntax and diff checks passed.
+  The revised text still needs desktop/mobile layout, both-theme and keyboard/focus review.
+- Unverified: natural timer-driven renewal and atomic replacement, repeated renewal/long-term
+  operation, service-restart behavior, SDK-seeded mode, earning/claims, and Debian/Proxmox behavior.
+  A successful manually triggered renewal does not close the unattended-renewal checklist item.
+- Starting root tree clean on `main`; optional Android tree clean at
+  `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. No push or deployment requested.
+
 ## Docker retained-browser renewal fallback - 2026-10-05
 
 - The user reports the seed-preparation failure on the latest deployed build and confirms the desktop
@@ -818,8 +847,10 @@ root build.
   New dashboard logins use a verified encrypted SDK seed when available, or retain the authenticated
   Docker browser without requiring the PC. Retained-browser mode requires reconnecting after service
   restart; temporary failures retry while its browser survives. SDK mode can recover across restarts
-  while its seed remains valid. Both new paths still need live acceptance
-  and endurance testing. Older dashboard logins need one reconnection after upgrade. Desktop-helper
+  while its seed remains valid. Retained-browser login and one manually triggered renewal passed
+  live verification on 2026-10-05; natural scheduling, atomic renewal replacement, repeated renewal,
+  restart behavior and SDK mode still need live verification. Older dashboard logins need one
+  reconnection after upgrade. Desktop-helper
   logins still require the helper running and reconnecting after server restart. Firefox,
   popup-based social sign-in in the dashboard viewer, and upstream-helper protocol compatibility are
   not implemented. Native browser checks were on Windows. Different browser/miner network

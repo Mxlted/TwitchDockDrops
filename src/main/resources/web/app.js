@@ -369,7 +369,7 @@ function renderLoginOptions() {
     <p>Use Chrome, Edge, or Chromium in a separate temporary profile. Requires Node.js 22.4 or newer and the helper running on your computer.</p>
     <div class="hero-actions"><button class="button button-quiet" data-action="connect-helper" type="button">Use desktop helper</button><button class="button button-quiet" data-action="close-login-options" type="button">Back</button></div>
   </div><aside class="hero-aside"><p class="hero-aside-title">Your session</p>
-    <ol class="step-list">${renderStep(1,'Sign in on Twitch','Complete password, email, or two-factor verification in the selected browser.')}${renderStep(2,'Verify Drops access','The miner checks your account and Drops access before saving the session.')}${renderStep(3,'Keep renewal available','Dashboard logins can renew after restarts. Desktop-helper logins need the helper reconnected after a server restart.')}</ol>
+    <ol class="step-list">${renderStep(1,'Sign in on Twitch','Complete password, email, or two-factor verification in the selected browser.')}${renderStep(2,'Verify Drops access','The miner checks your account and Drops access before saving the session.')}${renderStep(3,'Keep renewal available','Settings shows whether Docker renewal supports restarts or needs a new sign-in afterward. Desktop-helper logins need the helper reconnected after a server restart.')}</ol>
   </aside></section>`;
 }
 
