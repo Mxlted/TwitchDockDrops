@@ -85,8 +85,9 @@ the [Operator Guide](./OPERATIONS.md#network-access) for loopback-only and rever
 
 Twitch Dock Drops refreshes your campaigns, chooses an eligible live channel, reports watch progress,
 recovers from stalled channels, and claims completed Drops. Your saved session is restored after a
-container restart, and the miner resumes automatically if it was running before the restart. Browser
-sessions need fresh integrity proof: reconnect after restarting the server or browser service so renewal continues.
+container restart, and the miner resumes automatically if it was running before the restart. New dashboard
+logins save an encrypted renewal seed, so renewal can resume after server/browser restarts while that seed
+is valid. After upgrading from the older login method, reconnect once to enable this.
 See [browser login](./OPERATIONS.md#browser-login) for setup and troubleshooting.
 For Debian running inside Proxmox LXC, see the [LXC setup notes](./OPERATIONS.md#debian-docker-inside-proxmox-lxc).
 
@@ -122,7 +123,7 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
   responding.
 
 The miner keeps lifecycle work on the server. Closing the dashboard does not stop farming; keep the
-browser service or selected desktop login helper running to renew browser sessions.
+browser service available, or the selected desktop login helper running, to renew browser sessions.
 **Up next** follows your saved priorities, exclusions, campaign eligibility, and fallback order;
 live-channel availability determines what can actually run.
 
@@ -138,7 +139,7 @@ or open `/?preview=active` on your instance. Preview controls do not change the 
 - Unlinked-campaign farming is optional and treated as speculative until Twitch confirms real progress.
 - Private Twitch behavior can change, so review the [Project Status](./PROJECT_STATUS.md) when troubleshooting.
 - Connect Twitch uses browser login because Twitch can reject the older device-code flow. Existing
-  sessions are preserved. Live account acceptance of either browser option has not yet been verified.
+  sessions are preserved. The new durable renewal path still needs real-account endurance testing.
 - Local activity logs can contain campaign and channel names; review them before sharing.
 
 ## Documentation

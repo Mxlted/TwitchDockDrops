@@ -81,15 +81,32 @@ class BrowserAuthenticationTest {
     @Test fun `browser context is encrypted and absent from public state`() {
         val key = Base64.getEncoder().encodeToString(ByteArray(32) { 5 })
         val store = SecureSessionStore(directory, key)
-        val context = BrowserSessionContext.parse(context())
+        val context = BrowserSessionContext.parse(JsonObject(context() + ("sdk_cookie" to buildJsonObject {
+            put("value", "sdk-cookie-secret"); put("expires_at", now.plusSeconds(86400).epochSecond)
+        })))
         store.saveTwitchSession(StoredTwitchSession(context.accessToken, "12345", context.deviceId, now, context))
         val restored = assertNotNull(SecureSessionStore(directory, key).twitchSession())
         assertEquals(context.toJson(), restored.browserContext?.toJson())
         val disk = Files.readString(directory.resolve("session.enc"))
         assertFalse(disk.contains("browser-secret")); assertFalse(disk.contains("integrity-secret"))
+        assertFalse(disk.contains("sdk-cookie-secret"))
+        assertFalse(context.sdkCookie.toString().contains("sdk-cookie-secret"))
         val state = StateJson().encode(RuntimeSnapshot(account = LoginSession(LoginState.LoggedIn,"Connected", method="browser")), AppSettings(), emptyList())
         assertFalse(state.contains("integrity")); assertFalse(state.contains("headers")); assertFalse(state.contains("browserContext"))
         assertTrue(state.contains("\"method\":\"browser\""))
+    }
+
+    @Test fun `renewal cookie rejects unsafe bytes extra destinations and wrong types`() {
+        for (cookie in listOf(
+            """{"value":"bad;cookie","expires_at":12345}""",
+            """{"value":"secret","expires_at":"12345"}""",
+            """{"value":"secret","expires_at":12345,"domain":"attacker.invalid"}""",
+            """{"value":"secret","expires_at":-1}""",
+        )) {
+            val value = JsonObject(context() + ("sdk_cookie" to Json.parseToJsonElement(cookie)))
+            assertEquals("Invalid browser session context.",assertFailsWith<IllegalArgumentException> { BrowserSessionContext.parse(value) }.message)
+        }
+        assertNull(BrowserSessionContext.parse(context()).sdkCookie)
     }
 
     @Test fun `pairing is single owner bounded and reset revokes renewal`() {

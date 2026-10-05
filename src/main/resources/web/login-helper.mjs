@@ -157,7 +157,7 @@ export class BrowserCapture {
 }
 
 export class Cdp {
-  constructor(socket) {
+  constructor(socket, extraEvents = []) {
     this.closed = false;
     this.socket = socket; this.nextId = 0; this.pending = new Map(); this.events = []; this.waiter = null; this.networkRequests = new Set();
     socket.addEventListener('message', event => {
@@ -166,6 +166,9 @@ export class Cdp {
       if (message.id) {
         const request = this.pending.get(message.id);
         if (request) { this.pending.delete(message.id); clearTimeout(request.timer); message.error ? request.reject(new BrowserCommandError(request.method, message.error.code)) : request.resolve(message.result); }
+      } else if (extraEvents.includes(message.method)) {
+        if (this.events.length >= 256) { socket.close(); return; }
+        if (this.waiter) { this.waiter(message); this.waiter = null; } else this.events.push(message);
       } else if (message.method?.startsWith('Network.')) {
         // A Twitch page emits large amounts of unrelated telemetry and asset traffic.
         // Queue only the request/response/completion events needed for auth correlation.
@@ -188,7 +191,7 @@ export class Cdp {
       this.pending.clear(); if (this.waiter) { this.waiter(null); this.waiter = null; }
     });
   }
-  static async open(url, port, signal) {
+  static async open(url, port, signal, extraEvents = []) {
     signal.throwIfAborted();
     const parsed = new URL(url);
     if (parsed.protocol !== 'ws:' || parsed.hostname !== '127.0.0.1' || parsed.port !== String(port)) throw new HelperError('Unexpected browser control address.');
@@ -200,13 +203,13 @@ export class Cdp {
     });
     if (signal.aborted) { socket.close(); signal.throwIfAborted(); }
     signal.addEventListener('abort', () => socket.close(), { once: true });
-    return new Cdp(socket);
+    return new Cdp(socket, extraEvents);
   }
-  command(method, params = {}) {
+  command(method, params = {}, timeout = 15000) {
     if (this.socket.readyState !== WebSocket.OPEN) return Promise.reject(new HelperError('Browser disconnected.'));
     return new Promise((resolve, reject) => {
       const id = ++this.nextId;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new HelperError('Browser command timed out.')); }, 15000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new HelperError('Browser command timed out.')); }, timeout);
       this.pending.set(id, {resolve,reject,timer,method});
       this.socket.send(JSON.stringify({id,method,params}));
     });

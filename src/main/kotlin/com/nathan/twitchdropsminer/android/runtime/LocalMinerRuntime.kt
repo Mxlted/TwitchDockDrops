@@ -40,6 +40,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel as CoroutineChannel
 import kotlinx.coroutines.flow.Flow
@@ -76,6 +77,8 @@ class LocalMinerRuntime(
     private val higherPriorityCheckInterval: Duration = HigherPriorityChannelCheckInterval,
     private val channelStatusCheckInterval: Duration = ChannelStatusCheckInterval,
     private val clock: () -> Instant = Instant::now,
+    private val browserRenewal: (suspend (BrowserSessionContext) -> BrowserSessionContext)? = null,
+    private val browserRenewalMinimumDelay: Duration = Duration.ofSeconds(10),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val runtimeCommands = CoroutineChannel<RuntimeCommand>(capacity = 32)
@@ -92,6 +95,8 @@ class LocalMinerRuntime(
     private var miningJob: Job? = null
     private var authJob: Job? = null
     private var inventoryRefreshJob: Job? = null
+    private var browserRenewalJob: Job? = null
+    private var shuttingDown = false
     @Volatile private var sessionGeneration = 0L
     @Volatile private var authRunGeneration = 0L
     @Volatile private var miningRunGeneration = 0L
@@ -137,6 +142,7 @@ class LocalMinerRuntime(
             )
         }
         if (session != null) {
+            scheduleBrowserRenewal(session)
             if (settingsRepository.settings.value.miningRequested) {
                 appendActivity(RuntimePhase.LoadingInventory, "Resuming mining after restart")
                 enqueueCoalesced(RuntimeCommand.StartMining())
@@ -158,6 +164,7 @@ class LocalMinerRuntime(
                     }
                     is RuntimeCommand.SubmitBrowserSession -> handleSubmitBrowserSession(command)
                     is RuntimeCommand.AuthenticationSucceeded -> handleAuthenticationSucceeded(command)
+                    is RuntimeCommand.BrowserRenewed -> handleBrowserRenewed(command)
                     is RuntimeCommand.StartMining -> handleStartMining(command)
                     is RuntimeCommand.StopMining -> handleStopMining(command)
                     RuntimeCommand.RefreshInventory -> handleRefreshInventory()
@@ -186,6 +193,7 @@ class LocalMinerRuntime(
             return
         }
         browserAdmission.clear()
+        browserRenewalJob?.cancel(); browserRenewalJob = null
         val currentAuthorization = _snapshot.value.account
         if (
             !replace &&
@@ -248,6 +256,10 @@ class LocalMinerRuntime(
             throw error
         }
         command.browserLease?.let { browserAdmission.accepted(it, command.session.userId) }
+        installAuthenticatedSession(command.session)
+    }
+
+    private suspend fun installAuthenticatedSession(session: StoredTwitchSession) {
         authJob = null
         _snapshot.update {
             it.copy(
@@ -255,9 +267,9 @@ class LocalMinerRuntime(
                 account = LoginSession(
                     state = LoginState.LoggedIn,
                     statusText = "Logged in with Twitch",
-                    userId = command.session.userId,
-                    username = command.session.username,
-                    method = if (command.session.browserContext == null) "device" else "browser",
+                    userId = session.userId,
+                    username = session.username,
+                    method = if (session.browserContext == null) "device" else "browser",
                 ),
                 currentTask = "Twitch login complete",
                 progressSummary = "Loading drops inventory.",
@@ -273,6 +285,7 @@ class LocalMinerRuntime(
             )
         }
         appendActivity(RuntimePhase.Idle, "Twitch session saved securely")
+        scheduleBrowserRenewal(session)
         if (settingsRepository.settings.value.miningRequested) {
             appendActivity(RuntimePhase.LoadingInventory, "Resuming mining after Twitch login")
             enqueueCoalesced(RuntimeCommand.StartMining())
@@ -350,6 +363,14 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleStopMining(command: RuntimeCommand.StopMining) {
+        if (command.shutdown) {
+            shuttingDown = true
+            browserAdmission.clear()
+            authRunGeneration++; sessionGeneration++; inventoryRefreshRunGeneration++
+            browserRenewalJob?.cancelAndJoin(); browserRenewalJob = null
+            authJob?.cancelAndJoin(); authJob = null
+            inventoryRefreshJob?.cancelAndJoin(); inventoryRefreshJob = null
+        }
         if (command.persistIntent) {
             persistMiningIntent(requested = false)
         }
@@ -451,6 +472,7 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleResetSession(command: RuntimeCommand.ResetSession) {
+        browserRenewalJob?.cancel(); browserRenewalJob = null
         browserAdmission.clear()
         sessionGeneration += 1L
         authRunGeneration += 1L
@@ -483,6 +505,7 @@ class LocalMinerRuntime(
         if (command.expectedSessionGeneration != sessionGeneration) {
             return
         }
+        browserRenewalJob?.cancel(); browserRenewalJob = null
         browserAdmission.clear()
         sessionGeneration += 1L
         authRunGeneration += 1L
@@ -538,6 +561,7 @@ class LocalMinerRuntime(
     }
 
     private fun cancelForBrowserAuthentication() {
+        browserRenewalJob?.cancel(); browserRenewalJob = null
         authRunGeneration++
         sessionGeneration++
         miningRunGeneration++
@@ -791,14 +815,76 @@ class LocalMinerRuntime(
         enqueueCoalesced(RuntimeCommand.StopMining(persistIntent = true))
     }
 
-    suspend fun stopMiningAndJoin() {
+    suspend fun stopMiningAndJoin(shutdown: Boolean = false) {
         val completed = CompletableDeferred<Unit>()
-        runtimeCommands.send(RuntimeCommand.StopMining(awaitCompletion = true, completed = completed))
+        runtimeCommands.send(RuntimeCommand.StopMining(awaitCompletion = true, completed = completed, shutdown = shutdown))
         completed.await()
     }
 
     fun refreshInventory() {
         enqueueCoalesced(RuntimeCommand.RefreshInventory)
+    }
+
+    private fun scheduleBrowserRenewal(session: StoredTwitchSession) {
+        browserRenewalJob?.cancel(); browserRenewalJob = null
+        val renew = browserRenewal ?: return
+        val context = session.browserContext ?: return
+        val cookie = context.sdkCookie ?: return // Older contexts and desktop helper leases still work.
+        if (shuttingDown) return
+        val generation = sessionGeneration
+        browserRenewalJob = scope.launch(RuntimeOperationGuard { generation == sessionGeneration && !shuttingDown }) {
+            delay(Duration.between(now(), context.expiresAt.minusSeconds(300)).toMillis()
+                .coerceAtLeast(browserRenewalMinimumDelay.toMillis()))
+            var retry = 15_000L
+            while (isActive && generation == sessionGeneration && !shuttingDown) {
+                if (!cookie.expiresAt.isAfter(now())) {
+                    updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "Browser renewal seed expired. Reconnect Twitch; saved credentials were preserved.") }
+                    return@launch
+                }
+                try {
+                    val refreshed = renew(context)
+                    currentCoroutineContext().ensureActive()
+                    refreshed.requireFresh(now())
+                    require(refreshed.sdkCookie?.expiresAt?.isAfter(cookie.expiresAt) == true &&
+                        refreshed.expiresAt > context.expiresAt &&
+                        refreshed.headers["client-integrity"] != context.headers["client-integrity"] &&
+                        refreshed.accessToken == context.accessToken && refreshed.deviceId == context.deviceId)
+                    val validated = withTimeoutOrNull(180_000) { twitchApiClient.validateBrowserContext(refreshed) }
+                        ?: error("Browser renewal validation timed out.")
+                    currentCoroutineContext().ensureActive()
+                    require(validated.userId == session.userId)
+                    refreshed.requireFresh(now())
+                    val completed = CompletableDeferred<Unit>()
+                    runtimeCommands.send(RuntimeCommand.BrowserRenewed(generation, validated, completed))
+                    completed.await()
+                    return@launch
+                } catch (error: CancellationException) { throw error }
+                catch (error: Throwable) {
+                    if (generation != sessionGeneration || shuttingDown) return@launch
+                    if (error is TwitchApiException && error.type == TwitchApiErrorType.InvalidToken) {
+                        runtimeCommands.send(RuntimeCommand.ExpireSession(generation, "Twitch session expired. Reconnect Twitch."))
+                        return@launch
+                    }
+                    // No upstream bodies, seed values or browser diagnostics enter public state/logs.
+                    updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "Automatic Twitch session renewal is temporarily unavailable; retrying. Saved credentials were preserved.") }
+                    delay(minOf(retry, Duration.between(now(), cookie.expiresAt).toMillis().coerceAtLeast(1)))
+                    retry = (retry * 2).coerceAtMost(300_000)
+                }
+            }
+        }
+    }
+
+    private suspend fun handleBrowserRenewed(command: RuntimeCommand.BrowserRenewed) {
+        if (command.generation != sessionGeneration || shuttingDown) {
+            command.completed.complete(Unit)
+            return
+        }
+        // Storage failure leaves the current session and mining work intact; the issuer retries.
+        secureSessionStore.saveTwitchSession(command.session)
+        cancelForBrowserAuthentication()
+        browserAdmission.clear()
+        installAuthenticatedSession(command.session)
+        command.completed.complete(Unit)
     }
 
     private suspend fun refreshInventoryOnce(
@@ -3583,6 +3669,8 @@ private fun Duration.runtimeLabel(): String {
 }
 
 private sealed interface RuntimeCommand {
+    data class BrowserRenewed(val generation: Long, val session: StoredTwitchSession,
+        val completed: CompletableDeferred<Unit>) : RuntimeCommand
     data object StartBrowserAuthentication : RuntimeCommand
     data class StartManagedBrowserAuthentication(val completed: CompletableDeferred<String>) : RuntimeCommand
     data class SubmitBrowserSession(val ticket: String, val context: BrowserSessionContext,
@@ -3601,6 +3689,7 @@ private sealed interface RuntimeCommand {
         val persistIntent: Boolean = false,
         val awaitCompletion: Boolean = false,
         val completed: CompletableDeferred<Unit>? = null,
+        val shutdown: Boolean = false,
     ) : RuntimeCommand
     data object RefreshInventory : RuntimeCommand
     data class ResetSession(
@@ -3614,6 +3703,7 @@ private sealed interface RuntimeCommand {
 
 private val RuntimeCommand.label: String
     get() = when (this) {
+        is RuntimeCommand.BrowserRenewed -> "renew browser session"
         RuntimeCommand.StartBrowserAuthentication -> "start browser login"
         is RuntimeCommand.StartManagedBrowserAuthentication -> "start dashboard login"
         is RuntimeCommand.SubmitBrowserSession -> "verify browser login"
@@ -3629,6 +3719,7 @@ private val RuntimeCommand.label: String
 
 private val RuntimeCommand.coalescingKey: String?
     get() = when (this) {
+        is RuntimeCommand.BrowserRenewed -> null
         RuntimeCommand.StartBrowserAuthentication -> "start-browser-login"
         is RuntimeCommand.StartManagedBrowserAuthentication -> null
         is RuntimeCommand.SubmitBrowserSession -> null
@@ -3644,6 +3735,7 @@ private val RuntimeCommand.coalescingKey: String?
 
 private fun RuntimeCommand.completeExceptionally(error: Throwable) {
     when (this) {
+        is RuntimeCommand.BrowserRenewed -> completed.completeExceptionally(error)
         is RuntimeCommand.StartManagedBrowserAuthentication -> completed.completeExceptionally(error)
         is RuntimeCommand.SubmitBrowserSession -> completed.completeExceptionally(error)
         is RuntimeCommand.StopMining -> completed?.completeExceptionally(error)

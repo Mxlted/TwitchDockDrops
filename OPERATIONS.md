@@ -101,8 +101,9 @@ Proxmox LXC host, its kernel restrictions, and real-account login require verifi
 
 Connect Twitch offers two browser-based options. The old device-code endpoint can return HTTP 400;
 changing client IDs does not restore private Drops access. Existing valid Android sessions remain
-supported. Dashboard login and authenticated campaign loading were verified with a live account on
-Linux Docker on 2026-10-04. Unattended renewal and desktop-helper account acceptance remain unverified.
+supported. The previous dashboard login and authenticated campaign loading were verified with a live
+account on Linux Docker on 2026-10-04. The durable SDK renewal introduced on 2026-10-05 and
+desktop-helper account acceptance still need live verification.
 
 #### Dashboard login (no desktop download)
 
@@ -123,8 +124,9 @@ ports or network settings. It adds no published port and does not mount the mine
    The browser panel scrolls horizontally on narrow screens; Zoom and Scroll up/down are available.
 3. Select **Finish sign-in** only after Twitch confirms login. The miner verifies OAuth identity and
    both private Drops queries before accepting the session. Interactive login has an eight-minute limit.
-   Finish keeps the same authenticated browser open while collecting Drops proof; allow up to two
-   minutes for capture and up to two more for server validation. A failure displays a retry message.
+   Finish collects Drops proof and a scoped SDK cookie in the signed-in browser, then verifies independent
+   issuance in a fresh temporary browser. Allow up to two minutes for capture, two and a half minutes
+   for issuance, and additional time for account/Drops validation. A failure displays a retry message.
 4. After **Connected**, return to the dashboard. The browser service handles renewal; this page and
    your computer can be closed while Docker keeps running.
 
@@ -135,11 +137,16 @@ text, pointer clicks, and navigation keys through the same-origin JVM API. It do
 browser commands, downloads, drag gestures, popup-based social sign-in, passkeys, or OS dialogs. Use the desktop fallback if a
 Twitch challenge requires those interactions. Firefox is not supported.
 
-Cookies for renewal stay in temporary browser storage. **Reconnect after restarting the JVM or
-browser service**, cancellation, or a failed renewal. The encrypted miner session remains preserved,
-but it can only be used until its captured integrity proof expires without a fresh capture. Server-side
-renewal persistence across restarts is not implemented. Cancel stops the temporary browser; it does
-not delete the previously saved miner credential. **Reset Twitch Session** still signs the miner out.
+**After upgrading from the previous login method, reconnect once through dashboard login.** New
+logins save one scoped SDK renewal cookie alongside the context in the encrypted miner session.
+The interactive browser closes after capture; disposable headless browsers issue replacements. The
+runtime starts renewal five minutes before proof expiry and retries temporary failures with backoff.
+Closing the dashboard or restarting the JVM/browser service no longer inherently ends renewal.
+Keep the same data volume and key and keep both services available. Extended downtime beyond the
+SDK cookie's expiry (normally about a day in upstream's observations), revoked OAuth, or a Twitch
+challenge can still require sign-in. This is not a guarantee of indefinite login. Existing sessions
+without a seed remain readable but still require reconnecting to gain durable renewal. Cancel stops
+interactive login without deleting the saved credential; **Reset Twitch Session** signs the miner out.
 
 If startup fails, check `docker compose -f compose.yaml -f compose.browser.yaml logs browser` and
 confirm the browser service is running. Health remains a check of the JVM's local readiness, independent
@@ -188,11 +195,12 @@ Download the updated helper after rebuilding. If it still fails, run `--check-br
 explicit Edge/Chrome executable. Users with a trusted repository checkout can run
 `node src/main/resources/web/login-helper.mjs` directly without a separate download.
 
-The dashboard's former Finish path closed the authenticated browser and launched a headless one.
-It now retains the login browser and begins observing integrity issuance before sign-in. The desktop
-helper also uses regular browser captures, matching upstream's current native Chrome flow. These
-changes address the capture handoff; a successful Twitch login must still pass the server's account,
-Inventory, and Campaigns checks. Upstream documents the distinction in its
+The dashboard observes integrity issuance before sign-in and completes campaign capture in the login
+browser. It now carries the scoped SDK seed into independent server issuance, following upstream's
+`server_seed.py` and `server_renewal.py` at `1182d0172458`. Simply opening an empty headless browser or
+refreshing `/integrity` over plain HTTP does not establish accepted Drops access. The desktop helper
+continues to use regular browser captures and must stay running. Every accepted context still passes
+the server's account, Inventory, and Campaigns checks. Upstream documents the distinction in its
 [authentication investigation](https://github.com/rangermix/TwitchDropsMiner/issues/118).
 
 ## Everyday commands

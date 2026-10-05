@@ -3,6 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends chromium xvfb x
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY browser/worker.mjs ./browser/worker.mjs
+COPY browser/renewal.mjs ./browser/renewal.mjs
 COPY src/main/resources/web/login-helper.mjs ./src/main/resources/web/login-helper.mjs
 ENV HOME=/tmp DISPLAY=:99 DOCKDROPS_CONTAINER_BROWSER=true
 USER node

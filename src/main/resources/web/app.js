@@ -369,7 +369,7 @@ function renderLoginOptions() {
     <p>Use Chrome, Edge, or Chromium in a separate temporary profile. Requires Node.js 22.4 or newer and the helper running on your computer.</p>
     <div class="hero-actions"><button class="button button-quiet" data-action="connect-helper" type="button">Use desktop helper</button><button class="button button-quiet" data-action="close-login-options" type="button">Back</button></div>
   </div><aside class="hero-aside"><p class="hero-aside-title">Your session</p>
-    <ol class="step-list">${renderStep(1,'Sign in on Twitch','Complete password, email, or two-factor verification in the selected browser.')}${renderStep(2,'Verify Drops access','The miner checks your account and Drops access before saving the session.')}${renderStep(3,'Keep renewal available','Reconnect after restarting the server or the login browser service.')}</ol>
+    <ol class="step-list">${renderStep(1,'Sign in on Twitch','Complete password, email, or two-factor verification in the selected browser.')}${renderStep(2,'Verify Drops access','The miner checks your account and Drops access before saving the session.')}${renderStep(3,'Keep renewal available','Dashboard logins can renew after restarts. Desktop-helper logins need the helper reconnected after a server restart.')}</ol>
   </aside></section>`;
 }
 
@@ -858,7 +858,7 @@ function renderSettings(data) {
             ${renderFactRow("Pinned games", String(settings.selectedGamePriority.length))}
             ${renderFactRow("Excluded campaigns", String(settings.excludedCampaignIds.length))}
           </div>
-          ${authenticated && snapshot.account.method === "browser" ? `<p class="field-hint">Keep your selected browser service or desktop helper running for renewal. Reconnect after restarting this server or the login service.</p>` : ""}
+          ${authenticated && snapshot.account.method === "browser" ? `<p class="field-hint">New dashboard logins renew through the browser service, including after restarts. Desktop-helper sessions need the helper running and reconnected after a server restart.</p>` : ""}
           <div class="card-actions actions-spaced"><button class="button button-primary" data-action="connect" type="button">${linkIcon()} ${authenticated ? "Reconnect Twitch" : "Connect Twitch"}</button></div>
         </section>
       </div>

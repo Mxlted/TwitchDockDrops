@@ -9,29 +9,27 @@ test('input allows bounded typing and navigation, never arbitrary browser comman
   for (const value of [{kind:'text',text:'a\n'},{kind:'text',text:'x'.repeat(257)},{kind:'key',key:'F12',shift:false},{kind:'key',key:'Tab',shift:false,ctrl:true},{kind:'click',x:-1,y:0},{kind:'click',x:0,y:760},{kind:'text',text:'x',method:'Runtime.evaluate'}]) assert.throws(() => validateInput(value));
 });
 
-test('Finish and renewal use the same live capture and require server acceptance before ready', async () => {
-  const worker = new BrowserWorker();
+test('Finish proves independent seeded renewal and waits for JVM acceptance', async () => {
+  let closed = false;
+  const worker = new BrowserWorker({issue:async (exe,args,seed,signal,initial) => {
+    assert.equal(closed,true); assert.equal(initial,true);
+    assert.equal(seed.sdk_cookie.value,'sdk-fixture');
+    return {...seed,headers:{'client-integrity':'renewed-proof'}};
+  }});
   const stop = new AbortController();
-  const tokens = [];
-  const s = {stop,state:'capturing',sequence:0,context:null,capture:{
-    userAgent:'Chrome/test', observation:{bundle:() => true},
-    wait:async (signal,previous) => {
-      tokens.push(previous);
-      if (tokens.length === 3) { stop.abort(); signal.throwIfAborted(); }
-      return {expires_at:Date.now()/1000+600,headers:{'client-integrity':`proof-${tokens.length}`}};
-    },
-  }};
+  const s = {stop,state:'capturing',sequence:0,context:null,
+    cdp:{command:async method => {
+      assert.equal(method,'Network.getCookies');
+      return {cookies:[{name:'KP_UIDz-ssn',domain:'k.twitchcdn.net',path:'/',secure:true,httpOnly:true,value:'sdk-fixture',expires:Date.now()/1000+86400}]};
+    }},capture:{wait:async () => ({expires_at:Date.now()/1000+600,headers:{'client-integrity':'initial-proof'}})}};
   worker.session = s;
-  worker.closeBrowser = () => assert.fail('Finish must not close the authenticated browser');
+  worker.closeBrowser = async () => { closed = true; };
   const task = worker.maintainSession(s);
-  for (let sequence = 1; sequence <= 2; sequence++) {
-    while (s.sequence !== sequence) await sleep(5);
-    assert.equal(worker.status().state,'capturing');
-    assert.equal(worker.status().context.headers['client-integrity'],`proof-${sequence}`);
-    s.accepted = sequence;
-  }
-  await assert.rejects(task,{name:'AbortError'});
-  assert.deepEqual(tokens,[null,'proof-1','proof-2']);
+  while (s.sequence !== 1) await sleep(5);
+  assert.equal(worker.status().state,'capturing');
+  assert.equal(worker.status().context.headers['client-integrity'],'renewed-proof');
+  s.accepted = 1; await task;
+  assert.equal(worker.status().state,'ready');
 });
 
 test('worker requires internal header, refuses all browser Origins, bounds bodies and validates routes', async () => {

@@ -27,12 +27,14 @@ fun main() {
         .writeTimeout(Duration.ofSeconds(30))
         .build()
     val networkStatusProvider = JvmNetworkStatusProvider()
+    val browserRenewal = if (environment.dashboardLogin) BrowserRenewalClient() else null
     val runtime = LocalMinerRuntime(
         settingsRepository = settingsRepository,
         secureSessionStore = sessionStore,
         logRepository = logRepository,
         twitchApiClient = TwitchApiClient(httpClient),
         networkStatusProvider = networkStatusProvider,
+        browserRenewal = browserRenewal?.let { client -> { context -> client.renew(context) } },
     )
 
     runBlocking {
@@ -62,7 +64,8 @@ fun main() {
     Runtime.getRuntime().addShutdownHook(
         Thread {
             dashboardLogin?.close()
-            runBlocking { runtime.stopMiningAndJoin() }
+            runBlocking { runtime.stopMiningAndJoin(shutdown = true) }
+            browserRenewal?.close()
             webServer.close()
             networkStatusProvider.close()
             httpClient.connectionPool.evictAll()

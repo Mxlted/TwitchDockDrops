@@ -109,7 +109,7 @@ Existing Android sessions remain supported; the superseded Smart TV client switc
 ten-minute expiry and five-guess limit becomes a random 256-bit helper ticket. The initial ticket
 shares that expiry; accepted uploads extend it for 24 hours. New pairing, reset, and process restart
 revoke it. Ticket-authenticated status reports only connected/verifying/ready/failed state. Late
-verification cannot commit after reset or a replacement. The helper stops on capture, transfer, or
+verification cannot commit after reset or a replacement. The desktop helper stops on capture, transfer, or
 verification failure; reconnect to resume. Expired integrity proof blocks authenticated requests
 without deleting the saved credential. Browser-context persistence remains within the encrypted
 session envelope, and old sessions load without migration. Discarded CDP response bodies (`-32000` on
@@ -123,30 +123,49 @@ command that opens and claims an admission lease atomically; neither pairing cod
 the public state. A coroutine serializes companion startup, status/context transfers, and cleanup.
 The worker opens a headed Chromium browser under Xvfb. The UI relays JPEG frames and a bounded set of
 click, text, scroll, and key commands. Capture starts before the login page so proof issued during
-sign-in is retained. Finish sign-in navigates that same browser to Drops campaigns; it does not close
-the authenticated browser or change to a headless user agent. The JVM submits each numbered capture once
-through `LocalMinerRuntime`, acknowledges it only after validation succeeds, and permits renewal
-only for the original account. No scheduling of mining, campaigns, heartbeats, or claims moves to
-the companion. A missing context during renewal does not acknowledge the previous capture again.
+sign-in is retained. Finish sign-in collects successful Drops evidence in that same browser and reads
+only the secure, HttpOnly `KP_UIDz-ssn` cookie for exact host `k.twitchcdn.net`, path `/`. It then closes
+the interactive browser and independently issues a fresh proof in a temporary headless browser using
+that seed. The JVM validates OAuth identity, Inventory and Campaigns before accepting the result and
+atomically saving it. The dashboard transport acknowledges acceptance and closes its lease's worker;
+the runtime owns subsequent renewal. No mining, campaign, heartbeat or claim scheduling moves to the
+companion. The desktop helper's existing live-browser lease remains supported separately.
 The capture stream only queues relevant OAuth-context request, response and completion events,
 excluding preflights and unrelated assets/telemetry. Completed non-campaign evidence is discarded;
 at most 16 successful campaign requests and 16 issued proofs are retained. Initial capture has a
 two-minute deadline and reloads campaigns every 30 seconds if proof and successful campaign data
-have not yet matched. The headed browser stays alive for renewal, accepting only a different verified
-proof before another upload. The eight-minute interactive deadline does not close an accepted browser.
+have not yet matched. Independent SDK issuance has a 150-second deadline including browser startup.
 Fixed browser-failure codes distinguish login timeout and capture failure without forwarding diagnostics.
+
+`BrowserSessionContext` optionally includes `sdk_cookie: {value, expires_at}` inside the existing
+encrypted session only (36 KiB maximum context). Older contexts remain readable. This is not a
+general cookie jar or persistent browser profile. `LocalMinerRuntime` schedules renewal five minutes
+before proof expiry, or shortly after startup for an expired proof with a fresh seed. The private
+`BrowserRenewalClient` sends a bounded context to the companion's fixed loopback `/renew` route and
+polls only its own attempt ID. Each attempt creates and removes a temporary headless profile. A blank
+Twitch-origin document loads the fixed Twitch SDK and issues `/integrity`; acceptance requires a
+matching uncached POST response, a different token, advancing proof expiry and an advancing SDK-cookie
+expiry. OAuth/device headers stay bound to the saved context. No direct HTTP-only proof refresh is used.
+
+Renewal validates the same account and both Drops queries while the current miner continues. Only a
+successful, generation-checked atomic save replaces the context and restarts work with saved mining
+intent. Transient failures preserve the saved context and retry at 15 seconds, doubling to five minutes,
+until the saved SDK seed expires. Only authoritative token invalidity clears credentials. Reset,
+replacement login and shutdown cancel renewal and invalidate late results; Stop preserves renewal
+but prevents it from restarting mining. Shutdown joins renewal cleanup and preserves Start/Stop intent.
 
 Public browser endpoints explicitly serialize only a view ID, state/error, or JPEG image. The worker's
 private status can include captured context but is never proxied wholesale. Worker routes reject
 Origin-bearing requests, require an internal header and the exact loopback Host, disable CORS, and
 bound bodies. The JVM only calls a fixed loopback address without redirects. It never exposes arbitrary
 CDP commands or URL navigation. View IDs reject stale input and frames after replacement. Interactive
-login is limited to eight minutes; captures and verification are time-bounded. A renewal or transport
-failure stops the browser and requests re-login; there is no persistent renewal seed or automatic
-recovery across JVM/companion restarts. Profile cookies stay on the companion's tmpfs, never in the
-miner volume. New helper login, reset, cancellation, and shutdown stop the companion session; runtime
-lease revocation independently blocks late credential commits. Original encrypted credentials are
-preserved until validated replacement or explicit reset.
+login is limited to eight minutes; captures and verification are time-bounded. Browser profiles stay
+on tmpfs; only the scoped SDK cookie joins the encrypted context in the miner volume. JVM and companion
+restarts can recover while that seed remains fresh; extended downtime, revoked OAuth or a Twitch
+challenge can still require login. Older logins need one new dashboard sign-in to acquire the seed.
+New helper login, reset, cancellation, and shutdown stop the companion session; runtime generations
+and lease revocation independently block late credential commits. A renewal request cannot replace an
+interactive login. Original encrypted credentials survive failed replacement and transient renewal.
 
 Watch earning telemetry uses the direct Spade transport restored by the current TwitchDropsMiner
 implementations. Every heartbeat builds a new uncompressed Base64 JSON array containing one
@@ -314,7 +333,7 @@ mutation while that command is in flight, and the runtime remains the final idem
 The default UI uses `POST /api/auth/browser/start` with `{}` to create/replace pairing. The desktop
 helper uses POST `/api/auth/browser/claim` with `{code}`, `/submit` with `{ticket,context}`, and
 `/status` with `{ticket}`. These routes enforce the same Host, Origin, JSON, and 64 KiB request limits;
-context is independently capped at 24 KiB with exact fields and bounded ASCII header values. Claim
+context is independently capped at 36 KiB with exact fields and bounded ASCII header values. Claim
 returns a ticket only to the caller, submit returns 202 after local admission while verification runs
 asynchronously, and status returns only the lease state. `/login-helper.mjs` is a no-cache attachment.
 

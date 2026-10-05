@@ -6,6 +6,7 @@ import {join, resolve, dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {Cdp, BrowserCapture, browserPort, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
+import {issueSeed, readSdkCookie, validateSeed} from './renewal.mjs';
 
 const executable = process.env.DOCKDROPS_CHROMIUM || '/usr/bin/chromium';
 // This browser is confined by its own non-root, read-only container without the miner volume.
@@ -25,10 +26,25 @@ export function validateInput(body) {
 }
 
 export class BrowserWorker {
-  constructor(options = {}) { this.session = null; this.executable = options.executable || executable; this.browserArgs = options.browserArgs || browserArgs; }
+  constructor(options = {}) {
+    this.session = null; this.executable = options.executable || executable; this.browserArgs = options.browserArgs || browserArgs;
+    this.issue = options.issue || issueSeed;
+  }
   status() {
     const s = this.session;
-    return s ? {state:s.state, sequence:s.sequence, error:s.error || '', ...(s.context ? {context:s.context} : {})} : {state:'idle',sequence:0};
+    return s ? {id:s.id, state:s.state, sequence:s.sequence, error:s.error || '', ...(s.context ? {context:s.context} : {})} : {state:'idle',sequence:0};
+  }
+  async renew(id, context) {
+    validateSeed(context);
+    if (this.session && !this.session.renewal && !['ready','failed'].includes(this.session.state)) throw Error('Browser busy');
+    await this.cancel();
+    const s = {id, renewal:true, state:'capturing', stop:new AbortController(), sequence:0, context:null};
+    this.session = s;
+    s.task = this.issue(this.executable,this.browserArgs,context,s.stop.signal).then(result => {
+      s.stop.signal.throwIfAborted(); s.context = result; s.sequence = 1;
+    }).catch(() => {
+      if (!s.stop.signal.aborted) { s.error = 'renewal_failed'; s.state = 'failed'; }
+    });
   }
   async start(id) {
     await this.cancel();
@@ -88,30 +104,19 @@ export class BrowserWorker {
     await this.maintainSession(s);
   }
   async maintainSession(s) {
-    let previousToken = null;
-    while (!s.stop.signal.aborted) {
-      // Preserve the actual logged-in browser, user agent, SDK state and observed issuance.
-      // Switching to headless here can make a successful Twitch login fail Drops integrity.
-      s.context = await s.capture.wait(s.stop.signal,previousToken);
-      s.sequence++;
-      s.state = 'capturing';
-      const deadline = Date.now() + 120000;
-      while (s.accepted !== s.sequence) {
-        if (Date.now() > deadline) throw Error('Server verification timed out');
-        await sleep(500,undefined,{signal:s.stop.signal});
-      }
-      s.state = 'ready';
-      previousToken = s.context.headers['client-integrity'];
-      const renewAt = s.context.expires_at * 1000 - 90000;
-      s.context = null;
-      // The live page can renew early. Otherwise reload near expiry; do not resubmit the
-      // same proof every few seconds and repeatedly interrupt the mining lifecycle.
-      while (Date.now() < renewAt && !s.capture.observation.bundle(s.capture.userAgent,previousToken)) {
-        if (s.capture.failure) throw s.capture.failure;
-        await sleep(Math.min(15000,renewAt-Date.now()),undefined,{signal:s.stop.signal});
-      }
-      s.state = 'capturing';
+    const captured = await s.capture.wait(s.stop.signal);
+    const seed = {...captured,sdk_cookie:await readSdkCookie(s.cdp)};
+    await this.closeBrowser(s);
+    // Prove independent issuance before accepting login; persisting a browser's first proof
+    // alone does not establish that its session can be renewed on the server.
+    s.context = await this.issue(this.executable,this.browserArgs,seed,s.stop.signal,true);
+    s.sequence++;
+    const deadline = Date.now() + 180000;
+    while (s.accepted !== s.sequence) {
+      if (Date.now() > deadline) throw Error('Server verification timed out');
+      await sleep(500,undefined,{signal:s.stop.signal});
     }
+    s.state = 'ready';
   }
   async closeBrowser(s) {
     if (s.cdp) { await s.cdp.command('Browser.close').catch(() => {}); s.cdp.close(); s.cdp = null; }
@@ -121,6 +126,7 @@ export class BrowserWorker {
     const s = this.session;
     if (!s || (id && s.id !== id)) return;
     s.stop.abort(); await s.task;
+    s.context = null;
     if (this.session === s) this.session = null;
   }
   sessionFor(id) {
@@ -176,14 +182,15 @@ export function createWorkerServer(worker = new BrowserWorker(), port = 8091) {
     if (busy) { req.resume(); return send(429,{error:'Browser busy.'}); }
     busy = true;
     try {
-      if (req.method !== 'POST' || !['/start','/cancel','/finish','/input','/accepted'].includes(req.url)) return send(405,{error:'Method not allowed.'});
+      if (req.method !== 'POST' || !['/start','/renew','/cancel','/finish','/input','/accepted'].includes(req.url)) return send(405,{error:'Method not allowed.'});
       if (req.headers['content-type']?.split(';')[0] !== 'application/json') return send(415,{error:'JSON required.'});
       let size = 0; const chunks = [];
-      for await (const chunk of req) { size += chunk.length; if (size > 4096) throw Error('Too large'); chunks.push(chunk); }
+      for await (const chunk of req) { size += chunk.length; if (size > (req.url === '/renew' ? 40*1024 : 4096)) throw Error('Too large'); chunks.push(chunk); }
       const body = JSON.parse(Buffer.concat(chunks).toString());
       if (typeof body.id !== 'string' || !/^[0-9a-f-]{36}$/.test(body.id)) throw Error('Invalid id');
-      if (req.url !== '/input' && Object.keys(body).some(k => !['id',...(req.url === '/accepted' ? ['sequence'] : [])].includes(k))) throw Error('Invalid fields');
+      if (req.url !== '/input' && Object.keys(body).some(k => !['id',...(req.url === '/accepted' ? ['sequence'] : []),...(req.url === '/renew' ? ['context'] : [])].includes(k))) throw Error('Invalid fields');
       if (req.url === '/start') await worker.start(body.id);
+      if (req.url === '/renew') await worker.renew(body.id,body.context);
       if (req.url === '/cancel') await worker.cancel(body.id);
       if (req.url === '/finish') { const s = worker.sessionFor(body.id); if (s.state !== 'interactive') throw Error('Not interactive'); s.finished = true; }
       if (req.url === '/input') await worker.input(body);

@@ -55,6 +55,18 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
 - Browser context is strictly bounded and encrypted with the session; state, events, logs, and errors
   exclude it. The server checks OAuth identity and both private Drops queries before accepting it.
   Expired proof blocks authenticated requests while preserving encrypted credentials.
+- Dashboard login also stores one scoped SDK cookie in that encrypted context: `KP_UIDz-ssn`, exact
+  host `k.twitchcdn.net`, secure/HttpOnly, path `/`. Only its bounded value and expiry are accepted;
+  callers cannot supply a host, URL, cookie name or cookie jar. It is credential material, never public
+  state. This replaces dependence on a continuously running signed-in browser and permits renewal
+  after JVM/companion restart while the seed is fresh. The browser still receives no miner volume,
+  encryption key or environment secrets; the JVM transfers only the renewal context over loopback.
+- Each renewal uses an owned temporary profile, a fixed empty Twitch-origin document and the fixed
+  Twitch SDK URL. OAuth headers go only to Twitch's fixed integrity endpoint. Uncached network proof,
+  token/expiry rotation, same-account OAuth validation and both Drops queries are required before
+  atomic replacement. Transient failures retain the old encrypted seed; reset/replacement/shutdown
+  invalidate late work. The private `/renew` route has a 40 KiB body limit and the existing internal
+  Host/header/Origin boundary. Attempt IDs bind status and cleanup to the owned browser.
 - Pairing uses a one-use 72-bit code, ten-minute deadline, and five-guess limit. The resulting 256-bit
   ticket stays only in helper/server memory and binds to the first accepted account. Successful renewal
   extends its lease by 24 hours; new pairing, reset, and server restart revoke it. A helper exit stops
@@ -137,10 +149,12 @@ does not fit the deployment. Do not grant privileged mode or mount the miner vol
 The temporary profile is on a 512 MiB tmpfs and is removed on normal cancellation/exit; container removal
 also discards it. Memory, shared memory, and process counts are bounded. Downloads are denied, arbitrary
 CDP/navigation commands are not relayed, and credentials are not included in browser process arguments.
-After Finish sign-in, the same headed browser remains in the isolated companion for capture and
-renewal. Its viewer/input routes are disabled outside interactive login. The network observer retains
-only bounded issuance and successful campaign evidence, and forwards only the existing allowlisted
-context. Error codes are mapped to fixed public messages; raw browser diagnostics are never relayed.
+After Finish sign-in, the same headed browser completes capture before its scoped seed is tested in
+a separate temporary headless browser. Both profiles are deleted. Subsequent renewals create a new
+profile each time; they never restore the full interactive cookie jar. Viewer/input routes are disabled
+outside interactive login. The network observer retains only bounded proof/campaign evidence and
+forwards the allowlisted context plus the scoped cookie. Error codes map to fixed public messages;
+raw browser diagnostics are never relayed.
 The public viewer returns only fixed status fields and bounded JPEG frames with `no-store`; its
 mutation routes retain normal Host/Origin, JSON, and size checks. Passwords entered into this viewer
 traverse the dashboard connection, so trusted-LAN HTTP has the same local-network exposure as other

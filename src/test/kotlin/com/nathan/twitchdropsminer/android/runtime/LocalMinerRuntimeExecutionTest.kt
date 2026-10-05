@@ -48,6 +48,121 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    private fun renewableContext(renewed: Boolean = false): BrowserSessionContext {
+        val time = Instant.now().epochSecond
+        return BrowserSessionContext.parse(kotlinx.serialization.json.Json.parseToJsonElement("""{
+          "version":1,"captured_at":${time-3600},"expires_at":${if (renewed) time+3600 else time-1},
+          "user_agent":"Chrome/Test","headers":{"client-id":"kimne78kx3ncx6brgo4mv6wki5h1ko",
+          "authorization":"OAuth test-token","client-integrity":"${if (renewed) "new-proof" else "old-proof"}","x-device-id":"device"},
+          "sdk_cookie":{"value":"${if (renewed) "rotated-sdk" else "initial-sdk"}","expires_at":${if (renewed) time+86400 else time+3600}}}
+        """) as kotlinx.serialization.json.JsonObject)
+    }
+
+    @Test fun `restart renews expired proof from encrypted seed and persists the validated rotation`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession().copy(browserContext = renewableContext()))
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(browserContext = context)
+        }
+        val runtime = runtime(store, api, browserRenewal = { context ->
+            assertEquals("initial-sdk", context.sdkCookie?.value)
+            renewableContext(true)
+        })
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { while (store.twitchSession()?.browserContext?.sdkCookie?.value != "rotated-sdk") delay(10) }
+            assertEquals("new-proof", sessionStore().twitchSession()?.browserContext?.headers?.get("client-integrity"))
+            assertFalse(runtime.snapshot.value.miningActive)
+            assertFalse(java.nio.file.Files.readString(directory.resolve("session.enc")).contains("rotated-sdk"))
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `transient renewal failure retains seed and automatically retries without re-login`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession().copy(browserContext = renewableContext()))
+        val attempts = AtomicInteger()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(browserContext = context)
+        }
+        val runtime = runtime(store, api, browserRenewal = {
+            if (attempts.incrementAndGet() == 1) error("private-sdk-secret")
+            renewableContext(true)
+        })
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { runtime.snapshot.first { it.error?.contains("renewal is temporarily") == true } }
+            assertEquals("initial-sdk", store.twitchSession()?.browserContext?.sdkCookie?.value)
+            assertFalse(runtime.snapshot.value.error.orEmpty().contains("private-sdk"))
+            withTimeout(20000) { while (store.twitchSession()?.browserContext?.sdkCookie?.value != "rotated-sdk") delay(20) }
+            assertEquals(2, attempts.get())
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `renewal account mismatch cannot replace the saved account or seed`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession().copy(browserContext = renewableContext()))
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(userId="other-account",browserContext=context)
+        }
+        val runtime = runtime(store, api, browserRenewal = { renewableContext(true) })
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { runtime.snapshot.first { it.error?.contains("renewal is temporarily") == true } }
+            assertEquals("12345",store.twitchSession()?.userId)
+            assertEquals("initial-sdk",store.twitchSession()?.browserContext?.sdkCookie?.value)
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `Stop during renewal preserves automatic renewal without resuming mining`() = runBlocking {
+        val store = sessionStore()
+        store.saveTwitchSession(storedSession().copy(browserContext=renewableContext()))
+        val settings = SettingsRepository(directory)
+        settings.update { it.copy(miningRequested=true) }
+        val started = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(browserContext=context)
+        }
+        val runtime = runtime(store,api,settings,browserRenewal={
+            started.complete(Unit); release.await(); renewableContext(true)
+        })
+        try {
+            runtime.bootstrap(); withTimeout(3000) { started.await() }
+            runtime.stopMining(); runtime.stopMiningAndJoin()
+            assertFalse(settings.settings.value.miningRequested)
+            release.complete(Unit)
+            withTimeout(3000) { while (store.twitchSession()?.browserContext?.sdkCookie?.value != "rotated-sdk") delay(10) }
+            delay(50)
+            assertFalse(runtime.snapshot.value.miningActive)
+            assertFalse(settings.settings.value.miningRequested)
+        } finally { release.complete(Unit); runtime.stopMiningAndJoin(shutdown=true) }
+    }
+
+    @Test fun `reset and replacement reject cancellation-insensitive renewal results`() = runBlocking {
+        for (replace in listOf(false,true)) {
+            val store = sessionStore()
+            store.saveTwitchSession(storedSession().copy(browserContext = renewableContext()))
+            val started = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>(); val returned = CompletableDeferred<Unit>()
+            val runtime = runtime(store, AuthenticationTwitchApi(), browserRenewal = {
+                started.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+                returned.complete(Unit)
+                renewableContext(true)
+            })
+            try {
+                runtime.bootstrap(); withTimeout(3000) { started.await() }
+                if (replace) runtime.startManagedBrowserAuthentication() else runtime.resetSessionAndJoin()
+                release.complete(Unit); withTimeout(3000) { returned.await() }
+                delay(50)
+                if (replace) {
+                    assertEquals("initial-sdk",store.twitchSession()?.browserContext?.sdkCookie?.value)
+                    assertEquals(LoginState.LoginRequired,runtime.snapshot.value.account.state)
+                } else {
+                    assertNull(store.twitchSession()); assertEquals(LoginState.LoggedOut,runtime.snapshot.value.account.state)
+                }
+            } finally { release.complete(Unit); runtime.stopMiningAndJoin(shutdown = true) }
+        }
+    }
+
     @Test fun `late username lookup cannot restore identity after session reset`() = runBlocking {
         val store = sessionStore()
         store.saveTwitchSession(storedSession())
@@ -856,6 +971,7 @@ class LocalMinerRuntimeExecutionTest {
         higherPriorityCheckInterval: Duration = Duration.ofMinutes(2),
         channelStatusCheckInterval: Duration = Duration.ofMinutes(3),
         clock: () -> Instant = Instant::now,
+        browserRenewal: (suspend (BrowserSessionContext) -> BrowserSessionContext)? = null,
     ) = LocalMinerRuntime(
         settingsRepository = settings,
         secureSessionStore = store,
@@ -866,6 +982,8 @@ class LocalMinerRuntimeExecutionTest {
         higherPriorityCheckInterval = higherPriorityCheckInterval,
         channelStatusCheckInterval = channelStatusCheckInterval,
         clock = clock,
+        browserRenewal = browserRenewal,
+        browserRenewalMinimumDelay = Duration.ofMillis(10),
     )
 
     private fun sessionStore(): SecureSessionStore {

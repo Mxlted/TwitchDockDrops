@@ -15,7 +15,8 @@ changes.
 - [x] Desktop browser login, complete integrity context, protected pairing, and helper-driven renewal
 - [x] Optional isolated Docker browser service and dashboard login chooser with desktop fallback
 - [x] Recoverable Chromium response-body capture failures no longer abort the desktop helper
-- [x] Dashboard Finish retains the authenticated browser and observes proof before login
+- [x] Dashboard Finish observes proof before login and captures the seed in the authenticated browser
+- [x] Encrypted scoped SDK seed, independent browser issuance, restart recovery and bounded renewal retries
 - [x] Linux container capture/navigation and renewal verified with offline synthetic Chromium traffic
 - [x] Live Twitch dashboard login and authenticated campaign loading on Linux Docker
 - [ ] Live Twitch verification of unattended browser renewal, earning, and claims
@@ -82,6 +83,44 @@ changes.
 - [x] Gradle tests pass
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
+
+## Durable Docker browser renewal - 2026-10-05
+
+- Investigated sessions lasting around one to two hours. The old companion depended on a live page
+  yielding a new proof within a two-minute capture window starting only 90 seconds before expiry;
+  any capture, verification or transport failure ended renewal. This is a code-level failure mode,
+  not a confirmed diagnosis of the user's particular sessions (no private runtime logs were read).
+- Rechecked rangermix/TwitchDropsMiner main at `1182d0172458db4e23a236e9d9c078fd3b1fd9c7` and its
+  `server_seed.py`, `server_renewal.py`, authentication guide and issue #118. Adapted its scoped
+  `KP_UIDz-ssn` seed and independent SDK issuance; no client-ID switch or direct HTTP-only token
+  refresh. CDP cookie/interception API use was checked against official documentation via Context7.
+- Finish captures in the signed-in browser, reads only the scoped secure/HttpOnly SDK cookie, and
+  proves fresh issuance in a separate temporary browser before JVM account/Inventory/Campaigns
+  acceptance. The seed stays in the existing AES-GCM session envelope. No persistent Chromium
+  profile, browser volume, additional published port, or public state field was added.
+- Runtime-owned renewal starts five minutes before expiry, restores from encrypted state at startup,
+  validates the same account without interrupting current mining, and atomically installs successful
+  replacements. Temporary failures retry with 15-second to five-minute backoff while the seed is
+  valid. Reset/replacement/shutdown invalidate late results; Stop retains renewal without restarting
+  mining. A new JVM can replace an orphaned renewal but cannot replace an interactive login.
+- Root JDK 21 `test installDist`: **183 tests passed**, no failures/errors/skips. Node suite:
+  **38 tests passed**; changed-script syntax checks passed. Coverage includes expired-proof restart,
+  encrypted cookie rotation, transient retry, account mismatch, Stop, reset/replacement races,
+  scoped-cookie validation, uncached issuance correlation, private transport and stale worker IDs.
+- Both Compose configurations validate and both Linux/amd64 images build; the app image runs root
+  `clean test installDist`. The offline Linux/Xvfb Chromium test passes headed capture and two SDK
+  rotations across fresh headless profiles with Docker networking disabled and synthetic credentials.
+- Disposable containers on loopback 18085 pass health and a settings mutation/readback. The browser
+  starts through the dashboard; Finish without credentials enters verification, and stopping the test
+  companion produces a safe failure message. Non-root/read-only/drop-all/no-new-privileges protections
+  remain intact. Desktop/mobile sign-in guidance was inspected in both themes with keyboard navigation.
+- **Not yet verified:** live Twitch acceptance of this new seed bootstrap, unattended multi-hour/day
+  renewal, earning/claims or the user's Debian/Proxmox host. Offline fixtures do not prove Twitch will
+  accept the SDK flow. Twitch challenges, OAuth revocation or downtime past seed expiry can still
+  require login. Old dashboard sessions require one fresh sign-in to obtain the seed. The lightweight
+  desktop helper retains its existing keep-running/reconnect requirements.
+- Android reference remains unchanged at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`; pre-existing
+  untracked `CLAUDE.md` is preserved. This change does not publish or refresh `deployment`.
 
 ## Signed-in account overview - 2026-10-04
 
@@ -670,11 +709,13 @@ root build.
 
 ## Known external risks
 
-- Fresh Android-client device authorization can be rejected by Twitch. Dashboard browser login now
-  has live account/campaign evidence on Linux Docker; desktop-helper account acceptance, unattended
+- Fresh Android-client device authorization can be rejected by Twitch. The previous dashboard browser
+  capture has live account/campaign evidence on Linux Docker; desktop-helper account acceptance, unattended
   integrity renewal, earning, and claims remain unverified.
-  Renewal requires either the optional browser service or the desktop helper to stay running; reconnect
-  after server/browser restart or a failed renewal. Durable browser renewal cookies/seeds, Firefox,
+  New dashboard logins store an encrypted SDK seed for server renewal across JVM/browser restarts;
+  temporary failures retry while that seed remains valid. The new path still needs live acceptance
+  and endurance testing. Older dashboard logins need one reconnection after upgrade. Desktop-helper
+  logins still require the helper running and reconnecting after server restart. Firefox,
   popup-based social sign-in in the dashboard viewer, and upstream-helper protocol compatibility are
   not implemented. Native browser checks were on Windows. Different browser/miner network
   routes or Twitch browser challenges can reject capture or server-side verification.
