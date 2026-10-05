@@ -45,11 +45,7 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
                         val state = response["state"]?.jsonPrimitive?.content
                         when (state) {
                             "interactive", "starting", "capturing", "ready" -> publish(id, state)
-                            "failed" -> throw LoginFailure(when (response["error"]?.jsonPrimitive?.content) {
-                                "login_timeout" -> "Twitch sign-in timed out. Start again and finish Twitch verification within eight minutes."
-                                "capture_failed" -> "Twitch login did not yield verified Drops access. Complete Twitch verification before Finish sign-in, or try the desktop helper."
-                                else -> "The login browser stopped. Check the browser container and retry sign-in."
-                            })
+                            "failed" -> throw LoginFailure(browserFailureMessage(response["error"]?.jsonPrimitive?.content))
                             else -> error("Unexpected browser state")
                         }
                         val sequence = response["sequence"]?.jsonPrimitive?.intOrNull ?: 0
@@ -82,6 +78,17 @@ class DashboardLogin(private val runtime: LocalMinerRuntime, private val port: I
     }
 
     private class LoginFailure(message: String) : RuntimeException(message)
+
+    companion object {
+        internal fun browserFailureMessage(code: String?): String = when (code) {
+            "login_timeout" -> "Twitch sign-in timed out. Start again and finish Twitch verification within eight minutes."
+            "capture_failed" -> "The signed-in browser did not return verified Drops access. Complete Twitch verification before Finish sign-in, or try the desktop helper."
+            "seed_failed" -> "Drops access was captured, but the browser could not prepare a renewal seed. Retry sign-in or use the desktop helper. Saved credentials were preserved."
+            "issuance_failed" -> "Drops access was captured, but the separate renewal browser could not obtain fresh Twitch proof. Retry sign-in or use the desktop helper. Saved credentials were preserved."
+            "acceptance_timeout" -> "Browser proof was captured, but server verification did not finish in time. Check the dashboard connection status before restarting sign-in."
+            else -> "The login browser stopped. Check the browser container and retry sign-in."
+        }
+    }
 
     @Synchronized private fun publish(id: String, state: String, error: String = "") {
         if (status.id == id) status = View(id, state, error)

@@ -63,7 +63,7 @@ test('a restarted JVM can replace an orphaned renewal but never an interactive l
   assert.equal(worker.status().id,'interactive');
 });
 
-function protocol({cached=false,mismatch=false,replay=false,cookieStale=false}={}) {
+function protocol({cached=false,mismatch=false,replay=false,cookieStale=false,noPreviousCookie=false,noReturnedCookie=false}={}) {
   const events = [], waiters = [];
   const emit = value => waiters.length ? waiters.shift()(value) : events.push(value);
   const data = {token:replay ? 'old-proof' : 'new-proof',expiration:(now+3600)*1000};
@@ -71,6 +71,7 @@ function protocol({cached=false,mismatch=false,replay=false,cookieStale=false}={
     event:() => events.length ? Promise.resolve(events.shift()) : new Promise(resolve => waiters.push(resolve)),
     close:() => emit(null), body:async () => ({...data,token:mismatch ? 'different-proof' : data.token}),
     command:async (method,args) => {
+      if (noPreviousCookie) assert.notEqual(method,'Network.setCookies');
       if (method === 'Page.navigate') emit({method:'Page.loadEventFired',params:{}});
       if (method === 'Runtime.evaluate') return {result:args.expression === 'globalThis' ? {objectId:'global'} : {value:'Chrome/test'}};
       if (method === 'Runtime.callFunctionOn') {
@@ -80,7 +81,7 @@ function protocol({cached=false,mismatch=false,replay=false,cookieStale=false}={
         emit({method:'Network.loadingFinished',params:{requestId:'i'}});
         return {result:{value:{status:200,data}}};
       }
-      if (method === 'Network.getCookies') return {cookies:[{name:'KP_UIDz-ssn',domain:'k.twitchcdn.net',path:'/',secure:true,httpOnly:true,
+      if (method === 'Network.getCookies') return {cookies:noReturnedCookie ? [] : [{name:'KP_UIDz-ssn',domain:'k.twitchcdn.net',path:'/',secure:true,httpOnly:true,
         value:'rotated-sdk',expires:cookieStale ? now+3600 : now+86400}]};
       return {};
     },
@@ -94,5 +95,16 @@ test('SDK acceptance requires fresh uncached correlated issuance and rotated coo
   assert.equal(result.sdk_cookie.value,'rotated-sdk');
   for (const option of [{cached:true},{mismatch:true},{replay:true},{cookieStale:true}]) {
     await assert.rejects(acquireSeed(protocol(option),seed(),AbortSignal.timeout(1000)));
+  }
+});
+
+test('only initial bootstrap accepts missing cookie and must obtain a verified fresh seed', async () => {
+  const captured = seed(); delete captured.sdk_cookie;
+  assert.throws(() => validateSeed(captured));
+  await assert.rejects(acquireSeed(protocol(),captured,AbortSignal.timeout(1000)));
+  const result = await acquireSeed(protocol({noPreviousCookie:true}),captured,AbortSignal.timeout(1000),true);
+  assert.equal(validateSeed(result).sdk_cookie.value,'rotated-sdk');
+  for (const option of [{noReturnedCookie:true},{cached:true},{mismatch:true},{replay:true}]) {
+    await assert.rejects(acquireSeed(protocol({...option,noPreviousCookie:true}),captured,AbortSignal.timeout(1000),true));
   }
 });

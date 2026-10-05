@@ -12,7 +12,7 @@ const INTEGRITY = 'https://gql.twitch.tv/integrity';
 const COOKIE_URL = 'https://k.twitchcdn.net/';
 const HEADERS = new Set(['authorization','client-id','client-integrity','client-version','client-session-id','x-device-id','device-id','accept-language']);
 
-export function validateSeed(seed, now = Date.now()/1000) {
+export function validateSeed(seed, now = Date.now()/1000, allowMissingCookie = false) {
   const cookie = seed?.sdk_cookie;
   if (!seed || seed.version !== 1 || Object.keys(seed).some(k => !['version','captured_at','expires_at','user_agent','headers','sdk_cookie'].includes(k)) ||
       JSON.stringify(seed).length > 36*1024 || typeof seed.user_agent !== 'string' || !/^[\x20-\x7e]{1,1024}$/.test(seed.user_agent) ||
@@ -22,20 +22,22 @@ export function validateSeed(seed, now = Date.now()/1000) {
       Object.values(seed.headers).some(v => typeof v !== 'string' || !/^[\x20-\x7e]{1,16384}$/.test(v)) ||
       seed.headers['client-id'] !== 'kimne78kx3ncx6brgo4mv6wki5h1ko' || !/^OAuth [A-Za-z0-9_-]{1,512}$/.test(seed.headers.authorization || '') ||
       !seed.headers['client-integrity'] || !(seed.headers['x-device-id'] || seed.headers['device-id']) ||
-      !cookie || Object.keys(cookie).sort().join(',') !== 'expires_at,value' ||
+      (!(allowMissingCookie && cookie === undefined) && (!cookie || Object.keys(cookie).sort().join(',') !== 'expires_at,value' ||
       typeof cookie.value !== 'string' || !/^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]{1,8192}$/.test(cookie.value) ||
-      !Number.isInteger(cookie.expires_at) || cookie.expires_at <= now) throw Error('Invalid renewal seed');
+      !Number.isInteger(cookie.expires_at) || cookie.expires_at <= now))) throw Error('Invalid renewal seed');
   return seed;
 }
+
+export class SdkCookieUnavailable extends Error {}
 
 export async function readSdkCookie(cdp, now = Date.now()/1000) {
   const result = await cdp.command('Network.getCookies',{urls:[COOKIE_URL]});
   const cookies = result.cookies?.filter(c => c.name === 'KP_UIDz-ssn' && c.domain === 'k.twitchcdn.net' &&
     c.path === '/' && c.secure === true && c.httpOnly === true);
-  if (cookies?.length !== 1) throw Error('SDK cookie unavailable');
+  if (cookies?.length !== 1) throw new SdkCookieUnavailable('SDK cookie unavailable');
   const c = cookies[0];
   if (typeof c.value !== 'string' || !/^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]{1,8192}$/.test(c.value) ||
-      !Number.isFinite(c.expires) || c.expires <= now) throw Error('SDK cookie unavailable');
+      !Number.isFinite(c.expires) || c.expires <= now) throw new SdkCookieUnavailable('SDK cookie unavailable');
   return {value:c.value, expires_at:Math.floor(c.expires)};
 }
 
@@ -62,7 +64,8 @@ const ISSUE = `async function(headers, sdk) {
 }`;
 
 export async function acquireSeed(cdp, seed, signal, initial = false) {
-  validateSeed(seed);
+  // Only initial bootstrap may begin without a cookie; every returned seed requires one.
+  validateSeed(seed, Date.now()/1000, initial);
   let loaded = false, proof = null, failure = null;
   const posts = new Set(), responses = new Map(), cached = new Set();
   const collect = (async () => {
@@ -99,7 +102,7 @@ export async function acquireSeed(cdp, seed, signal, initial = false) {
     await cdp.command('Network.enable');
     await cdp.command('Network.setCacheDisabled',{cacheDisabled:true});
     await cdp.command('Network.setBypassServiceWorker',{bypass:true});
-    await cdp.command('Network.setCookies',{cookies:[{name:'KP_UIDz-ssn',value:seed.sdk_cookie.value,
+    if (seed.sdk_cookie) await cdp.command('Network.setCookies',{cookies:[{name:'KP_UIDz-ssn',value:seed.sdk_cookie.value,
       expires:seed.sdk_cookie.expires_at,domain:'k.twitchcdn.net',path:'/',secure:true,httpOnly:true,sameSite:'None'}]});
     await cdp.command('Page.enable');
     await cdp.command('Fetch.enable',{patterns:[{urlPattern:PAGE,resourceType:'Document',requestStage:'Request'}]});
@@ -123,6 +126,34 @@ export async function acquireSeed(cdp, seed, signal, initial = false) {
   } finally {
     // This protocol belongs to this one acquisition, including the event collector.
     cdp.close(); await collect;
+  }
+}
+
+// A valid signed-in profile need not contain the SDK renewal cookie. Bootstrap in an empty
+// context of the same headed browser, never copy or clear the interactive cookie jar.
+export async function bootstrapSeed(port, captured, parentSignal, acquire = acquireSeed) {
+  validateSeed(captured, Date.now()/1000, true);
+  const signal = AbortSignal.any([parentSignal,AbortSignal.timeout(150000)]);
+  const response = await fetch(`http://127.0.0.1:${port}/json/version`,{redirect:'error',signal});
+  if (!response.ok) throw Error('Browser unavailable');
+  const version = await response.json();
+  const controller = await Cdp.open(version.webSocketDebuggerUrl,port,signal);
+  let contextId, cdp;
+  try {
+    const context = await controller.command('Target.createBrowserContext',{disposeOnDetach:true});
+    contextId = context.browserContextId;
+    if (typeof contextId !== 'string' || !/^[a-zA-Z0-9-]+$/.test(contextId)) throw Error('Invalid browser context');
+    const {targetId} = await controller.command('Target.createTarget',{url:'about:blank',browserContextId:contextId});
+    if (typeof targetId !== 'string' || !/^[a-zA-Z0-9-]+$/.test(targetId)) throw Error('Invalid browser target');
+    cdp = await Cdp.open(`ws://127.0.0.1:${port}/devtools/page/${targetId}`,port,signal,
+      ['Fetch.requestPaused','Page.loadEventFired','Network.requestServedFromCache']);
+    const seed = await acquire(cdp,captured,signal,true);
+    signal.throwIfAborted();
+    return validateSeed(seed);
+  } finally {
+    cdp?.close();
+    if (contextId) await controller.command('Target.disposeBrowserContext',{browserContextId:contextId}).catch(() => {});
+    controller.close(); // disposeOnDetach also covers cancellation/disconnection.
   }
 }
 

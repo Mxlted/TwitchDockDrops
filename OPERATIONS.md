@@ -124,9 +124,11 @@ ports or network settings. It adds no published port and does not mount the mine
    The browser panel scrolls horizontally on narrow screens; Zoom and Scroll up/down are available.
 3. Select **Finish sign-in** only after Twitch confirms login. The miner verifies OAuth identity and
    both private Drops queries before accepting the session. Interactive login has an eight-minute limit.
-   Finish collects Drops proof and a scoped SDK cookie in the signed-in browser, then verifies independent
-   issuance in a fresh temporary browser. Allow up to two minutes for capture, two and a half minutes
-   for issuance, and additional time for account/Drops validation. A failure displays a retry message.
+   Finish collects Drops proof and a scoped SDK cookie in the signed-in browser. If the cookie is
+   missing, it obtains one in isolated storage in that same browser before verifying independent
+   issuance in a fresh temporary browser. Allow up to two minutes for capture, up to two and a half
+   minutes each for optional seed preparation and independent issuance, plus account/Drops validation.
+   A failure identifies whether capture, seed preparation, independent issuance, or server verification failed.
 4. After **Connected**, return to the dashboard. The browser service handles renewal; this page and
    your computer can be closed while Docker keeps running.
 

@@ -84,6 +84,31 @@ changes.
 - [x] `docker compose config` validates
 - [x] Desktop and mobile layouts receive visual QA
 
+## Finish sign-in missing-seed bootstrap - 2026-10-05
+
+- Investigated the reported generic post-Finish failure. The worker mapped capture, cookie lookup,
+  independent issuance and acceptance timeout to the same `capture_failed` message, so that report
+  alone cannot identify the user's failing stage. Found a concrete gap against upstream
+  `src/auth/session_helper.py` (`BrowserExporter.capture_seed`): a valid captured browser session
+  without the scoped SDK cookie was rejected rather than bootstrapped.
+- Finish now obtains missing seed material in an empty, disposable context of the same headed
+  browser before closing it. No interactive cookies are copied or cleared. The context is removed
+  on success, failure or disconnect. Independent headless issuance and JVM identity/Inventory/Campaigns
+  verification remain mandatory; no capture/verification check was removed. Cancelled bootstrap or
+  issuance cannot publish a late context. Browser failures now identify the stage using fixed messages.
+- Root JDK 21 `test installDist`: **184 tests passed**, no failures/errors/skips. Node suite:
+  **41 tests passed**; changed-script syntax and `git diff --check` passed. JVM coverage exercises the
+  actual login bridge with private mock-worker failures and checks public redaction and owned cleanup.
+- Both Docker images built. **Three offline Chromium tests passed** with networking disabled,
+  including missing-cookie bootstrap in real headed Chromium, storage isolation, cleanup after
+  success/failure/cancellation, and fresh-profile renewal. Disposable loopback Docker health and
+  settings mutation/readback passed with tmpfs data; no saved user session was used.
+- **Unverified:** the reported real-account failure and Twitch acceptance after this repair, ongoing
+  renewal, earning/claims and Debian/Proxmox execution. This fixes a reproduced code path, not a
+  confirmed diagnosis from private server diagnostics. A live sign-in retry is still required.
+- Android reference unchanged at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`; untracked `CLAUDE.md`
+  preserved. Changes are local; neither `main` nor `deployment` was pushed or deployed.
+
 ## Durable Docker browser renewal - 2026-10-05
 
 - Investigated sessions lasting around one to two hours. The old companion depended on a live page

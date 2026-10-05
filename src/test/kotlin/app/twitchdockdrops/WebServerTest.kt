@@ -28,6 +28,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,9 +44,47 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.jupiter.api.io.TempDir
 
 class WebServerTest {
+    @Test fun `dashboard distinguishes seed and issuance failure without forwarding worker secrets`() = runBlocking {
+        for ((code, guidance) in listOf("seed_failed" to "renewal seed", "issuance_failed" to "separate renewal browser",
+            "capture_failed" to "signed-in browser", "private-token" to "login browser stopped")) {
+            MockWebServer().use { worker ->
+                var id = ""
+                worker.dispatcher = object : Dispatcher() {
+                    override fun dispatch(request: RecordedRequest): MockResponse {
+                        assertEquals("1", request.getHeader("X-DockDrops-Internal"))
+                        return MockResponse().setBody(when (request.path) {
+                            "/start" -> { id = Json.parseToJsonElement(request.body.readUtf8()).jsonObject.getValue("id").jsonPrimitive.content; "{}" }
+                            "/status" -> """{"id":"$id","state":"failed","error":"$code","context":{"authorization":"private-token"}}"""
+                            "/cancel" -> {
+                                assertEquals(id, Json.parseToJsonElement(request.body.readUtf8()).jsonObject.getValue("id").jsonPrimitive.content)
+                                "{}"
+                            }
+                            else -> error("Unexpected worker route")
+                        })
+                    }
+                }
+                worker.start()
+                DashboardLogin(runtime, worker.port).use { bridge ->
+                    bridge.start(runtime.startManagedBrowserAuthentication())
+                    withTimeout(5000) {
+                        while (bridge.view().getValue("state").jsonPrimitive.content != "failed") delay(10)
+                    }
+                    assertTrue(bridge.view().getValue("error").jsonPrimitive.content.contains(guidance))
+                    assertFalse(bridge.view().toString().contains("private-token"))
+                    assertEquals(setOf("id", "state", "error"), bridge.view().keys)
+                }
+                assertEquals(3, worker.requestCount)
+            }
+        }
+    }
+
     @Test fun `dashboard login routes enforce origin method body and input boundaries even when disabled`() {
         execute("/api/auth/options").use { assertEquals("{\"dashboard\":false}", it.body!!.string()) }
         execute("/api/auth/dashboard/status").use {

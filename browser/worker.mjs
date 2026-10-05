@@ -6,7 +6,7 @@ import {join, resolve, dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {Cdp, BrowserCapture, browserPort, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
-import {issueSeed, readSdkCookie, validateSeed} from './renewal.mjs';
+import {issueSeed, readSdkCookie, validateSeed, bootstrapSeed, SdkCookieUnavailable} from './renewal.mjs';
 
 const executable = process.env.DOCKDROPS_CHROMIUM || '/usr/bin/chromium';
 // This browser is confined by its own non-root, read-only container without the miner volume.
@@ -29,6 +29,7 @@ export class BrowserWorker {
   constructor(options = {}) {
     this.session = null; this.executable = options.executable || executable; this.browserArgs = options.browserArgs || browserArgs;
     this.issue = options.issue || issueSeed;
+    this.bootstrap = options.bootstrap || bootstrapSeed;
   }
   status() {
     const s = this.session;
@@ -53,7 +54,8 @@ export class BrowserWorker {
     s.task = this.run(s).catch(() => {
       if (!s.stop.signal.aborted) {
         // Fixed codes only; CDP errors and upstream responses may contain credentials.
-        s.error = s.state === 'interactive' ? 'login_timeout' : s.state === 'capturing' ? 'capture_failed' : 'browser_failed';
+        s.error = s.state === 'interactive' ? 'login_timeout' : s.state === 'capturing'
+          ? ({bootstrap:'seed_failed',issuance:'issuance_failed',acceptance:'acceptance_timeout'}[s.stage] || 'capture_failed') : 'browser_failed';
         s.state = 'failed';
       }
     }).finally(async () => {
@@ -88,8 +90,7 @@ export class BrowserWorker {
     }
     if (!ready) throw Error('Browser launch timed out');
     const target = await (await fetch(`http://127.0.0.1:${s.port}/json/new?about:blank`,{method:'PUT',redirect:'error',signal})).json();
-    // The eight-minute deadline covers interactive login only. The accepted browser must
-    // stay connected for renewal after that deadline has elapsed.
+    // The eight-minute deadline covers interactive login only; Finish has its own bounds.
     s.cdp = await Cdp.open(target.webSocketDebuggerUrl,s.port,s.stop.signal);
     await s.cdp.command('Browser.setDownloadBehavior',{behavior:'deny'});
     await s.cdp.command('Emulation.setDeviceMetricsOverride',{width:1100,height:760,deviceScaleFactor:1,mobile:false});
@@ -104,13 +105,25 @@ export class BrowserWorker {
     await this.maintainSession(s);
   }
   async maintainSession(s) {
+    s.stage = 'capture';
     const captured = await s.capture.wait(s.stop.signal);
-    const seed = {...captured,sdk_cookie:await readSdkCookie(s.cdp)};
+    s.stage = 'bootstrap';
+    let seed;
+    try { seed = {...captured,sdk_cookie:await readSdkCookie(s.cdp)}; }
+    catch (error) {
+      if (!(error instanceof SdkCookieUnavailable)) throw error;
+      seed = await this.bootstrap(s.port,captured,s.stop.signal);
+    }
+    s.stop.signal.throwIfAborted();
     await this.closeBrowser(s);
     // Prove independent issuance before accepting login; persisting a browser's first proof
     // alone does not establish that its session can be renewed on the server.
-    s.context = await this.issue(this.executable,this.browserArgs,seed,s.stop.signal,true);
+    s.stage = 'issuance';
+    const context = await this.issue(this.executable,this.browserArgs,seed,s.stop.signal,true);
+    s.stop.signal.throwIfAborted();
+    s.context = context;
     s.sequence++;
+    s.stage = 'acceptance';
     const deadline = Date.now() + 180000;
     while (s.accepted !== s.sequence) {
       if (Date.now() > deadline) throw Error('Server verification timed out');

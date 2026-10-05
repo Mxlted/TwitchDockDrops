@@ -124,7 +124,10 @@ the public state. A coroutine serializes companion startup, status/context trans
 The worker opens a headed Chromium browser under Xvfb. The UI relays JPEG frames and a bounded set of
 click, text, scroll, and key commands. Capture starts before the login page so proof issued during
 sign-in is retained. Finish sign-in collects successful Drops evidence in that same browser and reads
-only the secure, HttpOnly `KP_UIDz-ssn` cookie for exact host `k.twitchcdn.net`, path `/`. It then closes
+only the secure, HttpOnly `KP_UIDz-ssn` cookie for exact host `k.twitchcdn.net`, path `/`. If that cookie
+is unavailable, Finish bootstraps fresh SDK proof and a cookie in an empty, disposable context of the
+same headed browser. This context inherits no login cookies and cannot change the signed-in storage.
+It is disposed on success/failure and on control disconnect. The worker then closes
 the interactive browser and independently issues a fresh proof in a temporary headless browser using
 that seed. The JVM validates OAuth identity, Inventory and Campaigns before accepting the result and
 atomically saving it. The dashboard transport acknowledges acceptance and closes its lease's worker;
@@ -134,8 +137,10 @@ The capture stream only queues relevant OAuth-context request, response and comp
 excluding preflights and unrelated assets/telemetry. Completed non-campaign evidence is discarded;
 at most 16 successful campaign requests and 16 issued proofs are retained. Initial capture has a
 two-minute deadline and reloads campaigns every 30 seconds if proof and successful campaign data
-have not yet matched. Independent SDK issuance has a 150-second deadline including browser startup.
-Fixed browser-failure codes distinguish login timeout and capture failure without forwarding diagnostics.
+have not yet matched. Optional bootstrap and independent SDK issuance each have a 150-second deadline.
+Fixed browser-failure codes distinguish login timeout, capture, seed bootstrap, independent issuance,
+and server acceptance timeout without forwarding diagnostics. Missing seed material is allowed only
+as input to initial bootstrap; renewal inputs and every bootstrap/renewal result require a valid seed.
 
 `BrowserSessionContext` optionally includes `sdk_cookie: {value, expires_at}` inside the existing
 encrypted session only (36 KiB maximum context). Older contexts remain readable. This is not a

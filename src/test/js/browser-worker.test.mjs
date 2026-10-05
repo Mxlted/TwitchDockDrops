@@ -32,6 +32,55 @@ test('Finish proves independent seeded renewal and waits for JVM acceptance', as
   assert.equal(worker.status().state,'ready');
 });
 
+test('Finish bootstraps a missing SDK cookie before closing the signed-in browser', async () => {
+  let closed = false, bootstrapped = false;
+  const captured = {headers:{'client-integrity':'captured'}};
+  const worker = new BrowserWorker({
+    bootstrap:async (port,context,signal) => {
+      assert.equal(closed,false); assert.equal(port,1234); assert.equal(context,captured);
+      signal.throwIfAborted(); bootstrapped = true;
+      return {...context,sdk_cookie:{value:'new-cookie'}};
+    },
+    issue:async (exe,args,seed,signal,initial) => {
+      assert.equal(bootstrapped,true); assert.equal(closed,true); assert.equal(initial,true);
+      assert.equal(seed.sdk_cookie.value,'new-cookie'); return seed;
+    },
+  });
+  worker.closeBrowser = async () => { closed = true; };
+  const s = {port:1234,stop:new AbortController(),state:'capturing',sequence:0,
+    cdp:{command:async () => ({cookies:[]})},capture:{wait:async () => captured}};
+  worker.session = s;
+  const task = worker.maintainSession(s);
+  while (s.sequence !== 1) await sleep(5);
+  assert.equal(s.state,'capturing'); s.accepted = 1; await task;
+  assert.equal(s.state,'ready');
+});
+
+test('Finish reports fixed stage errors and never publishes failed or cancelled proof', async () => {
+  for (const stage of ['capture','bootstrap','issuance','cancel-bootstrap','cancel-issuance']) {
+    const fail = async () => { throw Error('private-token-and-cookie'); };
+    const worker = new BrowserWorker({
+      bootstrap:stage === 'bootstrap' ? fail : async () => {
+        if (stage === 'cancel-bootstrap') worker.session.stop.abort();
+        return {};
+      },
+      issue:stage === 'issuance' ? fail : async () => { worker.session.stop.abort(); return {}; },
+    });
+    worker.closeBrowser = async () => {};
+    worker.run = async s => {
+      s.state = 'capturing'; s.capture = {wait:stage === 'capture' ? fail : async () => ({})};
+      s.cdp = {command:async () => ({cookies:[]})};
+      await worker.maintainSession(s);
+    };
+    await worker.start('test'); await worker.session.task;
+    const status = worker.status();
+    assert.equal(status.sequence,0); assert.equal(status.context,undefined);
+    assert.equal(status.error,({capture:'capture_failed',bootstrap:'seed_failed',issuance:'issuance_failed'})[stage] || '');
+    assert.ok(!JSON.stringify(status).includes('private-token'));
+    await worker.cancel();
+  }
+});
+
 test('worker requires internal header, refuses all browser Origins, bounds bodies and validates routes', async () => {
   let starts = 0;
   const worker = {status:() => ({state:'idle',sequence:0}),start:async () => { starts++; }};
