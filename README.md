@@ -153,6 +153,11 @@ or open `/?preview=active` on your instance. Preview controls do not change the 
   linkage, progress and claims remain Twitch-authoritative. Unknown account state is labeled, and
   incomplete catalog coverage preserves known metadata. Real-account discovery, earning, claims
   and renewal still need verification. Browser login keeps its existing direct Twitch discovery.
+  TV does not require the browser service or desktop helper. **Request a new TV code** retries the
+  same method; **Use browser login** opens the recommended fallback. **Waiting for Twitch to report
+  a drop** preserves last confirmed progress without assuming earning. Completed drops can wait for
+  Twitch claim eligibility. The separate Open Reward Campaigns view is not fetched by TV; use its
+  Twitch link instead. Campaigns shows public catalog freshness and incomplete coverage.
 - Twitch event subscriptions request faster inventory/channel checks while mining. Polling remains
   the fallback; the private event protocol still needs real-account verification.
 - Local activity logs can contain campaign and channel names; review them before sharing.

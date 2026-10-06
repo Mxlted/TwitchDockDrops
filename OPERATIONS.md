@@ -429,6 +429,25 @@ reader flow, zoom, touch ergonomics, both themes, and real-account states.
 
 ### Experimental TV login and recovery
 
+Browser login remains recommended. TV requires no browser companion or desktop helper for login or
+refresh-token renewal. After TV denial, expiry, or an inconclusive exchange, use **Request a new TV
+code** to stay with TV, or **Use browser login** for the browser choices. A code is no longer shown
+after Twitch issues its token; downstream validation does not poll that consumed code again.
+
+**Waiting for Twitch to report a drop** is a successful observation of no current session, not zero
+minutes or proof of a stalled drop. Last confirmed progress stays intact. After at least three such
+unconfirmed observations over five minutes, the miner checks inventory and another channel with an
+**Earning not confirmed** reason. Real confirmed stalls retain their existing recovery policy.
+**Progress check temporarily unavailable** retries while watching; three consecutive errors raise
+the global attention message. Malformed replies remain visible as malformed, and recovery is logged
+once. These errors do not by themselves log the account out.
+
+**Waiting for Twitch claim eligibility** means a confirmed completion lacks current claim evidence;
+the miner reconciles Inventory about once per minute without inventing or replaying claim IDs.
+Campaign discovery shows catalog source/time and incomplete coverage independently of the connection.
+The TV limitation in **Open Reward Campaigns** refers only to those view-only promotions; timed-drop
+polling and automatic claims remain implemented. Unknown campaign progress has no percentage/ETA.
+
 Connect Twitch → **Try experimental TV login** requests a new code using the Android TV identity.
 It does not convert existing mobile/browser credentials. Existing encrypted credentials survive a
 failed attempt. Restarting reloads the saved credentials, subject to their existing renewal mode;

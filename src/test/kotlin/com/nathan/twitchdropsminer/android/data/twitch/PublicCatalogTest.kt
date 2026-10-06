@@ -167,7 +167,15 @@ class PublicCatalogTest {
                 twitch.enqueue(response(inventory().toString()))
                 client.validateDropsAccess(session.copy(accessToken = "private-$it"))
                 assertEquals("/oauth2/validate", twitch.takeRequest().path)
-                assertEquals("Inventory", Json.parseToJsonElement(twitch.takeRequest().body.readUtf8()).jsonObject["operationName"]!!.jsonPrimitive.content)
+                val request = twitch.takeRequest()
+                val payload = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+                assertEquals("Inventory", payload["operationName"]!!.jsonPrimitive.content)
+                assertEquals("d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",
+                    payload.getValue("extensions").jsonObject.getValue("persistedQuery").jsonObject.getValue("sha256Hash").jsonPrimitive.content)
+                assertEquals("false", payload.getValue("variables").jsonObject.getValue("fetchRewardCampaigns").toString())
+                assertEquals(TwitchTvClientId, request.getHeader("Client-Id"))
+                assertEquals("https://android.tv.twitch.tv", request.getHeader("Origin"))
+                assertTrue(request.getHeader("User-Agent")!!.contains("Smart Box"))
             }
             assertEquals(0, catalog.requestCount)
         } }
@@ -275,6 +283,13 @@ class PublicCatalogTest {
         assertFailsWith<TwitchApiException> { parseTvAccountInventory(Json.parseToJsonElement("""{"data":{"currentUser":{"inventory":{}}}}""").jsonObject) }
     }
 
+    @Test fun `account drop IDs shared by different campaigns cannot acquire catalog fallback`() {
+        val account = parseTvAccountInventory(inventory(record("first"), record("second")))
+        assertFalse(account.usableForLogin)
+        assertEquals(setOf("first", "second"), account.rejectedIds)
+        assertTrue(mergeTvSources(account, parsePublicCatalog(feed(record("first"), record("second")), now)).campaigns.isEmpty())
+    }
+
     @Test fun `fresh inventory wins during catalog outage and missing account progress stays unknown`() {
         val owned = mergeTvSources(parseTvAccountInventory(inventory(record(minutes = 12))), PublicCatalogResult(problem = "Public catalog unavailable"))
         assertEquals(12, owned.campaigns.single().drops.single().currentMinutes); assertTrue(owned.isPartial)
@@ -325,6 +340,22 @@ class PublicCatalogTest {
         val completed = assertIs<TwitchProgressUpdate.Updated>(public.campaigns.single().applyTwitchProgress(CurrentDropProgress("drop", 60))).campaign
         assertTrue(completed.awaitingTvClaimEvidence())
         assertFalse(completed.drops.single().canClaim)
+    }
+
+    @Test fun `lagging inventory after confirmed completion waits without repeated watch or unsafe claim`() {
+        val public = parsePublicCatalog(feed(record()), now).campaigns.single()
+        val complete = assertIs<TwitchProgressUpdate.Updated>(public.applyTwitchProgress(CurrentDropProgress("drop", 60))).campaign
+        val lagging = mergeTvSources(parseTvAccountInventory(inventory(record(minutes = 12))), PublicCatalogResult())
+        val retained = retainTvInventory(listOf(complete), lagging, now).single()
+        assertEquals(60, retained.drops.single().currentMinutes)
+        assertFalse(retained.drops.single().progressKnown)
+        assertFalse(retained.drops.single().canClaim)
+        assertTrue(retained.awaitingTvClaimEvidence())
+        assertNull(retained.watchableDrop(now = now))
+        assertIs<DropClaimPreparation.NotClaimable>(DropClaimResolver.prepare(session, retained, retained.drops.single()))
+        val ready = retainTvInventory(listOf(retained), mergeTvSources(parseTvAccountInventory(inventory(record(minutes = 60))), PublicCatalogResult()), now).single()
+        assertFalse(ready.awaitingTvClaimEvidence())
+        assertIs<DropClaimPreparation.Ready>(DropClaimResolver.prepare(session, ready, ready.drops.single()))
     }
 
     @Test fun `TV progress errors cannot masquerade as zero progress`() = runBlocking {

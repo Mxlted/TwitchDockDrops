@@ -126,6 +126,13 @@ internal fun parseTvAccountInventory(response: JsonObject): TvAccountInventory {
         if (campaign == null) { reject(stage); if (id != null) rejected += id }
         else campaigns[campaign.id] = campaign
     }
+    val owners = mutableMapOf<String, String>()
+    val ambiguous = mutableSetOf<String>()
+    campaigns.values.forEach { campaign -> campaign.drops.forEach { drop ->
+        val previous = owners.putIfAbsent(drop.id, campaign.id)
+        if (previous != null && previous != campaign.id) { ambiguous += previous; ambiguous += campaign.id }
+    } }
+    ambiguous.forEach { id -> campaigns.remove(id); rejected += id; reject("ambiguous drop IDs") }
     val diagnostics = buildList {
         if (failures.isNotEmpty()) add("Twitch inventory is partial: ${campaigns.size} of ${records.size} campaigns usable; " +
             failures.entries.joinToString { "${it.key}: ${it.value}" } + ". Rejected account state is unknown.")
@@ -164,7 +171,13 @@ internal fun retainTvInventory(previous: List<Campaign>, loaded: CampaignInvento
         val known = old[campaign.id]
         if (known == null) campaign else campaign.copy(drops = campaign.drops.map { drop ->
             val prior = known.drops.find { it.id == drop.id }
-            if (drop.progressKnown || prior == null) drop else drop.copy(
+            // Inventory can lag a confirmed CurrentDrop completion. Retain that historical
+            // value without claiming it is a fresh inventory sample or reusing claim evidence.
+            if (prior != null && !drop.isClaimed && prior.requiredMinutes == drop.requiredMinutes &&
+                prior.requiredMinutes > 0 && prior.currentMinutes >= prior.requiredMinutes &&
+                drop.currentMinutes < drop.requiredMinutes) {
+                drop.copy(currentMinutes = prior.currentMinutes, progressKnown = false)
+            } else if (drop.progressKnown || prior == null) drop else drop.copy(
                 currentMinutes = prior.currentMinutes, isClaimed = prior.isClaimed,
                 progressKnown = prior.isClaimed, claimEvidenceKnown = prior.isClaimed,
             )

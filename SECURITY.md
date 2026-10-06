@@ -93,6 +93,12 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
 ## Outbound token boundary
 
 Experimental Android TV device login uses its own fixed client identity and TV Origin/user agent.
+The centralized session capability policy derives from stored protocol identity, not UI labels or
+token presence. Its public projection omits client IDs, tokens, headers, device secrets and browser
+context. TV-specific Inventory selection does not widen any credential destination or permit gated
+browser discovery. Current-session channel correlation and strict numeric parsing prevent another
+channel's observation from supplying local completion/claim evidence. Public metadata cannot
+rehabilitate duplicate or ambiguous account identifiers. No persistence or network boundary changed.
 It never reuses tokens under another client. Refresh tokens are form fields to the fixed Twitch
 OAuth token endpoint, never URLs, logs, or public state. Redirects and implicit transport retries
 are disabled; ambiguous token rotation requires reconnecting instead of blindly replaying it.

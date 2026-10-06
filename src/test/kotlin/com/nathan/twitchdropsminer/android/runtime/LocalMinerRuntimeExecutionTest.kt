@@ -48,6 +48,158 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test fun `TV identity survives preparation expiry denial and issued token validation failure`() = runBlocking {
+        for (mode in listOf("prepare", "expired", "denied", "issued")) {
+            val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+            val polls = AtomicInteger()
+            val api = object : TwitchApi by AuthenticationTwitchApi() {
+                override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization {
+                    if (mode == "prepare") throw java.io.IOException("Temporarily offline")
+                    return DeviceAuthorization("synthetic-code", "CODE", "https://www.twitch.tv/activate",
+                        Instant.now().plusSeconds(if (mode == "expired") -1 else 60), 1)
+                }
+                override suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult {
+                    polls.incrementAndGet()
+                    if (mode == "denied") throw DeviceAuthorizationException("access_denied", "Authorization denied")
+                    return DeviceTokenPollResult.Authorized(TokenResponse("issued-access", "issued-refresh"))
+                }
+                override suspend fun validateAccessToken(accessToken: String) = ValidatedToken("12345", com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId)
+                override suspend fun validateDropsAccess(session: StoredTwitchSession) { error("Account inventory unavailable") }
+            }
+            val runtime = runtime(store, api, tvAuthenticationApi = api)
+            try {
+                runtime.startTvAuthentication()
+                val failed = withTimeout(3000) { runtime.snapshot.first { it.error != null } }
+                assertEquals("android_tv", failed.account.method)
+                assertEquals(storedSession(), store.twitchSession())
+                if (mode == "issued") { delay(100); assertEquals(1, polls.get()); assertNull(failed.account.oauthCode) }
+            } finally { runtime.stopMiningAndJoin(shutdown = true) }
+        }
+    }
+
+    @Test fun `progress failures escalate once and recover without replacing credentials`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val known = watchCampaign("known", "Status Game")
+        val calls = AtomicInteger()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateSession(session: StoredTwitchSession) = ValidatedToken("12345", "client")
+            override suspend fun fetchCampaignInventory(session: StoredTwitchSession) = CampaignInventory(listOf(known))
+            override suspend fun fetchEligibleChannels(session: StoredTwitchSession, campaign: Campaign, limit: Int) = listOf(testChannel(7, "stream", "broadcast", 20))
+            override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel) = true
+            override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress {
+                if (calls.incrementAndGet() <= 3) throw TwitchApiException(TwitchApiErrorType.Network, "Progress service unavailable")
+                return CurrentDropProgress("known-drop", 1, 7)
+            }
+        }
+        val runtime = runtime(store, api)
+        try {
+            runtime.startMining()
+            withTimeout(3000) { runtime.snapshot.first { it.progressStatus == "unavailable" } }
+            assertNull(runtime.snapshot.value.error)
+            repeat(2) { index ->
+                runtime.refreshInventory()
+                withTimeout(3000) { while (calls.get() < index + 2) delay(10) }
+            }
+            withTimeout(3000) { runtime.snapshot.first { it.error == "Progress service unavailable" } }
+            assertEquals(1, runtime.snapshot.value.activity.count { it.title == "Twitch progress check unavailable" })
+            runtime.refreshInventory()
+            val recovered = withTimeout(3000) { runtime.snapshot.first { it.progressStatus == "confirmed" } }
+            assertNull(recovered.error)
+            assertEquals(1, recovered.activity.count { it.title == "Twitch progress checks recovered" })
+            assertEquals(storedSession(), store.twitchSession())
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `channel selection invalidates an in flight progress completion`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val started = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val known = watchCampaign("known", "Status Game")
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateSession(session: StoredTwitchSession) = ValidatedToken("12345", "client")
+            override suspend fun fetchCampaignInventory(session: StoredTwitchSession) = CampaignInventory(listOf(known))
+            override suspend fun fetchEligibleChannels(session: StoredTwitchSession, campaign: Campaign, limit: Int) =
+                listOf(testChannel(7, "first", "one", 20), testChannel(8, "second", "two", 10))
+            override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel) = true
+            override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress? {
+                if (channelId == 8L) return null
+                started.complete(Unit); withContext(NonCancellable) { release.await() }
+                return CurrentDropProgress("known-drop", 60, 7)
+            }
+        }
+        val runtime = runtime(store, api)
+        try {
+            runtime.startMining(); withTimeout(3000) { started.await() }
+            runtime.selectChannel(8); release.complete(Unit)
+            val switched = withTimeout(3000) { runtime.snapshot.first { it.currentChannel?.id == 8L } }
+            assertEquals(0, switched.campaigns.single().drops.single().currentMinutes)
+            assertFalse(switched.campaigns.single().drops.single().canClaim)
+        } finally { release.complete(Unit); runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `absence wrong channel and unknown drop retain confirmed minutes without claims`() = runBlocking {
+        for ((observation, expected) in listOf(null to "no_active_drop", CurrentDropProgress("known-drop", 60, 99) to "other_channel",
+            CurrentDropProgress("not-in-catalog", 60, 7) to "reconciling")) {
+            val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+            val known = watchCampaign("known", "Status Game").let { it.copy(drops = it.drops.map { d -> d.copy(currentMinutes = 12, progress = .2f) }) }
+            val calls = AtomicInteger()
+            val claims = AtomicInteger()
+            val api = object : TwitchApi by AuthenticationTwitchApi() {
+                override suspend fun validateSession(session: StoredTwitchSession) = ValidatedToken("12345", "client")
+                override suspend fun fetchCampaignInventory(session: StoredTwitchSession) = CampaignInventory(listOf(known))
+                override suspend fun fetchEligibleChannels(session: StoredTwitchSession, campaign: Campaign, limit: Int) = listOf(testChannel(7, "stream", "broadcast", 20))
+                override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel) = true
+                override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress? { calls.incrementAndGet(); return observation }
+                override suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult { claims.incrementAndGet(); error("Unexpected claim") }
+            }
+            val runtime = runtime(store, api)
+            try {
+                runtime.startMining()
+                val state = withTimeout(3000) { runtime.snapshot.first { it.progressStatus == expected } }
+                assertEquals(12, state.campaigns.single().drops.single().currentMinutes)
+                assertTrue(state.campaigns.single().drops.single().progressKnown)
+                assertEquals(0, claims.get())
+                assertNull(state.error)
+                assertEquals(storedSession(), store.twitchSession())
+                delay(100)
+                assertTrue(calls.get() <= 2) // Unknown ID may cause one immediate coalesced reload.
+            } finally { runtime.stopMiningAndJoin(shutdown = true) }
+        }
+    }
+
+    @Test fun `late progress after stop reset or replacement cannot commit`() = runBlocking {
+        for (action in listOf("stop", "reset", "replace")) {
+            val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val finished = CompletableDeferred<Unit>()
+            val campaign = watchCampaign("known", "Status Game")
+            val api = object : TwitchApi by AuthenticationTwitchApi() {
+                override suspend fun validateSession(session: StoredTwitchSession) = ValidatedToken("12345", "client")
+                override suspend fun fetchCampaignInventory(session: StoredTwitchSession) = CampaignInventory(listOf(campaign))
+                override suspend fun fetchEligibleChannels(session: StoredTwitchSession, campaign: Campaign, limit: Int) = listOf(testChannel(7, "stream", "broadcast", 20))
+                override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel) = true
+                override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress {
+                    entered.complete(Unit)
+                    withContext(NonCancellable) { release.await() }
+                    finished.complete(Unit)
+                    return CurrentDropProgress("known-drop", 60, 7)
+                }
+            }
+            val runtime = runtime(store, api)
+            try {
+                runtime.startMining(); withTimeout(3000) { entered.await() }
+                when (action) {
+                    "stop" -> { runtime.stopMining(); withTimeout(3000) { runtime.snapshot.first { !it.miningActive } } }
+                    "reset" -> runtime.resetSessionAndJoin()
+                    else -> { runtime.startAuthentication(); withTimeout(3000) { runtime.snapshot.first { !it.miningActive } } }
+                }
+                release.complete(Unit); withTimeout(3000) { finished.await() }; delay(100)
+                assertFalse(runtime.snapshot.value.campaigns.any { c -> c.drops.any { it.hasCompletedProgress } })
+                assertFalse(runtime.snapshot.value.miningActive)
+            } finally { release.complete(Unit); runtime.stopMiningAndJoin(shutdown = true) }
+        }
+    }
+
     @Test fun `malformed TV exchange stops polling and preserves the previous session`() = runBlocking {
         val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
         val old = store.twitchSession()
@@ -71,6 +223,7 @@ class LocalMinerRuntimeExecutionTest {
                 assertTrue(runtime.snapshot.value.error!!.contains("new code"))
                 assertFalse(runtime.snapshot.value.error!!.contains("private-"))
                 assertFalse(runtime.snapshot.value.error!!.contains("Retrying"))
+                assertEquals("android_tv", runtime.snapshot.value.account.method)
             } finally { runtime.stopMiningAndJoin(shutdown = true) }
         }
     }
@@ -216,6 +369,7 @@ class LocalMinerRuntimeExecutionTest {
             try {
                 runtime.bootstrap()
                 withTimeout(4000) { runtime.snapshot.first { it.error?.contains("Twitch inventory") == true } }
+                assertTrue(runtime.snapshot.value.account.statusText.contains("TV renewal validation pending"))
                 assertEquals(old, store.twitchSession())
                 assertEquals(2, server.requestCount)
                 server.takeRequest()

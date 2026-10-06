@@ -101,6 +101,7 @@ data class ValidatedToken(
 data class CurrentDropProgress(
     val dropId: String,
     val currentMinutes: Int,
+    val channelId: Long? = null,
 )
 
 enum class DropClaimOutcome {
@@ -353,10 +354,7 @@ class TwitchApiClient(
         }
 
     private fun sessionClientId(session: StoredTwitchSession): String {
-        if (session.browserContext != null) { require(session.clientId == null); return TwitchWebClientId }
-        val id = session.clientId ?: TwitchClientId
-        require(id in setOf(TwitchClientId, TwitchTvClientId)) { "Unsupported session client." }
-        return id
+        return com.nathan.twitchdropsminer.android.data.model.SessionCapabilities.from(session).oauthClientId
     }
 
     override suspend fun validateDropsAccess(session: StoredTwitchSession) {
@@ -532,7 +530,7 @@ class TwitchApiClient(
     }
 
     private suspend fun fetchTvAccountInventory(session: StoredTwitchSession): TvAccountInventory {
-        val response = try { gql(session, TwitchOperation.Inventory.request()) }
+        val response = try { gql(session, TwitchOperation.TvInventory.request()) }
         catch (error: CancellationException) { throw error }
         catch (error: TwitchApiException) {
             throw TwitchApiException(error.type, "Twitch inventory request failed; TV credentials preserved.")
@@ -766,20 +764,7 @@ class TwitchApiClient(
             if (sessionClientId(session) != TwitchTvClientId) throw error
             throw TwitchApiException(error.type, "Twitch progress request failed.")
         }
-        if (sessionClientId(session) == TwitchTvClientId &&
-            (response["errors"].asArray().isNotEmpty() || !response.path("data", "currentUser").containsKey("dropCurrentSession"))) {
-            throw TwitchApiException(TwitchApiErrorType.UnexpectedResponse, "Twitch progress is unavailable.")
-        }
-        val drop = response.path("data", "currentUser")["dropCurrentSession"].asObjectOrNull()
-            ?: return null
-        if (sessionClientId(session) == TwitchTvClientId &&
-            (drop["dropID"].asStringOrNull().isNullOrBlank() || drop["currentMinutesWatched"].asIntOrNull()?.let { it >= 0 } != true)) {
-            throw TwitchApiException(TwitchApiErrorType.UnexpectedResponse, "Twitch progress is malformed.")
-        }
-        return CurrentDropProgress(
-            dropId = drop["dropID"].asString(),
-            currentMinutes = drop["currentMinutesWatched"].asInt(0),
-        )
+        return parseCurrentDrop(response)
     }
 
     override suspend fun claimDrop(
@@ -1198,6 +1183,11 @@ enum class TwitchOperation(
     Inventory(
         "Inventory",
         "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
+        buildJsonObject { put("fetchRewardCampaigns", false) },
+    ),
+    TvInventory(
+        "Inventory",
+        "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",
         buildJsonObject { put("fetchRewardCampaigns", false) },
     ),
     CurrentDrop(

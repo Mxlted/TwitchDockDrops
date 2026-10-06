@@ -3,6 +3,7 @@ package com.nathan.twitchdropsminer.android.runtime
 import com.nathan.twitchdropsminer.android.data.model.Campaign
 import com.nathan.twitchdropsminer.android.data.model.CampaignDrop
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
+import com.nathan.twitchdropsminer.android.data.model.capabilities
 import com.nathan.twitchdropsminer.android.data.twitch.DropClaimOutcome
 import com.nathan.twitchdropsminer.android.data.twitch.DropClaimResult
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApi
@@ -39,7 +40,7 @@ internal object DropClaimResolver {
         if (drop.isClaimed) {
             return DropClaimPreparation.NotClaimable("Drop is already claimed.")
         }
-        if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId &&
+        if (session.capabilities.requiresClaimEvidence &&
             (!drop.claimEvidenceKnown || drop.claimId.isNullOrBlank())) {
             return DropClaimPreparation.NotClaimable("Awaiting Twitch inventory claim eligibility and identifier.")
         }

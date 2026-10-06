@@ -3,6 +3,59 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## Coherent experimental TV session path - 2026-10-05
+
+Implemented from clean `main` at `27fe527`. The reported real-account malformed-progress response
+was not captured. The reference-valid no-current-drop sentinel deterministically failed the old
+parser; this change repairs that protocol case and the runtime semantics without claiming the
+user's live symptom has been verified. Browser login remains the recommended default.
+
+- [x] Strict CurrentDrop parser accepts explicit null and the exact empty-session sentinel, validates
+  envelopes/field types/bounds, and correlates positive channel IDs. Absence, other-channel results,
+  unknown IDs, unavailable responses and malformed responses have distinct outcomes. Unknown
+  same-channel drops retain bounded inventory reconciliation.
+- [x] Absence never changes confirmed minutes, claim state or confirmed-stall counters. A separate
+  three-observation/five-minute probe uses an honest earning-not-confirmed reason and existing
+  channel cooldown. Real confirmed stalls retain their recovery. Temporary progress errors appear
+  locally; sustained errors escalate after three failures, with deduplicated recovery diagnostics.
+- [x] Session capabilities derive from stored browser/TV/legacy identity, with an explicit redacted
+  UI projection and separate operation health. TV Inventory uses the pinned TV hash and fixtures;
+  browser Inventory remains unchanged. TV's transport guard still blocks gated discovery operations.
+  Catalog transport remains anonymous and cannot authenticate a session or provide account evidence.
+- [x] Ambiguous account drop identifiers are rejected. A confirmed completion followed by lagging
+  Inventory retains historical progress as not fresh and waits for current claim evidence without
+  a repeated watch/reload loop. Durable claim intent, prerequisite ordering, unknown account state,
+  usable partial admission, and bounded public metadata retention remain in place.
+- [x] TV method survives preparation, expiry, denial, consumed-code and downstream failure states.
+  Issued-token validation clears the activation code instead of inviting reuse. Same-method retry,
+  browser fallback, TV renewal copy, catalog source/time, unsupported Open Reward Campaigns, and
+  progress/claim waiting states are visible. Unknown progress omits percentage/ETA promises.
+- [x] Added protocol, runtime race/recovery, claim reconciliation, request-header/hash, public contract,
+  and dashboard regressions. Updated Architecture, Security, README and Operations.
+
+Verification actually performed:
+
+- Root `gradle --no-daemon clean test installDist` passed in the repository's Docker build stage:
+  **Gradle 9.5.1 / JDK 21, 250 JVM tests, zero failures/errors/skips**. The direct Windows attempt
+  could not find JDK 21; this is Linux build-stage evidence, not a successful native Windows build.
+- Complete Node suite: **51 passed**. Syntax checks passed for `app.js` and `app.test.cjs`.
+- Affected runtime image `dockdrops:tv-session-check` built successfully using the passing test
+  stage. Docker `desktop-linux` / Engine 29.8.2. A brief network-disabled, read-only, capability-
+  dropped container with disposable tmpfs data passed the existing health command and remained
+  running with zero restarts. The verification container was removed; no project Compose service,
+  saved data, credentials, live login or mutation scenario was used.
+- `git diff --check` passed. The separate ignored Android checkout remains clean at
+  `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. No Android build, push, PR or deployment.
+- Pinned `channels.rs` and `operations.rs` matched the local research files exactly at
+  `c9c2c3a550625354ba162cb71ce31725ef537bae`. Reference source was read, never executed or vendored;
+  independent Kotlin implementation and MIT licensing retained.
+
+Remaining user-owned validation: fresh TV authorization; no-current-drop waiting; actual earning;
+delayed claim evidence/claims; channel changes and failover; natural renewal and restart; browser
+fallback; desktop/mobile, both themes, and keyboard/focus behavior. Event subscription compatibility,
+public catalog coverage and real-account TV compatibility remain experimental. Synthetic checks and
+packaging health do not establish those outcomes or confirm the original account symptom is fixed.
+
 ## TV inventory projection and partial admission repair - 2026-10-05
 
 The reported **Twitch inventory is incomplete or malformed; TV credentials preserved** message

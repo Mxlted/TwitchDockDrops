@@ -89,10 +89,13 @@ private fun RuntimeSnapshot.toJson(settings: AppSettings): JsonObject = buildJso
     put("account", account.toJson())
     put("campaigns", campaigns.toJsonArray { it.toJson(settings) })
     put("rewardCampaignsAvailable", rewardCampaignsAvailable)
+    put("rewardCampaignsStatus", rewardCampaignsStatus)
     put("inventorySource", inventorySource)
     put("inventoryComplete", inventoryComplete)
     putNullable("inventoryStatus", inventoryStatus?.let { SafeText.diagnostic(it) })
     putInstant("catalogUpdatedAt", catalogUpdatedAt)
+    put("progressStatus", progressStatus)
+    putNullable("progressStatusDetail", progressStatusDetail?.let { SafeText.diagnostic(it) })
     put("rewardCampaigns", rewardCampaigns.toJsonArray { campaign ->
         buildJsonObject {
             put("id", campaign.id)
@@ -122,6 +125,15 @@ private fun RuntimeSnapshot.toJson(settings: AppSettings): JsonObject = buildJso
 }
 
 private fun LoginSession.toJson(): JsonObject = buildJsonObject {
+    put("capabilities", capabilities?.let { policy -> buildJsonObject {
+        put("method", policy.method)
+        put("discovery", if (policy.publicCatalog) "twitch_public_catalog" else "twitch")
+        put("openRewardCampaigns", policy.openRewardCampaigns)
+        put("currentSession", true)
+        put("accountInventory", true)
+        put("automaticClaims", true)
+        put("renewal", policy.renewal)
+    } } ?: JsonNull)
     put("method", method)
     put("state", state.name.lowercase())
     put("statusText", SafeText.diagnostic(statusText))

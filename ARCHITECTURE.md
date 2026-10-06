@@ -369,6 +369,59 @@ Reverse proxies must configure external trusted hosts and origins explicitly.
 
 ### Experimental TV authentication, claim recovery, and event updates
 
+The server derives `SessionCapabilities` from the stored protocol identity: browser context,
+the fixed TV client, or the compatible legacy device client. Public `account.capabilities` contains
+only `method`, `discovery`, `openRewardCampaigns`, `currentSession`, `accountInventory`,
+`automaticClaims`, and `renewal`; it is null during unauthenticated attempts. Support is independent
+of operation health. `rewardCampaignsStatus` is `not_checked`, `unsupported`, `available`, or
+`unavailable`; the older availability boolean remains compatible. TV supports current-session
+polling and automatic timed-drop claims, but never the display-only reward listing.
+
+TV Inventory alone uses persisted hash
+`d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b`, with
+`fetchRewardCampaigns=false`. Browser/legacy Inventory retains its existing `8337eb...` definition.
+CurrentDrop retains `4d06b7...`, `channelID`, and `channelLogin=""`. These wire contracts and the TV
+projection fixtures were checked against ohne-b/twitch-drops-miner revision
+`c9c2c3a550625354ba162cb71ce31725ef537bae`. That PolyForm Noncommercial reference supplied protocol
+evidence only; the Kotlin implementation is independent and this repository's MIT license is unchanged.
+
+CurrentDrop requires a shaped data/currentUser/session envelope without GraphQL errors. Explicit
+null, or exactly the empty-ID, null-channel, null-game, numeric-zero current/required-minute sentinel,
+means successful absence. Missing fields, arbitrary objects, wrong types and malformed records fail.
+Real records require a nonblank string drop ID (at most 2,048 characters, no controls), a positive
+channel ID fitting `Long`, and nonnegative minutes fitting `Int`. Unsigned decimal integer JSON
+numbers and digit-only numeric strings are supported for real records, following the reference's
+number/string contract; signs, whitespace, fractions, overflow and boolean coercions are rejected.
+Sentinel zeros must be JSON numeric `0`, not strings. Extra unrelated fields are permitted.
+
+Public `progressStatus` is `not_checked`, `confirmed`, `no_active_drop`, `other_channel`,
+`reconciling`, `unavailable`, `malformed`, or `awaiting_claim_evidence`, with a sanitized
+`progressStatusDetail`. Absence and another channel never change minutes, freshness, claims,
+prerequisites, or confirmed-stall counters. Historical values keep their provenance; the dashboard
+labels the last confirmation and suppresses its ETA while current earning is unconfirmed.
+Unknown same-channel IDs coalesce inventory reconciliation with the existing five-minute cooldown.
+Channel-control requests invalidate in-flight progress, and broadcast changes reset supervision;
+session/mining generations still reject Stop/reset/replacement/renewal completions.
+
+A separate absence probe requires at least three successful unconfirmed observations over five
+minutes before reporting **Earning not confirmed** and rechecking inventory/channels. It uses the
+existing 15-minute channel skip, survives inventory refreshes on the same broadcast, and resets on
+confirmed progress or channel/broadcast changes. Failures never count as successful absence or a
+confirmed stall. Progress failures retain watching and retry at the existing watch cadence: local
+status appears immediately, the third consecutive failure also raises the global error, and one
+activity entry each records failure/recovery. Authoritative validation 401 retains its existing
+session-expiry/TV-renewal path; catalog and progress schema errors cannot trigger it.
+
+If Inventory lags a confirmed completion, TV retains that historical minute count with
+`progressKnown=false`, uses only fresh claim evidence/identifiers, and waits for claim eligibility
+instead of repeatedly watching the completed drop. One immediate reconciliation is followed by
+the existing approximately minute-spaced inventory checks. No watch-event 204 or public metadata
+can create completion. Ambiguous drop IDs across account campaigns reject all affected records.
+TV login keeps its method through failure/expiry, clears the consumed activation code during issued
+token validation, and offers a fresh TV code or explicit browser fallback.
+TV renewal retry/reconnect status also remains in the account's status text across progress refreshes,
+so a later successful progress check cannot hide a renewal action that is still required.
+
 The optional `POST /api/auth/tv/start` command accepts only `{}` with the normal Host/Origin and
 body restrictions. It creates a fresh device identity using the Android TV OAuth client, never
 converts an Android mobile or browser token. Browser login remains the default. Acceptance requires
@@ -413,7 +466,7 @@ confirmed-progress supervision still apply. TV claims require Twitch inventory e
 Twitch-issued claim identifier; CurrentDrop completion without that evidence triggers an inventory
 refresh, with minute polling while claim evidence is pending. Pending claim history reconciles only
 from Twitch evidence. TV sessions do not query the display-only Open Reward Campaigns endpoint;
-that panel remains unavailable for TV.
+that panel reports a method limitation for TV and links to Twitch without suggesting a futile retry.
 
 Catalog failure/partial results retain bounded, unexpired metadata and fresh account inventory.
 Missing account progress can retain the last confirmed number but is marked unknown, and stale

@@ -14,9 +14,56 @@ function client(fetch = () => { throw new Error('Unexpected request'); }) {
     window: { location: { search: '?preview=active' }, addEventListener() {}, setTimeout, clearTimeout },
   });
   const source = fs.readFileSync(path.join(__dirname, '../../main/resources/web/app.js'), 'utf8');
-  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch, renderBrowserLoginHero, renderLoginPreparingHero, renderLoginOptions, renderAccountOverview, renderOverview, renderSettings };', context);
+  vm.runInContext(source + '\nrender = () => {}; this.client = { ui, previewState, renderGamePriorities, renderCampaigns, renderQueue, renderWatchCard, renderCampaignLink, searchTwitchCategories, cancelGameSearch, renderBrowserLoginHero, renderLoginPreparingHero, renderLoginOptions, renderAccountOverview, renderOverview, renderSettings, handleClick };', context);
   return context.client;
 }
+
+test('TV capabilities distinguish unsupported views and explain renewal and catalog coverage', () => {
+  const c = client();
+  const data = c.previewState();
+  data.snapshot.account.capabilities = {method:'android_tv',openRewardCampaigns:false,renewal:'refresh_token',discovery:'twitch_public_catalog'};
+  data.snapshot.account.method = 'android_tv';
+  data.snapshot.rewardCampaignsAvailable = false;
+  data.snapshot.catalogUpdatedAt = '2026-10-05T12:00:00Z';
+  data.snapshot.inventoryComplete = false;
+  const campaigns = c.renderCampaigns(data);
+  assert.match(campaigns, /does not fetch Open Reward Campaigns/);
+  assert.doesNotMatch(campaigns, /Refresh to retry/);
+  assert.match(campaigns, /Campaign catalog is incomplete/);
+  assert.match(campaigns, /Catalog updated/);
+  assert.match(c.renderSettings(data), /needs no browser service/);
+  data.snapshot.account.statusText = 'TV renewal needs reconnection';
+  assert.match(c.renderOverview(data), /TV renewal needs reconnection/);
+});
+
+test('TV expiry offers same method retry and browser fallback', async () => {
+  const requests = [];
+  const c = client(async (path) => {
+    requests.push(path);
+    return {ok:true,json:async () => c.ui.data};
+  });
+  const data = c.previewState();
+  data.snapshot.account = {authenticated:false,method:'android_tv',state:'expired',statusText:'TV code expired'};
+  data.snapshot.phase = 'error';
+  data.snapshot.miningActive = false;
+  c.ui.data = data; c.ui.preview = false;
+  const html = c.renderOverview(data);
+  assert.match(html, /Request a new TV code/);
+  assert.match(html, /Use browser login/);
+  await c.handleClick({target:{closest:selector => selector === '[data-action]' ? {dataset:{action:'replace-code'}} : null}});
+  assert.equal(requests[0], '/api/auth/tv/start');
+});
+
+test('unknown campaign progress and absent current sessions do not promise an ETA', () => {
+  const c = client(); const data = c.previewState();
+  for (const campaign of data.snapshot.campaigns) for (const drop of campaign.drops) drop.progressKnown = false;
+  const html = c.renderCampaigns(data) + c.renderQueue(data.snapshot);
+  assert.doesNotMatch(html, /\d+m left/);
+  const campaign = data.snapshot.campaigns[0]; const drop = {...campaign.drops[0],progressKnown:true};
+  const watch = c.renderWatchCard(campaign, drop, data.snapshot.currentChannel, [], false, 'no_active_drop');
+  assert.match(watch, /Last confirmed progress; earning not confirmed/);
+  assert.doesNotMatch(watch, /done |m left/);
+});
 
 test('account overview identifies the viewer separately from the watched channel', () => {
   const c = client();

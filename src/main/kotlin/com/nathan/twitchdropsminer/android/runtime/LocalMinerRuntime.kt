@@ -8,6 +8,7 @@ import com.nathan.twitchdropsminer.android.data.model.AppSettings
 import com.nathan.twitchdropsminer.android.data.model.AutoModePriority
 import com.nathan.twitchdropsminer.android.data.model.Campaign
 import com.nathan.twitchdropsminer.android.data.model.CampaignDrop
+import com.nathan.twitchdropsminer.android.data.model.capabilities
 import com.nathan.twitchdropsminer.android.data.model.Channel
 import com.nathan.twitchdropsminer.android.data.model.LoginSession
 import com.nathan.twitchdropsminer.android.data.model.LoginState
@@ -151,7 +152,8 @@ class LocalMinerRuntime(
                         statusText = browserConnectionText(session, "Stored Twitch session"),
                         userId = session.userId,
                         username = session.username,
-                        method = if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) "android_tv" else if (session.browserContext == null) "device" else "browser",
+                        method = session.capabilities.method,
+                        capabilities = session.capabilities,
                     )
                 },
                 lastUpdate = now(),
@@ -290,17 +292,21 @@ class LocalMinerRuntime(
                     statusText = browserConnectionText(session, "Logged in with Twitch"),
                     userId = session.userId,
                     username = session.username,
-                    method = if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) "android_tv" else if (session.browserContext == null) "device" else "browser",
+                    method = session.capabilities.method,
+                    capabilities = session.capabilities,
                 ),
                 currentTask = "Twitch login complete",
                 progressSummary = "Loading drops inventory.",
-                inventorySource = if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) "twitch_public_catalog" else "twitch",
+                progressStatus = "not_checked",
+                progressStatusDetail = null,
+                inventorySource = if (session.capabilities.publicCatalog) "twitch_public_catalog" else "twitch",
                 inventoryComplete = false,
                 inventoryStatus = null,
                 catalogUpdatedAt = null,
                 campaigns = emptyList(),
                 rewardCampaigns = emptyList(),
                 rewardCampaignsAvailable = false,
+                rewardCampaignsStatus = if (session.capabilities.openRewardCampaigns) "not_checked" else "unsupported",
                 channels = emptyList(),
                 currentChannel = null,
                 activeCampaign = null,
@@ -565,7 +571,7 @@ class LocalMinerRuntime(
         appendActivity(RuntimePhase.Authenticating, "Stored Twitch session expired")
         updateSnapshot(RuntimePhase.Authenticating, "Stored Twitch session needs renewal") {
             it.copy(
-                account = LoginSession(LoginState.Expired, "Twitch session expired"),
+                account = LoginSession(LoginState.Expired, "Twitch session expired", method = expiredSession?.capabilities?.method ?: it.account.method),
                 channels = it.channels.map { channel -> channel.copy(watching = false) },
                 currentChannel = null,
                 activeCampaign = null,
@@ -695,7 +701,7 @@ class LocalMinerRuntime(
                     val retryDelay = RuntimeRetryBackoff.delayFor(requestFailures)
                     updateSnapshot(RuntimePhase.Connecting, "Twitch login temporarily unavailable") {
                         it.copy(
-                            account = LoginSession(LoginState.LoginRequired, "Preparing Twitch device login"),
+                            account = LoginSession(LoginState.LoginRequired, "Preparing Twitch device login", method = if (television) "android_tv" else "device"),
                             error = "${error.message ?: "Unable to request a Twitch device code."} " +
                                 "Retrying in ${retryDelay.runtimeLabel()}.",
                         )
@@ -790,6 +796,10 @@ class LocalMinerRuntime(
                 }
                 ensureCurrentAuthentication(authGeneration)
                 val token = issuedToken
+                updateSnapshot(RuntimePhase.Authenticating, "Validating Twitch login") {
+                    it.copy(account = it.account.copy(statusText = "Validating Twitch account and inventory",
+                        oauthCode = null, oauthUrl = null, deviceCode = null))
+                }
                 val validated = try {
                     authenticationApi.validateAccessToken(token.accessToken).also {
                         ensureCurrentAuthentication(authGeneration)
@@ -835,7 +845,7 @@ class LocalMinerRuntime(
             ensureCurrentAuthentication(authGeneration)
             updateSnapshot(RuntimePhase.Error, "Twitch device code expired") {
                 it.copy(
-                    account = LoginSession(LoginState.LoginRequired, "Device code expired"),
+                    account = LoginSession(LoginState.LoginRequired, "Device code expired", method = if (television) "android_tv" else "device"),
                     error = "Twitch device code expired. Start login again.",
                 )
             }
@@ -845,7 +855,7 @@ class LocalMinerRuntime(
             if (isCurrentAuthentication(authGeneration)) {
                 updateSnapshot(RuntimePhase.Error, "Twitch login failed") {
                     it.copy(
-                        account = LoginSession(LoginState.LoginRequired, "Login failed"),
+                        account = LoginSession(LoginState.LoginRequired, "Login failed", method = if (television) "android_tv" else "device"),
                         error = error.message ?: "Twitch login failed",
                     )
                 }
@@ -881,6 +891,7 @@ class LocalMinerRuntime(
     }
 
     private fun browserConnectionText(session: StoredTwitchSession, fallback: String): String = when {
+        session.capabilities.renewal == "refresh_token" -> "Connected with experimental TV refresh-token renewal"
         session.browserContext?.browserLease != null -> "Connected with Docker browser renewal (reconnect after service restart)"
         session.browserContext?.sdkCookie != null -> "Connected with restart-capable Docker renewal"
         else -> fallback
@@ -888,7 +899,7 @@ class LocalMinerRuntime(
 
     private fun scheduleBrowserRenewal(session: StoredTwitchSession) {
         browserRenewalJob?.cancel(); browserRenewalJob = null
-        if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) { scheduleTvRenewal(session); return }
+        if (session.capabilities.renewal == "refresh_token") { scheduleTvRenewal(session); return }
         val renew = browserRenewal ?: return
         val context = session.browserContext ?: return
         val cookie = context.sdkCookie
@@ -969,7 +980,8 @@ class LocalMinerRuntime(
             catch (_: Throwable) {
                 ensureCurrentOperation()
                 updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) {
-                    it.copy(error = "Experimental TV renewal was inconclusive. Reconnect TV or browser login; credentials preserved. A possibly consumed refresh token is not replayed.")
+                    it.copy(account = it.account.copy(statusText = "TV renewal needs reconnection; use a new TV code or browser login"),
+                        error = "Experimental TV renewal was inconclusive. Reconnect TV or browser login; credentials preserved. A possibly consumed refresh token is not replayed.")
                 }
                 return@launch
             }
@@ -986,7 +998,10 @@ class LocalMinerRuntime(
                 } catch (error: CancellationException) { throw error }
                 catch (error: Throwable) {
                     ensureCurrentOperation()
-                    updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error =
+                    updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(
+                        account = it.account.copy(statusText = if (candidate.tokenExpiresAt?.isAfter(now()) == false)
+                            "TV renewal candidate expired; request a new TV code or use browser login" else "TV renewal validation pending; retrying with credentials preserved"),
+                        error =
                         "TV rotation validation/storage failed: ${app.twitchdockdrops.security.SafeText.diagnostic(error.message ?: "unavailable")}. Existing credentials preserved.") }
                     if (candidate.tokenExpiresAt?.isAfter(now()) == false) return@launch
                     delay(retry); retry = (retry * 2).coerceAtMost(300_000)
@@ -1155,6 +1170,9 @@ class LocalMinerRuntime(
         var handledChannelControlRequestId = channelControlRequests.value.id
         var handledInventoryRefreshRequestId = inventoryRefreshRequests.value
         var nextUnknownDropRefreshAt: Instant? = null
+        var consecutiveProgressFailures = 0
+        val unconfirmedSessionProbe = UnconfirmedSessionProbe()
+        var probeChannel: Pair<Long, String?>? = null
         while (currentCoroutineContext().isActive) {
             ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
             awaitUsableNetwork()
@@ -1225,13 +1243,16 @@ class LocalMinerRuntime(
             }
             channelDiscoveryFailures = 0
             if (selectedWork is CampaignWorkSelection.Idle) {
-                updateSnapshot(RuntimePhase.Idle, selectedWork.task) {
+                val awaitingClaim = campaignSnapshot.any { it.awaitingTvClaimEvidence() }
+                updateSnapshot(RuntimePhase.Idle, if (awaitingClaim) "Waiting for Twitch claim eligibility" else selectedWork.task) {
                     it.copy(
                         campaigns = markSelected(campaignSnapshot, settings),
                         currentChannel = null,
                         activeCampaign = null,
                         activeDrop = null,
                         progressSummary = campaignSnapshot.progressSummary(),
+                        progressStatus = if (awaitingClaim) "awaiting_claim_evidence" else "not_checked",
+                        progressStatusDetail = if (awaitingClaim) "Waiting for Twitch claim eligibility" else null,
                         error = null,
                     )
                 }
@@ -1281,7 +1302,6 @@ class LocalMinerRuntime(
             }
             var consecutiveRejectedWatchEvents = 0
             var transientWatchFailures = 0
-            var consecutiveProgressFailures = 0
             var watchConfigurationRenewals = 0
             var nextWatchAt = now()
             var nextHigherPriorityCheckAt = RuntimeTemporalSchedule.nextPromotionDeadline(
@@ -1432,6 +1452,7 @@ class LocalMinerRuntime(
                         } else {
                             val previousChannel = currentChannel
                             currentChannel = selected.copy(watching = true)
+                            unconfirmedSessionProbe.reset()
                             consecutiveRejectedWatchEvents = 0
                             transientWatchFailures = 0
                             unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings, now())
@@ -1564,6 +1585,11 @@ class LocalMinerRuntime(
                         checkedAt = schedulingNow,
                         unlinkedProgressProbe = unlinkedProgressProbe,
                     )
+                    if (currentChannel.broadcastId != statusApplication.currentChannel.broadcastId) {
+                        unconfirmedSessionProbe.reset()
+                        unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(settings, now())
+                        linkedProgressProbe = currentCampaign.startLinkedProgressProbe(settings, now())
+                    }
                     currentChannel = statusApplication.currentChannel
                     channels = statusApplication.channels
                     if (statusApplication.reselect) {
@@ -1673,6 +1699,12 @@ class LocalMinerRuntime(
                     channel = currentChannel,
                 )
                 val progressCheckedAt = now()
+                val probeIdentity = currentChannel.id to currentChannel.broadcastId
+                if (probeChannel != probeIdentity) {
+                    probeChannel = probeIdentity
+                    unconfirmedSessionProbe.reset()
+                    consecutiveProgressFailures = 0
+                }
                 if (progressRefresh.observation == ProgressObservation.UnexpectedDrop) {
                     val refreshAllowedAt = nextUnknownDropRefreshAt
                     if (refreshAllowedAt == null || !progressCheckedAt.isBefore(refreshAllowedAt)) {
@@ -1732,42 +1764,13 @@ class LocalMinerRuntime(
                 val refreshedActiveDrop = currentCampaign.activeDrop(currentDropId)
                 currentDropId = refreshedActiveDrop?.id
                 currentMode = CampaignPrioritySelector.modeForCampaign(settings, currentCampaign) ?: currentMode
-                val progressError = when (val observation = progressRefresh.observation) {
-                    is ProgressObservation.Unavailable -> {
-                        consecutiveProgressFailures += 1
-                        if (consecutiveProgressFailures == 1) {
-                            appendActivity(
-                                RuntimePhase.Watching,
-                                "Twitch progress check unavailable",
-                                "Keeping ${currentCampaign.gameName} active until progress can be confirmed.",
-                            )
-                        }
-                        observation.message
-                    }
-
-                    else -> {
-                        if (consecutiveProgressFailures > 0) {
-                            appendActivity(RuntimePhase.Watching, "Twitch progress checks recovered")
-                        }
-                        consecutiveProgressFailures = 0
-                        null
-                    }
-                }
-                updateSnapshot(
-                    RuntimePhase.Watching,
-                    currentCampaign.watchingTask(currentChannel, unlinkedProgressProbe),
-                ) {
-                    it.copy(
-                        campaigns = markSelected(campaignSnapshot, settings),
-                        channels = channels.markWatching(currentChannel.id),
-                        currentChannel = currentChannel,
-                        activeCampaign = currentCampaign,
-                        activeDrop = refreshedActiveDrop,
-                        progressSummary = listOf(currentCampaign).progressSummary(),
-                        error = progressError,
-                    )
-                }
-
+                val reporting = publishProgressObservation(
+                    progressRefresh, currentCampaign, currentChannel, channels, campaignSnapshot, settings,
+                    refreshedActiveDrop, currentCampaign.watchingTask(currentChannel, unlinkedProgressProbe),
+                    consecutiveProgressFailures, unconfirmedSessionProbe, progressCheckedAt,
+                )
+                consecutiveProgressFailures = reporting.first
+                if (reporting.second) break
                 val probe = unlinkedProgressProbe
                 var watchAgainImmediately = false
                 var abandonStalledChannel = false
@@ -1892,7 +1895,9 @@ class LocalMinerRuntime(
                 if (currentCampaign.awaitingTvClaimEvidence()) {
                     // CurrentDrop can finish a reward before Inventory exposes its claim instance.
                     // Refresh through the normal guarded loader; do not synthesize a TV claim ID.
-                    updateSnapshot(RuntimePhase.LoadingInventory, "Confirming TV claim eligibility with Twitch inventory")
+                    updateSnapshot(RuntimePhase.LoadingInventory, "Waiting for Twitch claim eligibility") {
+                        it.copy(progressStatus = "awaiting_claim_evidence", progressStatusDetail = "Waiting for Twitch claim eligibility")
+                    }
                     break
                 }
                 val claimable = firstClaimableDrop(session, currentCampaign)
@@ -2395,7 +2400,9 @@ class LocalMinerRuntime(
             }
             error.throwIfInvalidToken()
             val message = error.message ?: "Unable to load Twitch inventory."
-            _snapshot.update { it.copy(rewardCampaignsAvailable = false, inventoryComplete = false, inventoryStatus = message) }
+            _snapshot.update { it.copy(rewardCampaignsAvailable = false,
+                rewardCampaignsStatus = if (session.capabilities.openRewardCampaigns) "unavailable" else "unsupported",
+                inventoryComplete = false, inventoryStatus = message) }
             appendActivity(RuntimePhase.Error, "Inventory fetch failed", message)
             return CampaignLoadResult(
                 campaigns = previousCampaigns,
@@ -2422,6 +2429,8 @@ class LocalMinerRuntime(
                 rewardCampaigns = if (loaded.rewardCampaignsAvailable) loaded.rewardCampaigns else
                     (loaded.rewardCampaigns + it.rewardCampaigns).distinctBy { campaign -> campaign.id }.take(500),
                 rewardCampaignsAvailable = loaded.rewardCampaignsAvailable,
+                rewardCampaignsStatus = if (!session.capabilities.openRewardCampaigns) "unsupported" else
+                    if (loaded.rewardCampaignsAvailable) "available" else "unavailable",
                 inventorySource = if (loaded.publicCatalog) "twitch_public_catalog" else "twitch",
                 inventoryComplete = !loaded.isPartial,
                 inventoryStatus = loaded.diagnostics.joinToString("; ").take(768).ifBlank { null },
@@ -2518,16 +2527,88 @@ class LocalMinerRuntime(
         }
     }
 
+    private suspend fun publishProgressObservation(
+        progressRefresh: CampaignProgressRefresh,
+        currentCampaign: Campaign,
+        currentChannel: Channel,
+        channels: List<Channel>,
+        campaignSnapshot: List<Campaign>,
+        settings: AppSettings,
+        refreshedActiveDrop: CampaignDrop?,
+        watchingTask: String,
+        previousFailures: Int,
+        unconfirmedSessionProbe: UnconfirmedSessionProbe,
+        progressCheckedAt: Instant,
+    ): Pair<Int, Boolean> {
+        var failures = previousFailures
+        val progressError = when (val observation = progressRefresh.observation) {
+            is ProgressObservation.Unavailable -> {
+                failures += 1
+                if (failures == 1) {
+                    appendActivity(
+                        RuntimePhase.Watching,
+                        "Twitch progress check unavailable",
+                        "Keeping ${currentCampaign.gameName} active until progress can be confirmed.",
+                    )
+                }
+                if (failures >= 3) observation.message else null
+            }
+
+            else -> {
+                if (failures > 0) {
+                    appendActivity(RuntimePhase.Watching, "Twitch progress checks recovered")
+                }
+                failures = 0
+                null
+            }
+        }
+        updateSnapshot(
+            RuntimePhase.Watching,
+            watchingTask,
+        ) {
+            it.copy(
+                campaigns = markSelected(campaignSnapshot, settings),
+                channels = channels.markWatching(currentChannel.id),
+                currentChannel = currentChannel,
+                activeCampaign = currentCampaign,
+                activeDrop = refreshedActiveDrop,
+                progressSummary = listOf(currentCampaign).progressSummary(),
+                error = progressError,
+                progressStatus = progressRefresh.observation.status,
+                progressStatusDetail = progressRefresh.observation.detail,
+            )
+        }
+
+        if (unconfirmedSessionProbe.observe(progressRefresh.observation, progressCheckedAt)) {
+            ensureCurrentOperation()
+            failedChannelSkips[currentChannel.id] = progressCheckedAt
+            updateSnapshot(RuntimePhase.Idle, "Earning not confirmed; checking another channel") {
+                it.copy(currentChannel = null, progressStatus = "no_active_drop",
+                    progressStatusDetail = "Earning not confirmed after five minutes of observations; checking inventory and channels")
+            }
+            appendActivity(RuntimePhase.Idle, "Earning not confirmed", "Checking inventory and another channel after bounded probing.")
+            return failures to true
+        }
+
+
+        return failures to false
+    }
+
     private suspend fun updateProgress(
         session: StoredTwitchSession,
         campaign: Campaign,
         campaigns: List<Campaign>,
         channel: Channel,
     ): CampaignProgressRefresh {
+        val channelRequest = channelControlRequests.value.id
         val progressResult = runCatchingCancellable {
             twitchApiClient.currentDrop(session, channel.id)
         }.onFailure { it.throwIfInvalidToken() }
         ensureCurrentOperation()
+        if (channelRequest != channelControlRequests.value.id ||
+            snapshot.value.currentChannel?.let { it.id != channel.id || it.broadcastId != channel.broadcastId } == true) {
+            return CampaignProgressRefresh(campaigns, campaign, observation = ProgressObservation.OtherChannel)
+        }
         val failure = progressResult.exceptionOrNull()
         if (failure != null) {
             appendDebug("Progress observation unavailable for ${channel.name}; current watch retained.")
@@ -2536,6 +2617,7 @@ class LocalMinerRuntime(
                 campaign = campaign,
                 observation = ProgressObservation.Unavailable(
                     failure.message ?: "Twitch progress could not be checked.",
+                    malformed = failure is TwitchApiException && failure.type == TwitchApiErrorType.UnexpectedResponse,
                 ),
             )
         }
@@ -2548,10 +2630,13 @@ class LocalMinerRuntime(
                 observation = ProgressObservation.NoActiveDrop,
             )
         }
+        if (progress.channelId != null && progress.channelId != channel.id) {
+            return CampaignProgressRefresh(campaigns, campaign, observation = ProgressObservation.OtherChannel)
+        }
         appendDebug(
             "Progress observation for ${channel.name}: drop ${progress.dropId.take(80)} at ${progress.currentMinutes} minutes.",
         )
-        val reportedCampaign = campaigns.firstOrNull { candidate ->
+        val reportedCampaign = campaigns.singleOrNull { candidate ->
             candidate.drops.any { drop -> drop.id == progress.dropId }
         }
         if (reportedCampaign == null) {
@@ -2866,11 +2951,14 @@ class LocalMinerRuntime(
         val now = now()
         _snapshot.update { current ->
             guard?.ensureCurrent()
-            transform(current).copy(
+            val updated = transform(current)
+            updated.copy(
                 phase = phase,
                 currentTask = task,
                 lastUpdate = now,
                 dropsClaimedThisSession = dropsClaimedThisSession,
+                progressStatus = if (phase in setOf(RuntimePhase.Stopped, RuntimePhase.Authenticating)) "not_checked" else updated.progressStatus,
+                progressStatusDetail = if (phase in setOf(RuntimePhase.Stopped, RuntimePhase.Authenticating)) null else updated.progressStatusDetail,
             )
         }
     }
@@ -2961,8 +3049,9 @@ private fun RuntimeSnapshot.matchesActiveWatch(
         error == null
 
 internal fun Campaign.awaitingTvClaimEvidence(): Boolean = publicCatalog && drops.any {
+    // Retained minutes come only from prior Twitch observations, never an estimate/catalog.
     !it.isClaimed && it.requiredMinutes > 0 && it.currentMinutes >= it.requiredMinutes &&
-        (!it.claimEvidenceKnown || it.claimId.isNullOrBlank())
+        (!it.progressKnown || !it.claimEvidenceKnown || it.claimId.isNullOrBlank())
 }
 
 internal sealed class TwitchProgressUpdate {
@@ -2976,7 +3065,7 @@ internal sealed class TwitchProgressUpdate {
  * so the caller can log enough detail to diagnose the mismatch.
  */
 internal fun Campaign.applyTwitchProgress(progress: CurrentDropProgress): TwitchProgressUpdate {
-    if (drops.none { it.id == progress.dropId }) {
+    if (!accountStateUsable || drops.count { it.id == progress.dropId } != 1) {
         return TwitchProgressUpdate.UnexpectedDrop
     }
     return TwitchProgressUpdate.Updated(
@@ -3985,14 +4074,18 @@ internal sealed interface ProgressObservation {
     }
 
     data object NoActiveDrop : ProgressObservation {
-        override val isConfirmed: Boolean = true
+        override val isConfirmed: Boolean = false
     }
 
     data object UnexpectedDrop : ProgressObservation {
         override val isConfirmed: Boolean = false
     }
 
-    data class Unavailable(val message: String) : ProgressObservation {
+    data object OtherChannel : ProgressObservation {
+        override val isConfirmed: Boolean = false
+    }
+
+    data class Unavailable(val message: String, val malformed: Boolean = false) : ProgressObservation {
         override val isConfirmed: Boolean = false
     }
 }

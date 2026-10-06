@@ -20,6 +20,7 @@ data class LoginSession(
     val expiresAt: Instant? = null,
     val method: String = "device",
     val username: String? = null,
+    val capabilities: SessionCapabilities? = null,
 ) {
     val isAuthenticated: Boolean
         get() = state == LoginState.LoggedIn
@@ -166,6 +167,7 @@ data class Campaign(
         isActiveAt(now) && drops.any { drop ->
             !drop.isClaimed &&
                 drop.requiredMinutes > 0 &&
+                drop.remainingMinutes > 0 &&
                 !drop.hasCompletedProgress &&
                 drop.isWatchableAt(now)
         }
@@ -200,6 +202,7 @@ data class Campaign(
         val farmableDrops = orderedDrops.filter { drop ->
             !drop.isClaimed &&
                 drop.requiredMinutes > 0 &&
+                drop.remainingMinutes > 0 &&
                 !drop.hasCompletedProgress &&
                 drop.isWatchableAt(now) &&
                 drop.hasSatisfiedPrerequisites(knownDropIds, claimedDropIds)

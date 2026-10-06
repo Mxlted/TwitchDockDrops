@@ -21,6 +21,22 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class StateJsonTest {
+    @Test fun `session capabilities are allowlisted separately from progress operation health`() {
+        for (policy in com.nathan.twitchdropsminer.android.data.model.SessionCapabilities.entries) {
+            val encoded = StateJson().encode(RuntimeSnapshot(
+                account = LoginSession(LoginState.LoggedIn, "Connected", capabilities = policy),
+                progressStatus = "no_active_drop", progressStatusDetail = "Waiting for Twitch to report a drop"), AppSettings(), emptyList())
+            val snapshot = Json.parseToJsonElement(encoded).jsonObject.getValue("snapshot").jsonObject
+            val capabilities = snapshot.getValue("account").jsonObject.getValue("capabilities").jsonObject
+            assertEquals(policy.method, capabilities.getValue("method").jsonPrimitive.content)
+            assertEquals(policy.openRewardCampaigns.toString(), capabilities.getValue("openRewardCampaigns").toString())
+            assertEquals("true", capabilities.getValue("currentSession").toString())
+            assertEquals("true", capabilities.getValue("automaticClaims").toString())
+            assertEquals("no_active_drop", snapshot.getValue("progressStatus").jsonPrimitive.content)
+            assertEquals("not_checked", snapshot.getValue("rewardCampaignsStatus").jsonPrimitive.content)
+            assertFalse(encoded.contains(policy.oauthClientId))
+        }
+    }
     @Test fun `TV discovery status and unknown account progress are explicit and redacted`() {
         val drop = CampaignDrop("drop", "Reward", 0, 30, 0f, false, false, emptyList(), progressKnown = false,
             claimId = "private-claim")

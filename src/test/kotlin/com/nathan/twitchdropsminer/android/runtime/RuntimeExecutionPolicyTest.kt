@@ -8,6 +8,8 @@ import java.time.Duration
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 
@@ -112,9 +114,23 @@ class RuntimeExecutionPolicyTest {
     @Test
     fun `unknown progress is not treated as confirmed no-progress evidence`() {
         assertEquals(true, ProgressObservation.Confirmed.isConfirmed)
-        assertEquals(true, ProgressObservation.NoActiveDrop.isConfirmed)
+        assertEquals(false, ProgressObservation.NoActiveDrop.isConfirmed)
         assertEquals(false, ProgressObservation.UnexpectedDrop.isConfirmed)
         assertEquals(false, ProgressObservation.Unavailable("offline").isConfirmed)
+        assertEquals(false, ProgressObservation.OtherChannel.isConfirmed)
+    }
+
+    @Test fun `absence probe has its own bounded deadline and confirmed evidence resets it`() {
+        val start = Instant.parse("2026-10-05T00:00:00Z")
+        val probe = UnconfirmedSessionProbe()
+        assertFalse(probe.observe(ProgressObservation.NoActiveDrop, start))
+        assertFalse(probe.observe(ProgressObservation.OtherChannel, start.plusSeconds(299)))
+        assertTrue(probe.observe(ProgressObservation.NoActiveDrop, start.plusSeconds(300)))
+        assertFalse(probe.observe(ProgressObservation.Confirmed, start.plusSeconds(301)))
+        assertFalse(probe.observe(ProgressObservation.NoActiveDrop, start.plusSeconds(302)))
+        assertFalse(probe.observe(ProgressObservation.Unavailable("offline"), start.plusSeconds(900)))
+        probe.reset()
+        assertFalse(probe.observe(ProgressObservation.NoActiveDrop, start.plusSeconds(901)))
     }
 
     @Test

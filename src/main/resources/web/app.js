@@ -259,7 +259,7 @@ function renderOverview(data) {
   const account = snapshot.account;
   const authenticated = account.authenticated;
   const waitingForCode = account.actionRequired && account.oauthCode;
-  const preparingLogin = !account.authenticated && !account.oauthCode &&
+  const preparingLogin = !account.authenticated && account.state !== "expired" && !account.oauthCode &&
     ["connecting", "authenticating"].includes(String(snapshot.phase || "").toLowerCase());
   if (!snapshot.miningActive || !snapshot.activeCampaign || !snapshot.activeDrop) {
     ui.channelPickerOpen = false;
@@ -271,6 +271,7 @@ function renderOverview(data) {
       ? (account.method === "browser" ? renderBrowserLoginHero(account) : renderLoginCodeHero(account))
       : preparingLogin
         ? renderLoginPreparingHero(account)
+        : account.method === "android_tv" ? renderTvRetryHero(account)
         : renderWelcomeHero();
     return `
       <div class="page-stack">
@@ -293,7 +294,7 @@ function renderOverview(data) {
         ${renderStat("Claimed this session", snapshot.dropsClaimedThisSession, "drops claimed by the miner", "twitch", dropletIcon())}
         ${renderStat("Active campaigns", snapshot.activeCampaignCount, `${campaigns.length} loaded ${snapshot.inventorySource === "twitch_public_catalog" ? "from Twitch + public catalog" : "from Twitch"}`, "sky", bloomIcon())}
         ${renderStat("Ready to claim", claimable, claimable ? "claiming on the next pass" : "nothing waiting right now", "peach", giftIcon())}
-        ${renderStat("Current drop", activeDrop ? (activeDrop.progressKnown === false ? "Unknown" : `${percent(activeDrop.progress)}%`) : "—", activeDrop ? (activeDrop.progressKnown === false ? "awaiting Twitch progress" : `${activeDrop.remainingMinutes}m left · done ${formatEta(activeDrop.remainingMinutes)}`) : "no drop in progress", "mint", clockIcon())}
+        ${renderStat("Current drop", activeDrop ? (activeDrop.progressKnown === false ? "Unknown" : `${percent(activeDrop.progress)}%`) : "—", activeDrop ? progressEstimate(activeDrop, snapshot.progressStatus) : "no drop in progress", "mint", clockIcon())}
       </div>
       <div class="grid-two">
         <section class="soft-card section-card">
@@ -301,8 +302,9 @@ function renderOverview(data) {
             <div><h2>Now watching</h2><p>${esc(snapshot.currentTask || (snapshot.miningActive ? "Miner active" : "Miner stopped"))}</p></div>
             <span class="head-meta">Updated ${esc(formatTime(snapshot.lastUpdate))}</span>
           </div>
+          ${snapshot.progressStatusDetail ? `<p class="field-hint" role="status">${esc(snapshot.progressStatusDetail)}</p>` : ""}
           ${snapshot.activeCampaign && activeDrop
-            ? renderWatchCard(snapshot.activeCampaign, activeDrop, snapshot.currentChannel, snapshot.channels, snapshot.channelSearchInProgress)
+            ? renderWatchCard(snapshot.activeCampaign, activeDrop, snapshot.currentChannel, snapshot.channels, snapshot.channelSearchInProgress, snapshot.progressStatus)
               + `<div class="watch-drops"><p class="watch-drops-title">Drops in ${esc(snapshot.activeCampaign.name)}</p>${renderDropList(snapshot.activeCampaign, "activeCampaignDrops")}</div>`
             : renderEmptyWatch(snapshot)}
         </section>
@@ -335,7 +337,7 @@ function renderAccountOverview(account, showSettings = true) {
   return `<section class="soft-card account-overview" aria-label="Signed-in Twitch account">
     <span class="account-avatar" aria-hidden="true">${esc(initials)}</span>
     <div class="account-identity"><p>${ui.preview ? "Preview account" : "Signed in to Twitch"}</p>
-      <h2>${esc(identity)}</h2><p>${esc(details)}</p></div>
+      <h2>${esc(identity)}</h2><p>${esc(details)}</p>${account.capabilities?.renewal === "refresh_token" ? `<p>${esc(account.statusText)}</p>` : ""}</div>
     ${showSettings ? '<button class="tiny-button account-manage" data-view="settings" type="button">Account settings</button>' : ""}
   </section>`;
 }
@@ -384,6 +386,14 @@ function renderStep(index, title, detail) {
   return `<li class="step"><span class="step-index" aria-hidden="true">${index}</span><span><strong>${esc(title)}</strong><span>${esc(detail)}</span></span></li>`;
 }
 
+function renderTvRetryHero(account) {
+  return `<section class="hero"><div class="hero-copy"><p class="hero-kicker">Experimental Android TV</p>
+    <h2>Reconnect <em>Twitch.</em></h2><p>${esc(account.statusText || "Request a fresh TV code to continue.")}</p>
+    <p>TV renews using an encrypted refresh token and does not need the browser service. Real-account earning and renewal remain experimental.</p>
+    <div class="hero-actions"><button class="button button-primary" data-action="replace-code" type="button">Request a new TV code</button>
+    <button class="button button-quiet" data-action="connect" type="button">Use browser login</button></div></div></section>`;
+}
+
 function renderLoginCodeHero(account) {
   const activationUrl = safeUrl(account.oauthUrl) || "https://www.twitch.tv/activate";
   return `
@@ -394,7 +404,8 @@ function renderLoginCodeHero(account) {
         <p>Open Twitch activation in a new tab, sign in there, and enter the code shown here. This page updates as soon as approval completes.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="${attr(activationUrl)}" target="_blank" rel="noopener noreferrer">Open Twitch activation</a>
-          <button class="button button-quiet" data-action="replace-code" type="button">Request a new code</button>
+          <button class="button button-quiet" data-action="replace-code" type="button">${account.method === "android_tv" ? "Request a new TV code" : "Request a new code"}</button>
+          ${account.method === "android_tv" ? '<button class="button button-quiet" data-action="connect" type="button">Use browser login</button>' : ""}
         </div>
       </div>
       <aside class="hero-aside" aria-label="Device code">
@@ -432,6 +443,12 @@ function renderBrowserLoginHero(account) {
 }
 
 function renderLoginPreparingHero(account = {}) {
+  if (account.method === "android_tv") return `<section class="hero" aria-busy="true"><div class="hero-copy">
+    <p class="hero-kicker">Experimental Android TV</p><h2>Connecting <em>Twitch.</em></h2>
+    <p>${esc(account.statusText || "Preparing a TV activation code")}. Account inventory must validate before this session is saved.</p>
+    <p>TV renewal needs no browser service. Public discovery coverage is separate from account access and earning.</p>
+    <div class="hero-actions"><button class="button button-quiet" data-action="replace-code" type="button">Request a new TV code</button><button class="button button-quiet" data-action="connect" type="button">Use browser login</button></div>
+    </div></section>`;
   if (account.method === "dashboard") return `<section class="hero"><div class="hero-copy">
     <p class="hero-kicker">Dashboard sign-in</p><h2>Continue in the <em>login browser.</em></h2>
     <p>Complete Twitch verification in the Docker browser, then select Finish sign-in. No desktop helper is needed.</p>
@@ -460,8 +477,14 @@ function renderLoginPreparingHero(account = {}) {
     </section>`;
 }
 
-function renderWatchCard(campaign, drop, channel, channels = [], channelSearchInProgress = false) {
-  const progress = percent(drop.progress);
+function progressEstimate(drop, status) {
+  if (drop.progressKnown === false) return "Awaiting Twitch progress";
+  if (status && status !== "confirmed") return "Last confirmed progress; earning not confirmed";
+  return `${drop.remainingMinutes}m left · done ${formatEta(drop.remainingMinutes)}`;
+}
+
+function renderWatchCard(campaign, drop, channel, channels = [], channelSearchInProgress = false, progressStatus) {
+  const progress = drop.progressKnown === false ? 0 : percent(drop.progress);
   const campaignUrl = safeTwitchUrl(campaign.campaignUrl);
   const channelUrl = channel ? twitchChannelUrl(channel.login || channel.name) : null;
   const dropName = campaignUrl
@@ -491,8 +514,8 @@ function renderWatchCard(campaign, drop, channel, channels = [], channelSearchIn
         </div>
         <h3>${dropName}</h3>
         <p>${esc(campaign.gameName)} · ${renderCampaignLink(campaign)}${dropPosition}</p>
-        <progress class="progress-track" max="100" value="${progress}" aria-label="${drop.progressKnown === false ? "Progress unknown" : `${progress}% watched`}"></progress>
-        <div class="progress-line"><span>${drop.progressKnown === false ? "Unknown" : drop.currentMinutes} of ${drop.requiredMinutes} min</span><span>${drop.progressKnown === false ? "Awaiting Twitch progress" : `${drop.remainingMinutes}m left · done ${esc(formatEta(drop.remainingMinutes))}`}</span></div>
+        <progress class="progress-track" max="100" ${drop.progressKnown === false ? "" : `value="${progress}"`} aria-label="${drop.progressKnown === false ? "Progress unknown" : `${progress}% watched`}"></progress>
+        <div class="progress-line"><span>${drop.progressKnown === false ? "Unknown" : drop.currentMinutes} of ${drop.requiredMinutes} min</span><span>${esc(progressEstimate(drop, progressStatus))}</span></div>
         ${channel ? `<div class="inline-actions"><button class="tiny-button" data-action="find-channel" type="button" aria-expanded="${showChannelPicker}" aria-controls="channelPicker" ${searching ? "disabled" : ""}>${searching ? "Finding channels…" : showChannelPicker ? "Refresh channel list" : "Switch channel"}</button></div>` : ""}
       </div>
       <div class="progress-ring"><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18"></circle><circle class="ring-progress" cx="22" cy="22" r="18" pathLength="100" stroke-dasharray="${progress} 100"></circle></svg><strong>${drop.progressKnown === false ? "?" : `${progress}%`}</strong></div>
@@ -553,7 +576,7 @@ function renderQueue(snapshot) {
           <div class="queue-copy">
             <strong>${esc(campaign.gameName)}</strong>
             ${renderCampaignLink(campaign)}
-            <span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.remainingMinutes}m left</span>
+            <span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.drops.some((drop) => drop.progressKnown === false) ? "Progress unknown" : `${campaign.remainingMinutes}m left`}</span>
           </div>
           <div class="campaign-tags">
             ${campaign.priorityIndex >= 0 ? `<span class="priority-chip">Priority ${campaign.priorityIndex + 1}</span>` : '<span class="soft-chip">Auto Mode</span>'}
@@ -653,6 +676,7 @@ function renderCampaigns(data) {
   return `
     <div class="page-stack">
       ${data.snapshot.error ? renderError(data.snapshot.error) : ""}
+      ${data.snapshot.account.capabilities?.discovery === "twitch_public_catalog" ? `<p class="field-hint">Discovery: Twitch account inventory + SunkwiBOT public catalog. Catalog updated ${esc(formatTime(data.snapshot.catalogUpdatedAt))}. ${data.snapshot.inventoryComplete ? "Public coverage does not prove account eligibility or earning." : "Campaign catalog is incomplete; account observations remain separate."}</p>` : ""}
       ${data.snapshot.inventoryStatus ? `<p class="field-hint" role="status">${esc(data.snapshot.inventoryStatus)}</p>` : ""}
       ${renderGamePriorities(data)}
       <section class="soft-card toolbar">
@@ -690,8 +714,11 @@ function renderRewardCampaigns(snapshot) {
   const authenticated = snapshot.account.authenticated;
   const loading = snapshot.phase === "loadinginventory";
   const available = snapshot.rewardCampaignsAvailable;
+  const unsupported = snapshot.account.capabilities?.openRewardCampaigns === false;
   const message = !authenticated ? "Connect Twitch to load available reward campaigns."
+    : unsupported ? "Android TV does not fetch Open Reward Campaigns. View these promotions on Twitch. Automatic timed-drop claiming remains supported."
     : loading ? "Refreshing reward campaigns…"
+    : snapshot.rewardCampaignsStatus === "not_checked" ? "Reward campaigns have not been checked yet."
     : !available ? "Reward campaigns are unavailable or incomplete. Refresh to retry; any previous details may be out of date."
     : !campaigns.length ? "No open reward campaigns were returned for your account."
     : "";
@@ -704,7 +731,7 @@ function renderRewardCampaigns(snapshot) {
     <div id="rewardCampaignList" ${ui.rewardsExpanded ? "" : "hidden"}>
     ${ui.rewardsExpanded ? `
       ${message ? `<p class="drop-empty" role="status">${message}</p>` : ""}
-      ${authenticated && campaigns.length ? `<div class="reward-list">${campaigns.slice(ui.rewardPage * pageSize, (ui.rewardPage + 1) * pageSize).map(renderRewardRow).join("")}</div>` : ""}
+      ${authenticated && !unsupported && campaigns.length ? `<div class="reward-list">${campaigns.slice(ui.rewardPage * pageSize, (ui.rewardPage + 1) * pageSize).map(renderRewardRow).join("")}</div>` : ""}
       ${authenticated && pages > 1 ? `<nav class="reward-pagination" aria-label="Reward campaign pages"><button class="tiny-button" type="button" data-action="reward-page" data-offset="-1" aria-label="Previous rewards" ${ui.rewardPage === 0 ? "disabled" : ""}>←</button><span role="status">${ui.rewardPage + 1} / ${pages}</span><button class="tiny-button" type="button" data-action="reward-page" data-offset="1" aria-label="Next rewards" ${ui.rewardPage === pages - 1 ? "disabled" : ""}>→</button></nav>` : ""}
       <a class="reward-twitch-link" href="https://www.twitch.tv/drops/campaigns" target="_blank" rel="noopener noreferrer">View on Twitch <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></a>
     ` : ""}</div>
@@ -767,8 +794,8 @@ function renderCampaignRow(campaign) {
         </div>
         <h3>${esc(campaign.gameName)}</h3>
         <p>${renderCampaignLink(campaign)}</p>
-        <progress class="progress-track" max="100" value="${progress}" aria-label="${campaign.drops.some((drop) => drop.progressKnown === false) ? "Progress unknown" : `${progress}% watched`}"></progress>
-        <div class="progress-line"><span>${campaign.drops.some((drop) => drop.progressKnown === false) ? "Progress incomplete" : `${progress}% watched`}</span><span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.remainingMinutes}m left</span></div>
+        <progress class="progress-track" max="100" ${campaign.drops.some((drop) => drop.progressKnown === false) ? "" : `value="${progress}"`} aria-label="${campaign.drops.some((drop) => drop.progressKnown === false) ? "Progress unknown" : `${progress}% watched`}"></progress>
+        <div class="progress-line"><span>${campaign.drops.some((drop) => drop.progressKnown === false) ? "Progress incomplete" : `${progress}% watched`}</span><span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.drops.some((drop) => drop.progressKnown === false) ? "Progress unknown" : `${campaign.remainingMinutes}m left`}</span></div>
       </div>
       <div class="campaign-actions">
         <button class="tiny-button ${priority >= 0 ? "" : "is-accent"}" type="button" data-action="toggle-priority" data-game="${attr(campaign.gameName)}">${priority >= 0 ? "Unpin" : "Pin game"}</button>
@@ -892,8 +919,9 @@ function renderSettings(data) {
             ${renderFactRow("Pinned games", String(settings.selectedGamePriority.length))}
             ${renderFactRow("Excluded campaigns", String(settings.excludedCampaignIds.length))}
           </div>
+          ${authenticated && snapshot.account.capabilities?.renewal === "refresh_token" ? `<p class="field-hint">Experimental Android TV: encrypted refresh-token renewal needs no browser service or desktop helper. Twitch inventory, progress polling and timed-drop claims are supported; live compatibility still needs verification. Reconnect with a new TV code if renewal requires attention.</p>` : ""}
           ${authenticated && snapshot.account.method === "browser" ? `<p class="field-hint">Dashboard login renews inside Docker; your computer can be off. If the account uses retained-browser renewal, reconnect after either service restarts. Desktop-helper sessions need the helper running.</p>` : ""}
-          <div class="card-actions actions-spaced"><button class="button button-primary" data-action="connect" type="button">${linkIcon()} ${authenticated ? "Reconnect Twitch" : "Connect Twitch"}</button></div>
+          <div class="card-actions actions-spaced">${snapshot.account.method === "android_tv" ? '<button class="button button-primary" data-action="connect-tv" type="button">Request a new TV code</button>' : ""}<button class="button button-quiet" data-action="connect" type="button">${linkIcon()} ${snapshot.account.method === "android_tv" ? "Use browser login" : authenticated ? "Reconnect Twitch" : "Connect Twitch"}</button></div>
         </section>
       </div>
       <section class="soft-card section-card">
