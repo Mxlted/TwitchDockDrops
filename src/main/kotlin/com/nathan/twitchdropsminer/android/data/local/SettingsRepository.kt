@@ -54,6 +54,8 @@ class SettingsRepository(dataDirectory: Path) {
             selectedGames = emptySet(),
             selectedGamePriority = emptyList(),
             excludedCampaignIds = emptySet(),
+            allowedRewardTypes = emptySet(),
+            excludedRewardNames = emptyList(),
             runInForeground = true,
             monitorInForeground = true,
         )
@@ -135,6 +137,8 @@ class SettingsRepository(dataDirectory: Path) {
                 fallbackToOtherGames = root.boolean("fallbackToOtherGames", true),
                 autoModePriorityOrder = root.stringList("autoModePriorityOrder")
                     .mapNotNull(AutoModePriority::fromStorageKey),
+                allowedRewardTypes = root.stringList("allowedRewardTypes").toSet(),
+                excludedRewardNames = root.stringList("excludedRewardNames"),
                 excludedCampaignIds = root.stringList("excludedCampaignIds").toSet(),
                 selectedCampaignIds = root.stringList("selectedCampaignIds").toSet(),
                 selectedGames = root.stringList("selectedGames").toSet(),
@@ -190,6 +194,8 @@ class SettingsRepository(dataDirectory: Path) {
     private fun encode(settings: AppSettings): String = json.encodeToString(
         JsonObject.serializer(),
         buildJsonObject {
+            put("allowedRewardTypes", settings.allowedRewardTypes.sorted().toJsonArray())
+            put("excludedRewardNames", settings.excludedRewardNames.toJsonArray())
             put("schemaVersion", 1)
             put("hasCompletedOnboarding", settings.hasCompletedOnboarding)
             put("miningRequested", settings.miningRequested)

@@ -175,12 +175,14 @@ internal data class RuntimeClaimResult(
 internal class DropClaimHandler(
     private val twitchApi: TwitchApi,
     private val attemptTracker: ClaimAttemptTracker = ClaimAttemptTracker(),
+    private val history: com.nathan.twitchdropsminer.android.data.local.ClaimHistoryStore? = null,
 ) {
     fun suppressionFor(
         session: StoredTwitchSession,
         campaign: Campaign,
         drop: CampaignDrop,
     ): ClaimAttemptSuppression? {
+        if (history?.suppressed(session.userId, campaign.id, drop.id) == true) return ClaimAttemptSuppression("Claim recorded; awaiting authoritative inventory reconciliation.", null)
         val preparation = DropClaimResolver.prepare(session, campaign, drop)
         return when (preparation) {
             is DropClaimPreparation.Ready ->
@@ -221,7 +223,7 @@ internal class DropClaimHandler(
         }
 
         val resolved = (preparation as DropClaimPreparation.Ready).resolved
-        attemptTracker.suppressionFor(resolved.attemptKey)?.let { suppression ->
+        suppressionFor(session, campaign, drop)?.let { suppression ->
             return RuntimeClaimResult(
                 outcome = RuntimeClaimOutcome.Suppressed,
                 campaign = campaign,
@@ -232,10 +234,18 @@ internal class DropClaimHandler(
             )
         }
 
+        ensureCurrent()
+        history?.begin(session.userId, campaign, drop)
         return try {
+            ensureCurrent()
             val twitchResult = twitchApi.claimDrop(session, resolved.claimId)
             ensureCurrent()
-            twitchResult.toRuntimeResult(campaign, drop, resolved)
+            twitchResult.toRuntimeResult(campaign, drop, resolved).also { result ->
+                if (result.outcome in setOf(RuntimeClaimOutcome.TerminalRejection, RuntimeClaimOutcome.MissingIdentifier)) {
+                    ensureCurrent(); history?.rejected(session.userId, campaign.id, drop.id)
+                }
+                if (result.isTerminalSuccess) { ensureCurrent(); history?.confirm(session.userId, campaign, drop) }
+            }
         } catch (error: TwitchApiException) {
             ensureCurrent()
             val outcome = error.type.toRuntimeOutcome()

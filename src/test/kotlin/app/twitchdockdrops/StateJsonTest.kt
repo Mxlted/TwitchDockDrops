@@ -21,6 +21,22 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class StateJsonTest {
+    @Test fun `reward settings and prerequisite reasons are serialized without claim identifiers`() {
+        val drop = CampaignDrop("drop", "Reward", 0, 30, 0f, false, false, emptyList(),
+            claimId = "private-claim-instance", preconditionDropIds = listOf("missing"))
+        val encoded = StateJson().encode(RuntimeSnapshot(campaigns = listOf(Campaign("campaign", "Campaign", "Game", drops = listOf(drop)))),
+            AppSettings(allowedRewardTypes = setOf("BADGE"), excludedRewardNames = listOf("Unwanted")), emptyList())
+        val root = Json.parseToJsonElement(encoded).jsonObject
+        val settings = root.getValue("settings").jsonObject
+        assertEquals("BADGE", settings.getValue("allowedRewardTypes").jsonArray.single().jsonPrimitive.content)
+        assertEquals("Unwanted", settings.getValue("excludedRewardNames").jsonArray.single().jsonPrimitive.content)
+        val reward = root.getValue("snapshot").jsonObject.getValue("campaigns").jsonArray.single().jsonObject.getValue("drops").jsonArray.single().jsonObject
+        assertTrue(reward.getValue("blockedReason").jsonPrimitive.content.contains("Missing prerequisite"))
+        assertEquals("false", reward.getValue("eligibleByFilter").toString())
+        assertEquals("missing", reward.getValue("preconditionDropIds").jsonArray.single().jsonPrimitive.content)
+        assertFalse(encoded.contains("private-claim-instance"))
+        assertFalse(encoded.contains("refreshToken"))
+    }
     @Test fun `account username is public only while authenticated`() {
         for (state in listOf(LoginState.LoggedIn, LoginState.LoggedOut, LoginState.LoginRequired, LoginState.Expired)) {
             val snapshot = RuntimeSnapshot(account = LoginSession(state, "Status", userId = "123", username = "cozy_collector"))
@@ -83,6 +99,7 @@ class StateJsonTest {
             "encryption-key-secret",
             "raw-session-secret",
             "filesystem-secret",
+            "refresh-token-secret",
         )
         val snapshot = RuntimeSnapshot(
             phase = RuntimePhase.Error,
@@ -95,7 +112,7 @@ class StateJsonTest {
             ),
             currentTask = "accessToken=${secrets[0]}",
             progressSummary = "device_code=${secrets[1]}",
-            error = "encryption_key=${secrets[2]}",
+            error = "encryption_key=${secrets[2]} refresh_token=${secrets[5]}",
             activity = listOf(
                 RuntimeActivity(
                     Instant.EPOCH,

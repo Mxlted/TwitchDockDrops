@@ -84,6 +84,11 @@ class WebServer(
             requestTrust.verifyHost(exchange.requestHeaders["Host"])
             when (exchange.requestURI.path) {
                 "/api/health" -> exchange.requireGetAndRespond("{\"status\":\"ok\"}")
+                "/api/claims" -> {
+                    exchange.requireMethod("GET")
+                    try { exchange.requireGetAndRespond(runtime.claimHistoryJson()) }
+                    catch (_: IllegalStateException) { exchange.respondError(503, "Claim history is unavailable. Connect Twitch or recover the preserved history file.") }
+                }
                 "/api/state" -> exchange.requireGetAndRespond(currentState())
                 "/api/categories/search" -> searchCategories(exchange)
                 "/api/events" -> {
@@ -272,6 +277,7 @@ class WebServer(
             throw RequestException(405, "Method not allowed.")
         }
         return when (path) {
+            "/api/auth/tv/start" -> body.noFields().let { runtime.startTvAuthentication(); true }
             "/api/auth/start" -> body.noFields().let { dashboardLogin?.cancel(); runtime.startAuthentication(); true }
             "/api/auth/browser/start" -> body.noFields().let { dashboardLogin?.cancel(); runtime.startBrowserAuthentication(); true }
             "/api/auth/replace" -> body.noFields().let { dashboardLogin?.cancel(); runtime.replaceAuthentication(); true }
@@ -332,6 +338,8 @@ class WebServer(
                     "inventoryRefreshMinutes",
                     "fallbackToOtherGames",
                     "debugLogging",
+                    "allowedRewardTypes",
+                    "excludedRewardNames",
                 )
                 if (body.isEmpty()) throw RequestException(400, "At least one setting is required.")
                 settingsRepository.update { current ->
@@ -342,6 +350,8 @@ class WebServer(
                             ?: current.inventoryRefreshMinutes,
                         fallbackToOtherGames = body.optionalBoolean("fallbackToOtherGames")
                             ?: current.fallbackToOtherGames,
+                        allowedRewardTypes = body.optionalFilterList("allowedRewardTypes", 80)?.toSet() ?: current.allowedRewardTypes,
+                        excludedRewardNames = body.optionalFilterList("excludedRewardNames", 200) ?: current.excludedRewardNames,
                         debugLogging = body.optionalBoolean("debugLogging") ?: current.debugLogging,
                     )
                 }
@@ -543,6 +553,7 @@ private const val EventKeepAliveNanos = 15_000_000_000L
 
 private val MutationRoutes = setOf(
     "/api/auth/browser/start",
+    "/api/auth/tv/start",
     "/api/auth/start",
     "/api/auth/replace",
     "/api/miner/start",
@@ -720,6 +731,12 @@ private fun JsonObject.requiredStringList(
             if (value.length > maxItemLength) throw RequestException(400, "$key[$index] is too long.")
         }
     }.distinctBy(String::lowercase)
+}
+
+private fun JsonObject.optionalFilterList(key: String, length: Int): List<String>? {
+    if (!containsKey(key)) return null
+    if (this[key] is JsonArray && (this[key] as JsonArray).isEmpty()) return emptyList()
+    return requiredStringList(key, 100, length)
 }
 
 private fun JsonObject.optionalInt(key: String, range: IntRange): Int? {

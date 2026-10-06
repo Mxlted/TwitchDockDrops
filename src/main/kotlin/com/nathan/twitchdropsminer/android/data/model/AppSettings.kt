@@ -21,6 +21,8 @@ data class AppSettings(
     val fallbackToOtherGames: Boolean = true,
     val autoModePriorityOrder: List<AutoModePriority> = AutoModePriority.DefaultOrder,
     val excludedCampaignIds: Set<String> = emptySet(),
+    val allowedRewardTypes: Set<String> = emptySet(),
+    val excludedRewardNames: List<String> = emptyList(),
     // Legacy campaign IDs are retained so older saved preferences keep loading.
     val selectedCampaignIds: Set<String> = emptySet(),
     // Legacy unordered game set. selectedGamePriority is the source of truth.
@@ -90,6 +92,8 @@ data class AppSettings(
             .take(MaxExcludedCampaignIds)
             .toSet()
         return copy(
+            allowedRewardTypes = allowedRewardTypes.map { it.trim().uppercase(java.util.Locale.ROOT) }.filter { it.isNotBlank() && it.length <= 80 }.take(100).toSet(),
+            excludedRewardNames = excludedRewardNames.map(String::trim).filter { it.isNotBlank() && it.length <= 200 }.distinctBy(String::lowercase).take(100),
             backendUrl = normalizedBackendUrl,
             watchIntervalSeconds = normalizedWatchInterval,
             inventoryRefreshMinutes = normalizedRefresh,

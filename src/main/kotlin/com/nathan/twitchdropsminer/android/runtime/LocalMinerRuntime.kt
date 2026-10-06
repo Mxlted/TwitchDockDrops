@@ -24,6 +24,7 @@ import com.nathan.twitchdropsminer.android.data.twitch.DeviceTokenPollResult
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApi
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApiErrorType
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchApiException
+import com.nathan.twitchdropsminer.android.data.model.withRewardEligibility
 import java.time.Duration
 import java.time.Instant
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -43,6 +44,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel as CoroutineChannel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -79,6 +83,8 @@ class LocalMinerRuntime(
     private val clock: () -> Instant = Instant::now,
     private val browserRenewal: (suspend (BrowserSessionContext) -> BrowserSessionContext)? = null,
     private val browserRenewalMinimumDelay: Duration = Duration.ofSeconds(10),
+    private val twitchEvents: com.nathan.twitchdropsminer.android.data.twitch.TwitchEvents? = null,
+    private val tvAuthenticationApi: TwitchApi? = null,
     private val browserLeaseRevoke: (suspend (String) -> Unit)? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -104,12 +110,20 @@ class LocalMinerRuntime(
     @Volatile private var miningRunGeneration = 0L
     @Volatile private var inventoryRefreshRunGeneration = 0L
     private var dropsClaimedThisSession = 0
+    private val claimHistory = com.nathan.twitchdropsminer.android.data.local.ClaimHistoryStore(secureSessionStore.dataDirectory, claimFailureCooldown, clock)
+    fun claimHistoryJson(): String {
+        val account = snapshot.value.account
+        check(account.isAuthenticated) { "Connect Twitch to view claim history." }
+        return claimHistory.view(requireNotNull(account.userId))
+    }
     private val dropClaimHandler = DropClaimHandler(
         twitchApiClient,
         ClaimAttemptTracker(claimFailureCooldown, clock),
+        claimHistory,
     )
     private val failedChannelSkips = mutableMapOf<Long, Instant>()
     private val channelControlRequests = MutableStateFlow(ChannelControlRequest())
+    private var nextEventRefreshAt = Instant.MIN
     private val inventoryRefreshRequests = MutableStateFlow(0L)
     private var lastLoggedExcludedCampaignIds: Set<String> = emptySet()
     private var waitingForNetwork = false
@@ -137,7 +151,7 @@ class LocalMinerRuntime(
                         statusText = browserConnectionText(session, "Stored Twitch session"),
                         userId = session.userId,
                         username = session.username,
-                        method = if (session.browserContext == null) "device" else "browser",
+                        method = if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) "android_tv" else if (session.browserContext == null) "device" else "browser",
                     )
                 },
                 lastUpdate = now(),
@@ -158,6 +172,8 @@ class LocalMinerRuntime(
         for (command in runtimeCommands) {
             try {
                 when (command) {
+                    is RuntimeCommand.TwitchEventHint -> if (isCurrentMiningRun(command.sessionGeneration, command.miningGeneration) && !now().isBefore(nextEventRefreshAt)) { nextEventRefreshAt = now().plusSeconds(10); inventoryRefreshRequests.update { it + 1 } }
+                    RuntimeCommand.StartTvAuthentication -> handleStartAuthentication(replace = true, television = true)
                     RuntimeCommand.StartAuthentication -> handleStartAuthentication(replace = false)
                     RuntimeCommand.ReplaceAuthentication -> handleStartAuthentication(replace = true)
                     RuntimeCommand.StartBrowserAuthentication -> handleStartBrowserAuthentication()
@@ -189,8 +205,9 @@ class LocalMinerRuntime(
         }
     }
 
-    private suspend fun handleStartAuthentication(replace: Boolean) {
-        if (_snapshot.value.account.isAuthenticated) {
+    private suspend fun handleStartAuthentication(replace: Boolean, television: Boolean = false) {
+        if (television && tvAuthenticationApi == null) error("Experimental TV login unavailable.")
+        if (!television && _snapshot.value.account.isAuthenticated) {
             appendActivity(RuntimePhase.Idle, "Twitch is already connected")
             return
         }
@@ -217,13 +234,13 @@ class LocalMinerRuntime(
         waitingForNetwork = false
         val existingDeviceId = secureSessionStore.twitchSession()?.deviceId
         sessionGeneration += 1L
-        revokeBrowserLease()
+        if (!television) revokeBrowserLease()
         // Replace atomically only after a new login succeeds. A failed device request must not
         // destroy an older credential (including one preserved because its key did not match).
         _snapshot.update {
             it.copy(
                 phase = RuntimePhase.Connecting,
-                account = LoginSession(LoginState.LoginRequired, "Preparing Twitch device login"),
+                account = LoginSession(LoginState.LoginRequired, "Preparing Twitch device login", method = if (television) "android_tv" else "device"),
                 currentTask = "Preparing Twitch device login",
                 currentChannel = null,
                 activeCampaign = null,
@@ -234,12 +251,12 @@ class LocalMinerRuntime(
                 lastUpdate = now(),
             )
         }
-        val deviceId = existingDeviceId ?: twitchApiClient.newDeviceId()
+        val deviceId = if (television) twitchApiClient.newDeviceId() else existingDeviceId ?: twitchApiClient.newDeviceId()
         val job = scope.launch(
             context = RuntimeOperationGuard { isCurrentAuthentication(authGeneration) },
             start = CoroutineStart.LAZY,
         ) {
-            runAuthentication(authGeneration, deviceId)
+            runAuthentication(authGeneration, deviceId, television)
         }
         authJob = job
         job.start()
@@ -258,6 +275,7 @@ class LocalMinerRuntime(
             command.browserLease?.let(browserAdmission::failed)
             throw error
         }
+        if (command.session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) revokeBrowserLease()
         command.browserLease?.let { browserAdmission.accepted(it, command.session.userId) }
         installAuthenticatedSession(command.session)
     }
@@ -272,7 +290,7 @@ class LocalMinerRuntime(
                     statusText = browserConnectionText(session, "Logged in with Twitch"),
                     userId = session.userId,
                     username = session.username,
-                    method = if (session.browserContext == null) "device" else "browser",
+                    method = if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) "android_tv" else if (session.browserContext == null) "device" else "browser",
                 ),
                 currentTask = "Twitch login complete",
                 progressSummary = "Loading drops inventory.",
@@ -341,7 +359,18 @@ class LocalMinerRuntime(
         ) {
             appendActivity(RuntimePhase.LoadingInventory, "Local miner started")
             try {
-                runMiningLoop(session, expectedSessionGeneration, runGeneration)
+                coroutineScope {
+                    val events = twitchEvents?.let { source -> launch {
+                        snapshot.map { it.currentChannel?.id }.distinctUntilChanged().collectLatest { channel ->
+                            source.listen(session, channel) {
+                                ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
+                                enqueueCoalesced(RuntimeCommand.TwitchEventHint(expectedSessionGeneration, runGeneration))
+                            }
+                        }
+                    } }
+                    try { runMiningLoop(session, expectedSessionGeneration, runGeneration) }
+                    finally { events?.cancel() }
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: TwitchApiException) {
@@ -526,7 +555,9 @@ class LocalMinerRuntime(
         inventoryRefreshJob = null
         waitingForNetwork = false
         revokeBrowserLease()
-        secureSessionStore.clear()
+        val expiredSession = secureSessionStore.twitchSession()
+        if (expiredSession?.refreshToken == null) secureSessionStore.clear()
+        else scheduleTvRenewal(expiredSession.copy(tokenExpiresAt = now()))
         appendActivity(RuntimePhase.Authenticating, "Stored Twitch session expired")
         updateSnapshot(RuntimePhase.Authenticating, "Stored Twitch session needs renewal") {
             it.copy(
@@ -549,6 +580,8 @@ class LocalMinerRuntime(
         }
         appendActivity(RuntimePhase.Error, "Runtime command failed", "${command.label}: $message")
     }
+
+    fun startTvAuthentication() { enqueueCoalesced(RuntimeCommand.StartTvAuthentication) }
 
     fun startAuthentication() {
         enqueueCoalesced(RuntimeCommand.StartAuthentication)
@@ -629,7 +662,9 @@ class LocalMinerRuntime(
     private suspend fun runAuthentication(
         authGeneration: Long,
         deviceId: String,
+        television: Boolean = false,
     ) {
+        val authenticationApi = if (television) requireNotNull(tvAuthenticationApi) else twitchApiClient
         try {
             appendActivity(
                 RuntimePhase.Authenticating,
@@ -643,7 +678,7 @@ class LocalMinerRuntime(
                 awaitUsableNetwork()
                 ensureCurrentAuthentication(authGeneration)
                 authorization = try {
-                    twitchApiClient.requestDeviceCode(deviceId).also {
+                    authenticationApi.requestDeviceCode(deviceId).also {
                         ensureCurrentAuthentication(authGeneration)
                     }
                 } catch (error: CancellationException) {
@@ -675,6 +710,7 @@ class LocalMinerRuntime(
                         oauthUrl = activeAuthorization.verificationUri,
                         oauthCode = activeAuthorization.userCode,
                         deviceCode = activeAuthorization.deviceCode,
+                        method = if (television) "android_tv" else "device",
                         expiresAt = activeAuthorization.expiresAt,
                     ),
                     progressSummary = "Open Twitch activation and approve the device code.",
@@ -705,7 +741,7 @@ class LocalMinerRuntime(
                     }
                     ensureCurrentAuthentication(authGeneration)
                     val pollResult = try {
-                        twitchApiClient.pollDeviceToken(
+                        authenticationApi.pollDeviceToken(
                             activeAuthorization.deviceCode,
                             deviceId,
                         ).also { ensureCurrentAuthentication(authGeneration) }
@@ -751,7 +787,7 @@ class LocalMinerRuntime(
                 ensureCurrentAuthentication(authGeneration)
                 val token = issuedToken
                 val validated = try {
-                    twitchApiClient.validateAccessToken(token.accessToken).also {
+                    authenticationApi.validateAccessToken(token.accessToken).also {
                         ensureCurrentAuthentication(authGeneration)
                     }
                 } catch (error: CancellationException) {
@@ -780,18 +816,16 @@ class LocalMinerRuntime(
                     continue
                 }
                 ensureCurrentAuthentication(authGeneration)
-                runtimeCommands.send(
-                    RuntimeCommand.AuthenticationSucceeded(
-                        authGeneration = authGeneration,
-                        session = StoredTwitchSession(
-                            accessToken = token.accessToken,
-                            userId = validated.userId,
-                            deviceId = deviceId,
-                            savedAt = now(),
-                            username = validated.username,
-                        ),
-                    ),
+                val acceptedSession = StoredTwitchSession(
+                    accessToken = token.accessToken, userId = validated.userId, deviceId = deviceId,
+                    savedAt = now(), username = validated.username,
+                    clientId = if (television) com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId else null,
+                    refreshToken = if (television) token.refreshToken else null,
+                    tokenExpiresAt = if (television) token.expiresAt else null,
                 )
+                if (television) authenticationApi.validateDropsAccess(acceptedSession)
+                ensureCurrentAuthentication(authGeneration)
+                runtimeCommands.send(RuntimeCommand.AuthenticationSucceeded(authGeneration, acceptedSession))
                 return
             }
             ensureCurrentAuthentication(authGeneration)
@@ -850,6 +884,7 @@ class LocalMinerRuntime(
 
     private fun scheduleBrowserRenewal(session: StoredTwitchSession) {
         browserRenewalJob?.cancel(); browserRenewalJob = null
+        if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) { scheduleTvRenewal(session); return }
         val renew = browserRenewal ?: return
         val context = session.browserContext ?: return
         val cookie = context.sdkCookie
@@ -899,6 +934,54 @@ class LocalMinerRuntime(
                     updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "Automatic Twitch session renewal is temporarily unavailable; retrying. Saved credentials were preserved.") }
                     delay(if (cookie == null) retry else minOf(retry, Duration.between(now(), cookie.expiresAt).toMillis().coerceAtLeast(1)))
                     retry = (retry * 2).coerceAtMost(300_000)
+                }
+            }
+        }
+    }
+
+    private fun scheduleTvRenewal(session: StoredTwitchSession) {
+        if (shuttingDown || session.refreshToken == null) return
+        val generation = sessionGeneration
+        browserRenewalJob = scope.launch(RuntimeOperationGuard { generation == sessionGeneration && !shuttingDown }) {
+            delay(Duration.between(now(), (session.tokenExpiresAt ?: now()).minusSeconds(300)).toMillis().coerceAtLeast(1000))
+            // A successful rotation is held while validation/storage retry; never spend its predecessor again.
+            val candidate = try {
+                var rotated: StoredTwitchSession? = null
+                var throttleRetries = 0
+                while (rotated == null) {
+                    ensureCurrentOperation()
+                    try { rotated = twitchApiClient.refreshTvSession(session) }
+                    catch (throttled: com.nathan.twitchdropsminer.android.data.twitch.TvRefreshThrottledException) {
+                        if (++throttleRetries >= 5) throw throttled
+                        delay(throttled.retryAfterSeconds * 1000)
+                    }
+                }
+                rotated
+            }
+            catch (error: CancellationException) { throw error }
+            catch (_: Throwable) {
+                ensureCurrentOperation()
+                updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) {
+                    it.copy(error = "Experimental TV renewal was inconclusive. Reconnect TV or browser login; credentials preserved. A possibly consumed refresh token is not replayed.")
+                }
+                return@launch
+            }
+            var retry = 15_000L
+            while (isActive && generation == sessionGeneration && !shuttingDown) {
+                try {
+                    require(candidate.userId == session.userId && candidate.clientId == session.clientId && candidate.deviceId == session.deviceId)
+                    twitchApiClient.validateDropsAccess(candidate)
+                    ensureCurrentOperation()
+                    val completed = CompletableDeferred<Unit>()
+                    runtimeCommands.send(RuntimeCommand.BrowserRenewed(generation, candidate, completed))
+                    completed.await()
+                    return@launch
+                } catch (error: CancellationException) { throw error }
+                catch (_: Throwable) {
+                    ensureCurrentOperation()
+                    updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "TV rotation awaits same-account Drops validation or storage. Existing credentials preserved.") }
+                    if (candidate.tokenExpiresAt?.isAfter(now()) != true) return@launch
+                    delay(retry); retry = (retry * 2).coerceAtMost(300_000)
                 }
             }
         }
@@ -1393,8 +1476,9 @@ class LocalMinerRuntime(
                     nextHigherPriorityCheckAt = settingsChangedAt
                 }
                 settings = latestSettings
-                if (ActiveWatchGuard.shouldStopForExcludedCampaign(latestSettings, currentCampaign)) {
-                    updateSnapshot(RuntimePhase.Idle, "Campaign excluded; stopping current watch") {
+                currentCampaign = currentCampaign.withRewardEligibility(latestSettings, now())
+                if (ActiveWatchGuard.shouldStopForExcludedCampaign(latestSettings, currentCampaign, now())) {
+                    updateSnapshot(RuntimePhase.Idle, "Current rewards unavailable; reselecting") {
                         it.copy(
                             campaigns = markSelected(campaignSnapshot, settings),
                             channels = channels.map { channel -> channel.copy(watching = false) },
@@ -1407,7 +1491,7 @@ class LocalMinerRuntime(
                     }
                     appendActivity(
                         RuntimePhase.Idle,
-                        "Campaign excluded while active",
+                        "Current reward eligibility changed",
                         "${currentCampaign.gameName}; stopping current watch and reselecting.",
                     )
                     break
@@ -2050,7 +2134,7 @@ class LocalMinerRuntime(
             if (campaign.startsAt?.let { now().isBefore(it) } == true) {
                 continue
             }
-            var currentCampaign = updatedCampaigns.firstOrNull { it.id == campaign.id } ?: campaign
+            var currentCampaign = (updatedCampaigns.firstOrNull { it.id == campaign.id } ?: campaign).withRewardEligibility(settings, now())
             for (orderedDrop in currentCampaign.drops.inEarningOrder()) {
                 val drop = currentCampaign.drops.firstOrNull { candidate ->
                     candidate.id == orderedDrop.id
@@ -2304,6 +2388,8 @@ class LocalMinerRuntime(
         if (!isCurrent()) {
             throw CancellationException("Inventory result was superseded by a newer runtime operation.")
         }
+        ensureCurrentOperation()
+        claimHistory.reconcile(session.userId, loaded.campaigns)
         val campaigns = if (loaded.isPartial) {
             mergePartialInventory(previousCampaigns, loaded.campaigns)
         } else {
@@ -2542,7 +2628,7 @@ class LocalMinerRuntime(
         session: StoredTwitchSession,
         campaign: Campaign,
     ): CampaignDrop? {
-        return campaign.claimableDropsInEarningOrder().firstOrNull { drop ->
+        return campaign.withRewardEligibility(settingsRepository.settings.value, now()).claimableDropsInEarningOrder().firstOrNull { drop ->
             dropClaimHandler.suppressionFor(session, campaign, drop) == null
         }
     }
@@ -3045,8 +3131,8 @@ internal object ProgressRecoveryPolicy {
 }
 
 internal object ActiveWatchGuard {
-    fun shouldStopForExcludedCampaign(settings: AppSettings, campaign: Campaign): Boolean =
-        settings.isCampaignExcluded(campaign)
+    fun shouldStopForExcludedCampaign(settings: AppSettings, campaign: Campaign, now: Instant = Instant.now()): Boolean =
+        settings.isCampaignExcluded(campaign) || campaign.withRewardEligibility(settings, now).watchableDrop(now = now) == null
 }
 
 internal data class CampaignIdleStatus(
@@ -3181,7 +3267,7 @@ internal object CampaignPrioritySelector {
         campaigns: List<Campaign>,
         now: Instant = Instant.now(),
     ): CampaignCandidateDecision {
-        val selectableCampaigns = campaigns.withoutExcludedCampaigns(settings)
+        val selectableCampaigns = campaigns.withoutExcludedCampaigns(settings, now)
         orderedDecisions(settings, selectableCampaigns, now).firstOrNull()?.let { return it }
 
         if (!settings.hasGamePriority) {
@@ -3237,7 +3323,7 @@ internal object CampaignPrioritySelector {
         mode: CampaignSelectionMode,
         now: Instant = Instant.now(),
     ): CampaignCandidateDecision {
-        val selectableCampaigns = campaigns.withoutExcludedCampaigns(settings)
+        val selectableCampaigns = campaigns.withoutExcludedCampaigns(settings, now)
         if (!settings.fallbackToOtherGames) {
             return noChannelDecision(mode)
         }
@@ -3289,7 +3375,7 @@ internal object CampaignPrioritySelector {
         now: Instant = Instant.now(),
     ): List<Campaign> {
         val earnableCampaigns = campaigns
-            .withoutExcludedCampaigns(settings)
+            .withoutExcludedCampaigns(settings, now)
             .filter { campaign ->
                 !campaign.isLocallyComplete &&
                     campaign.watchableDrop(now = now) != null &&
@@ -3436,7 +3522,7 @@ internal object CampaignPrioritySelector {
         campaigns: List<Campaign>,
         now: Instant,
     ): List<CampaignCandidateDecision.Try> {
-        val selectableCampaigns = campaigns.withoutExcludedCampaigns(settings)
+        val selectableCampaigns = campaigns.withoutExcludedCampaigns(settings, now)
         val decisions = mutableListOf<CampaignCandidateDecision.Try>()
         if (settings.hasGamePriority) {
             prioritizedCandidates(settings, selectableCampaigns, now)
@@ -3512,7 +3598,7 @@ internal object CampaignPrioritySelector {
         now: Instant,
     ): List<Campaign> =
         campaigns
-            .withoutExcludedCampaigns(settings)
+            .withoutExcludedCampaigns(settings, now)
             .filter { campaign ->
                 campaign.canEarnLocallyAt(now) &&
                     !campaign.isLocallyComplete &&
@@ -3525,7 +3611,7 @@ internal object CampaignPrioritySelector {
         now: Instant = Instant.now(),
     ): List<Campaign> =
         campaigns
-            .withoutExcludedCampaigns(settings)
+            .withoutExcludedCampaigns(settings, now)
             .filter { campaign ->
                 !campaign.isLocallyComplete &&
                     campaign.watchableDrop(now = now) != null &&
@@ -3699,12 +3785,14 @@ private fun Duration.runtimeLabel(): String {
 }
 
 private sealed interface RuntimeCommand {
+    data class TwitchEventHint(val sessionGeneration: Long, val miningGeneration: Long) : RuntimeCommand
     data class BrowserRenewed(val generation: Long, val session: StoredTwitchSession,
         val completed: CompletableDeferred<Unit>) : RuntimeCommand
     data object StartBrowserAuthentication : RuntimeCommand
     data class StartManagedBrowserAuthentication(val completed: CompletableDeferred<String>) : RuntimeCommand
     data class SubmitBrowserSession(val ticket: String, val context: BrowserSessionContext,
         val completed: CompletableDeferred<Unit>) : RuntimeCommand
+    data object StartTvAuthentication : RuntimeCommand
     data object StartAuthentication : RuntimeCommand
     data object ReplaceAuthentication : RuntimeCommand
     data class AuthenticationSucceeded(
@@ -3737,6 +3825,8 @@ private val RuntimeCommand.label: String
         RuntimeCommand.StartBrowserAuthentication -> "start browser login"
         is RuntimeCommand.StartManagedBrowserAuthentication -> "start dashboard login"
         is RuntimeCommand.SubmitBrowserSession -> "verify browser login"
+        is RuntimeCommand.TwitchEventHint -> "refresh Twitch event evidence"
+        RuntimeCommand.StartTvAuthentication -> "start experimental TV authentication"
         RuntimeCommand.StartAuthentication -> "start authentication"
         RuntimeCommand.ReplaceAuthentication -> "replace authentication"
         is RuntimeCommand.AuthenticationSucceeded -> "complete authentication"
@@ -3753,6 +3843,8 @@ private val RuntimeCommand.coalescingKey: String?
         RuntimeCommand.StartBrowserAuthentication -> "start-browser-login"
         is RuntimeCommand.StartManagedBrowserAuthentication -> null
         is RuntimeCommand.SubmitBrowserSession -> null
+        is RuntimeCommand.TwitchEventHint -> "twitch-event-hint"
+        RuntimeCommand.StartTvAuthentication -> "start-tv-authentication"
         RuntimeCommand.StartAuthentication -> "start-authentication"
         RuntimeCommand.ReplaceAuthentication -> "replace-authentication"
         is RuntimeCommand.StartMining -> "start-mining"
@@ -3954,8 +4046,8 @@ private val campaignProgressComparator =
 private val Campaign.unlinkedProbeMinutes: Int
     get() = drops.sumOf { it.currentMinutes.coerceAtLeast(0) }
 
-private fun List<Campaign>.withoutExcludedCampaigns(settings: AppSettings): List<Campaign> =
-    filterNot { settings.isCampaignExcluded(it) }
+private fun List<Campaign>.withoutExcludedCampaigns(settings: AppSettings, now: Instant = Instant.now()): List<Campaign> =
+    filterNot { settings.isCampaignExcluded(it) }.map { it.withRewardEligibility(settings, now) }
 
 private fun List<Campaign>.normalizedCampaignIds(): Set<String> =
     map { it.id.trim().lowercase() }

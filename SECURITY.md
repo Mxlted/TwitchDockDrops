@@ -33,15 +33,17 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
 - Fresh login uses either the optional Docker browser or an isolated desktop helper. With the desktop
   helper, passwords are entered directly on Twitch and never pass through the JVM. With dashboard
   login, input and browser screenshots pass through the same-origin JVM relay to the Docker browser;
-  they are not logged or persisted. Existing device-authorized sessions remain supported.
-- API responses never include the OAuth access token or encryption key.
+  they are not logged or persisted. Existing device-authorized sessions remain supported. The optional
+  experimental Android TV flow sends users to Twitch activation without collecting their password.
+- API responses never include OAuth access/refresh tokens or encryption keys.
 - Session data is encrypted with AES-256-GCM before it is written to `/data/session.enc`.
 - Replacement login keeps the old encrypted credential until the new session is validated and
   atomically saved. Mining and refresh cannot use it while authorization is active; explicit reset
   still removes it. An interrupted or failed replacement can therefore restore the previous session
   after restart.
 - When Twitch rejects a stored token as invalid, the runtime cancels session work and deletes the
-  encrypted credential before exposing the expired state to the browser.
+  encrypted credential before exposing the expired state, except an experimental TV session retains
+  its encrypted refresh credential for same-account renewal. Explicit reset still deletes it.
 - Only HTTP 401 from authoritative token validation expires a session. A validation 403, temporary
   failure, malformed identity, or client mismatch preserves the encrypted credential. Validation
   checks the matching Android or web client ID and a positive numeric user ID; changing a client ID cannot convert
@@ -89,6 +91,27 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
   quarantined before defaults are used.
 
 ## Outbound token boundary
+
+Experimental Android TV device login uses its own fixed client identity and TV Origin/user agent.
+It never reuses tokens under another client. Refresh tokens are form fields to the fixed Twitch
+OAuth token endpoint, never URLs, logs, or public state. Redirects and implicit transport retries
+are disabled; ambiguous token rotation requires reconnecting instead of blindly replaying it.
+Acceptance/rotation requires identity and both direct Drops queries before atomic encrypted save.
+Browser login and its trust boundary remain available and unchanged. No SunkwiBOT catalog request
+or transfer of account information to that service is implemented.
+
+The server also sends an access token in LISTEN messages only to
+`wss://pubsub-edge.twitch.tv/v1`. There is no user-configurable subscription URL or arbitrary topic
+API; constructor-only loopback injection supports tests. Parsed notifications must match subscribed
+topics. Messages exceeding 64 KiB of decoded text terminate the connection; this is an application
+parser limit after OkHttp frame assembly, not a transport-level incoming allocation limit. Message
+bodies and tokens are never logged or forwarded to the dashboard. Events only request authoritative
+refresh; polling and guarded claims retain control.
+
+Claim-history files contain bounded reward metadata and account IDs, not credentials or claim
+instance secrets. They use owner-only atomic writes and are private local data. Corrupt files are
+preserved rather than replaced with empty state, because lost pending intent could cause a replay.
+History API serialization allowlists fields and enforces the existing trusted Host boundary.
 
 OAuth credentials are sent only to fixed, trusted Twitch OAuth and GraphQL hosts plus narrowly
 allowlisted Twitch watch-configuration and event destinations. Channel HTML, Twitch static

@@ -46,6 +46,9 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.ResponseBody
 
+internal const val TwitchTvClientId = "ue6666qo983tsx6so1t0vnawi233wa"
+private const val TwitchTvOrigin = "https://android.tv.twitch.tv"
+private const val TwitchTvAgent = "Mozilla/5.0 (Linux; Android 7.1; Smart Box C1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
 internal const val TwitchClientId = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
 private const val TwitchClientUrl = "https://www.twitch.tv"
 private const val MaxSpadeUrlCacheEntries = 64
@@ -71,6 +74,8 @@ data class DeviceAuthorization(
 
 data class TokenResponse(
     val accessToken: String,
+    val refreshToken: String? = null,
+    val expiresAt: Instant? = null,
 )
 
 sealed interface DeviceTokenPollResult {
@@ -83,6 +88,8 @@ class DeviceAuthorizationException(
     val oauthError: String,
     message: String,
 ) : IllegalStateException(message)
+
+class TvRefreshThrottledException(val retryAfterSeconds: Long) : IllegalStateException("TV renewal throttled.")
 
 data class ValidatedToken(
     val userId: String,
@@ -144,6 +151,8 @@ data class CampaignInventory(
 interface TwitchApi {
     suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization
     suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult
+    suspend fun refreshTvSession(session: StoredTwitchSession): StoredTwitchSession = error("TV renewal unavailable.")
+    suspend fun validateDropsAccess(session: StoredTwitchSession) { error("Direct Drops validation unavailable.") }
     suspend fun validateAccessToken(accessToken: String): ValidatedToken
     suspend fun validateSession(session: StoredTwitchSession): ValidatedToken = validateAccessToken(session.accessToken)
     suspend fun validateBrowserContext(context: BrowserSessionContext): StoredTwitchSession =
@@ -188,8 +197,10 @@ class TwitchApiClient(
     private val twitchWebBaseUrl: String = TwitchClientUrl,
     private val oauthBaseUrl: String = "https://id.twitch.tv",
     private val watchEventTime: () -> Instant = Instant::now,
+    private val deviceClientId: String = TwitchClientId,
 ) : TwitchApi {
-    private val okHttpClient = okHttpClient.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    init { require(deviceClientId in setOf(TwitchClientId, TwitchTvClientId)) }
+    private val okHttpClient = okHttpClient.newBuilder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
@@ -211,7 +222,7 @@ class TwitchApiClient(
     override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization =
         withContext(Dispatchers.IO) {
             val body = FormBody.Builder()
-                .add("client_id", TwitchClientId)
+                .add("client_id", deviceClientId)
                 .add("scopes", "")
                 .build()
             val request = Request.Builder()
@@ -256,7 +267,7 @@ class TwitchApiClient(
     override suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult =
         withContext(Dispatchers.IO) {
             val body = FormBody.Builder()
-                .add("client_id", TwitchClientId)
+                .add("client_id", deviceClientId)
                 .add("device_code", deviceCode)
                 .add("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
                 .build()
@@ -277,7 +288,9 @@ class TwitchApiClient(
                 val root = response.body.readOAuthObject("token polling")
                 if (response.isSuccessful) {
                     return@withContext DeviceTokenPollResult.Authorized(
-                        TokenResponse(root["access_token"].asRequiredNonBlank("access_token")),
+                        TokenResponse(root["access_token"].asRequiredNonBlank("access_token"),
+                            if (deviceClientId == TwitchTvClientId) root["refresh_token"].asRequiredNonBlank("refresh_token") else null,
+                            if (deviceClientId == TwitchTvClientId) Instant.now().plusSeconds(root["expires_in"].asIntOrNull()?.takeIf { it in 1..31536000 }?.toLong() ?: error("Invalid TV token expiry.")) else null),
                     )
                 }
                 // Twitch documents {status:400,message:"authorization_pending"}; also accept
@@ -305,13 +318,48 @@ class TwitchApiClient(
             }
         }
 
-    override suspend fun validateAccessToken(accessToken: String): ValidatedToken = validateToken(accessToken, TwitchClientId)
+    override suspend fun validateAccessToken(accessToken: String): ValidatedToken = validateToken(accessToken, deviceClientId)
 
     override suspend fun validateSession(session: StoredTwitchSession): ValidatedToken =
-        validateToken(session.accessToken, if (session.browserContext == null) TwitchClientId else TwitchWebClientId).also {
+        validateToken(session.accessToken, sessionClientId(session)).also {
             if (it.userId != session.userId) throw TwitchApiException(
                 TwitchApiErrorType.UnexpectedResponse, "Twitch session account mismatch; reconnect Twitch.")
         }
+
+    private fun sessionClientId(session: StoredTwitchSession): String {
+        if (session.browserContext != null) { require(session.clientId == null); return TwitchWebClientId }
+        val id = session.clientId ?: TwitchClientId
+        require(id in setOf(TwitchClientId, TwitchTvClientId)) { "Unsupported session client." }
+        return id
+    }
+
+    override suspend fun validateDropsAccess(session: StoredTwitchSession) {
+        validateSession(session)
+        val inventory = gql(session, TwitchOperation.Inventory.request())
+        val campaigns = gql(session, TwitchOperation.Campaigns.request())
+        if (inventory["errors"].asArray().isNotEmpty() || campaigns["errors"].asArray().isNotEmpty() ||
+            inventory.path("data", "currentUser")["inventory"].asObjectOrNull() == null ||
+            campaigns.path("data", "currentUser")["dropCampaigns"] !is JsonArray) {
+            throw IllegalStateException("Experimental Android TV login cannot access direct Twitch Inventory and Campaigns. Browser login is required; existing credentials were preserved.")
+        }
+    }
+
+    override suspend fun refreshTvSession(session: StoredTwitchSession): StoredTwitchSession = withContext(Dispatchers.IO) {
+        require(sessionClientId(session) == TwitchTvClientId && session.browserContext == null)
+        val refresh = requireNotNull(session.refreshToken)
+        val request = Request.Builder().url(oauthUrl.newBuilder().addPathSegments("oauth2/token").build())
+            .header("Origin", TwitchTvOrigin).header("User-Agent", TwitchTvAgent)
+            .post(FormBody.Builder().add("client_id", TwitchTvClientId).add("grant_type", "refresh_token")
+                .add("refresh_token", refresh).build()).build()
+        okHttpClient.newCall(request).execute().use { response ->
+            if (response.code == 429) throw TvRefreshThrottledException(response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 60) ?: 15)
+            if (!response.isSuccessful) throw IllegalStateException("TV token renewal failed; saved credentials preserved. Reconnect if this persists.")
+            val root = response.body.readOAuthObject("TV renewal")
+            session.copy(accessToken = root["access_token"].asRequiredNonBlank("access_token"),
+                refreshToken = root["refresh_token"].asRequiredNonBlank("refresh_token"), savedAt = Instant.now(),
+                tokenExpiresAt = Instant.now().plusSeconds(root["expires_in"].asIntOrNull()?.takeIf { it in 1..31536000 }?.toLong() ?: error("Invalid TV token expiry.")))
+        }
+    }
 
     override suspend fun validateBrowserContext(context: BrowserSessionContext): StoredTwitchSession {
         context.requireFresh()
@@ -827,14 +875,15 @@ class TwitchApiClient(
     private fun baseHeaders(deviceId: String): okhttp3.Headers =
         okhttp3.Headers.Builder()
             .add("Accept", "application/json")
-            .add("Client-Id", TwitchClientId)
-            .add("Origin", TwitchClientUrl)
-            .add("Referer", TwitchClientUrl)
-            .add("User-Agent", TwitchUserAgent)
+            .add("Client-Id", deviceClientId)
+            .add("Origin", if (deviceClientId == TwitchTvClientId) TwitchTvOrigin else TwitchClientUrl)
+            .add("Referer", if (deviceClientId == TwitchTvClientId) TwitchTvOrigin else TwitchClientUrl)
+            .add("User-Agent", if (deviceClientId == TwitchTvClientId) TwitchTvAgent else TwitchUserAgent)
             .add("X-Device-Id", deviceId)
             .build()
 
     private fun sessionHeaders(session: StoredTwitchSession, graphql: Boolean = false): okhttp3.Headers {
+        val isTv = session.clientId == TwitchTvClientId
         val browser = session.browserContext
         if (browser != null) {
             try { browser.requireFresh() } catch (_: IllegalArgumentException) {
@@ -844,12 +893,12 @@ class TwitchApiClient(
         }
         return okhttp3.Headers.Builder()
             .add("Accept", "*/*")
-            .add("Client-Id", if (browser == null) TwitchClientId else TwitchWebClientId)
+            .add("Client-Id", sessionClientId(session))
             .add("Authorization", "OAuth ${session.accessToken}")
             .add("Client-Session-Id", session.deviceId.take(16))
-            .add("Origin", TwitchClientUrl)
-            .add("Referer", TwitchClientUrl)
-            .add("User-Agent", browser?.userAgent ?: TwitchUserAgent)
+            .add("Origin", if (isTv) TwitchTvOrigin else TwitchClientUrl)
+            .add("Referer", if (isTv) TwitchTvOrigin else TwitchClientUrl)
+            .add("User-Agent", browser?.userAgent ?: if (isTv) TwitchTvAgent else TwitchUserAgent)
             .add("X-Device-Id", session.deviceId)
             .apply {
                 if (graphql && browser != null) browser.headers.forEach { (name, value) -> set(name, value) }
@@ -1230,7 +1279,7 @@ private fun JsonObject.toCampaignDrop(claimedBenefits: Map<String, Instant>): Ca
     val claimedByBenefit = self == null &&
         startsAt != null &&
         endsAt != null &&
-        claimedBenefitAwardTimes.isNotEmpty() &&
+        benefits.isNotEmpty() && claimedBenefitAwardTimes.size == benefits.size &&
         claimedBenefitAwardTimes.all { awardedAt -> awardedAt >= startsAt && awardedAt < endsAt }
     val isClaimed = claimedBySelf || claimedByBenefit
     val displayedMinutes = if (isClaimed) requiredMinutes else currentMinutes
@@ -1246,6 +1295,7 @@ private fun JsonObject.toCampaignDrop(claimedBenefits: Map<String, Instant>): Ca
         startsAt = startsAt,
         endsAt = endsAt,
         claimId = claimId,
+        claimEvidenceKnown = self?.get("isClaimed") is JsonPrimitive && (self["isClaimed"] as? JsonPrimitive)?.booleanOrNull != null,
         preconditionDropIds = this["preconditionDrops"].asArray()
             .mapNotNull { it.asObjectOrNull()?.get("id").asStringOrNull() },
     )

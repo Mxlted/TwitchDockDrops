@@ -35,6 +35,9 @@ data class StoredTwitchSession(
     val savedAt: Instant,
     val browserContext: BrowserSessionContext? = null,
     val username: String? = null,
+    val clientId: String? = null,
+    val refreshToken: String? = null,
+    val tokenExpiresAt: Instant? = null,
 )
 
 data class MinerStatus(
@@ -66,6 +69,9 @@ data class CampaignDrop(
     val endsAt: Instant? = null,
     val claimId: String? = null,
     val preconditionDropIds: List<String> = emptyList(),
+    val blockedReason: String? = null,
+    val eligibleByFilter: Boolean = true,
+    val claimEvidenceKnown: Boolean = false,
 ) {
     val watchedMinutes: Int
         get() = if (requiredMinutes > 0) {
@@ -253,7 +259,7 @@ data class Campaign(
             .map { candidate -> candidate.id }
             .toSet()
         return drops.inEarningOrder().filter { drop ->
-            !drop.isClaimed &&
+            !drop.isClaimed && drop.eligibleByFilter &&
                 (drop.canClaim || drop.hasCompletedProgress) &&
                 drop.hasSatisfiedPrerequisites(knownDropIds, claimedDropIds)
         }
@@ -261,14 +267,14 @@ data class Campaign(
 }
 
 fun CampaignDrop.isWatchableAt(now: Instant): Boolean =
-    (startsAt == null || !now.isBefore(startsAt)) &&
+    eligibleByFilter && blockedReason == null && (startsAt == null || !now.isBefore(startsAt)) &&
         (endsAt == null || now.isBefore(endsAt))
 
 private fun CampaignDrop.hasSatisfiedPrerequisites(
     knownDropIds: Set<String>,
     claimedDropIds: Set<String>,
 ): Boolean = preconditionDropIds.none { prerequisiteId ->
-    prerequisiteId in knownDropIds && prerequisiteId !in claimedDropIds
+    prerequisiteId !in claimedDropIds
 }
 
 fun List<CampaignDrop>.inEarningOrder(): List<CampaignDrop> {

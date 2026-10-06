@@ -48,6 +48,71 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test fun `experimental TV acceptance failure preserves previous encrypted session`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val old = store.twitchSession()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun pollDeviceToken(deviceCode: String, deviceId: String) = DeviceTokenPollResult.Authorized(
+                TokenResponse("tv-access", "tv-refresh", Instant.now().plusSeconds(3600)))
+            override suspend fun validateAccessToken(accessToken: String) = ValidatedToken("12345", com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId)
+            override suspend fun validateDropsAccess(session: StoredTwitchSession) { error("Direct Twitch campaign discovery unavailable") }
+        }
+        val runtime = runtime(store, api, tvAuthenticationApi = api)
+        try {
+            runtime.startTvAuthentication()
+            withTimeout(3000) { runtime.snapshot.first { it.currentTask == "Twitch login failed" } }
+            assertEquals(old, store.twitchSession())
+            assertFalse(runtime.snapshot.value.account.isAuthenticated)
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `TV rotation validates before atomic save and cannot revive reset`() = runBlocking {
+        val store = sessionStore()
+        val old = storedSession().copy(clientId = com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId,
+            refreshToken = "old-refresh", tokenExpiresAt = Instant.EPOCH)
+        store.saveTwitchSession(old)
+        val validating = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun refreshTvSession(session: StoredTwitchSession) = session.copy(
+                accessToken = "new-access", refreshToken = "new-refresh", tokenExpiresAt = Instant.now().plusSeconds(3600))
+            override suspend fun validateDropsAccess(session: StoredTwitchSession) {
+                validating.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+            }
+        }
+        val runtime = runtime(store, api)
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { validating.await() }
+            assertEquals(old, store.twitchSession())
+            runtime.resetSessionAndJoin()
+            release.complete(Unit)
+            delay(150)
+            assertNull(store.twitchSession())
+            assertFalse(runtime.snapshot.value.account.isAuthenticated)
+        } finally { release.complete(Unit); runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `TV rotation saves both tokens together after validation`() = runBlocking {
+        val store = sessionStore()
+        val old = storedSession().copy(clientId = com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId,
+            refreshToken = "old-refresh", tokenExpiresAt = Instant.EPOCH)
+        store.saveTwitchSession(old)
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun refreshTvSession(session: StoredTwitchSession) = session.copy(
+                accessToken = "new-access", refreshToken = "new-refresh", tokenExpiresAt = Instant.now().plusSeconds(3600))
+            override suspend fun validateDropsAccess(session: StoredTwitchSession) { assertEquals(old.userId, session.userId) }
+        }
+        val runtime = runtime(store, api)
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { while (store.twitchSession()?.refreshToken != "new-refresh") delay(10) }
+            assertEquals("new-access", store.twitchSession()?.accessToken)
+            assertEquals(old.userId, store.twitchSession()?.userId)
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
     @Test fun `shutdown ignores queued start and inventory commands without changing saved intent`() = runBlocking {
         val store = sessionStore()
         store.saveTwitchSession(storedSession())
@@ -876,7 +941,7 @@ class LocalMinerRuntimeExecutionTest {
     }
 
     @Test
-    fun `transient completed claim failure watches other work and retries automatically`() = runBlocking {
+    fun `ambiguous claim watches other work and retries only after fresh unclaimed evidence`() = runBlocking {
         val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
         val api = ClaimRetryRuntimeTwitchApi()
         val runtime = runtime(
@@ -1065,6 +1130,7 @@ class LocalMinerRuntimeExecutionTest {
         clock: () -> Instant = Instant::now,
         browserRenewal: (suspend (BrowserSessionContext) -> BrowserSessionContext)? = null,
         browserLeaseRevoke: (suspend (String) -> Unit)? = null,
+        tvAuthenticationApi: TwitchApi? = null,
     ) = LocalMinerRuntime(
         settingsRepository = settings,
         secureSessionStore = store,
@@ -1078,6 +1144,7 @@ class LocalMinerRuntimeExecutionTest {
         browserRenewal = browserRenewal,
         browserRenewalMinimumDelay = Duration.ofMillis(10),
         browserLeaseRevoke = browserLeaseRevoke,
+        tvAuthenticationApi = tvAuthenticationApi,
     )
 
     private fun sessionStore(): SecureSessionStore {
@@ -1555,6 +1622,7 @@ private class ClaimRetryRuntimeTwitchApi(
                     canClaim = true,
                     rewards = emptyList(),
                     claimId = "claim-id",
+                    claimEvidenceKnown = true,
                 ),
             ),
             totalDrops = 1,

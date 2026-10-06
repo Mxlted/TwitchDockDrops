@@ -42,7 +42,7 @@ class LocalMinerRuntimeStartupTest {
     @Test
     fun `reward inventory survives partial refresh and clears with session reset`() = runBlocking {
         val store = sessionStore()
-        store.saveTwitchSession(StoredTwitchSession("test-token", "user", "device", Instant.EPOCH))
+        store.saveTwitchSession(StoredTwitchSession("test-token", "123", "device", Instant.EPOCH))
         val reward = RewardCampaign("reward", "Event", null, null, null, Instant.EPOCH,
             Instant.parse("2027-01-01T00:00:00Z"), listOf("Badge"))
         val api = RecordingTwitchApi()
@@ -73,7 +73,7 @@ class LocalMinerRuntimeStartupTest {
         val sessionStore = sessionStore()
         val storedSession = StoredTwitchSession(
             accessToken = "test-token",
-            userId = "user-123",
+            userId = "123",
             deviceId = "device-123",
             savedAt = Instant.parse("2026-08-10T12:00:00Z"),
             username = "cached_account",
@@ -98,7 +98,7 @@ class LocalMinerRuntimeStartupTest {
     @Test
     fun `older sessions load their username after inventory and clear it on reset`() = runBlocking {
         val store = sessionStore()
-        store.saveTwitchSession(StoredTwitchSession("test-token", "user-123", "device", Instant.EPOCH))
+        store.saveTwitchSession(StoredTwitchSession("test-token", "123", "device", Instant.EPOCH))
         val runtime = runtime(store, RecordingTwitchApi())
         try {
             runtime.bootstrap()
@@ -116,7 +116,7 @@ class LocalMinerRuntimeStartupTest {
         val sessionStore = sessionStore()
         val storedSession = StoredTwitchSession(
             accessToken = "test-token",
-            userId = "user-123",
+            userId = "123",
             deviceId = "device-123",
             savedAt = Instant.parse("2026-08-10T12:00:00Z"),
         )
@@ -160,7 +160,7 @@ class LocalMinerRuntimeStartupTest {
             store.saveTwitchSession(
                 StoredTwitchSession(
                     accessToken = "test-token",
-                    userId = "user-123",
+                    userId = "123",
                     deviceId = "device-123",
                     savedAt = Instant.parse("2026-08-10T12:00:00Z"),
                 ),
@@ -252,7 +252,7 @@ private class RecordingTwitchApi(
 
     override suspend fun validateAccessToken(accessToken: String): ValidatedToken {
         validationRequest.complete(accessToken)
-        return ValidatedToken("user-123", "client", username = "cozy_collector")
+        return ValidatedToken("123", "client", username = "cozy_collector")
     }
 
     override suspend fun fetchEligibleChannels(

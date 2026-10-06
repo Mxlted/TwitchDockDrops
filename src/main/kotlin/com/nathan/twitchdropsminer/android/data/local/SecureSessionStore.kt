@@ -21,7 +21,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 class SecureSessionStore(
-    dataDirectory: Path,
+    internal val dataDirectory: Path,
     configuredKey: String? = null,
 ) {
     private val sessionFile = dataDirectory.resolve("session.enc")
@@ -38,6 +38,9 @@ class SecureSessionStore(
     fun saveTwitchSession(session: StoredTwitchSession) {
         val plainText = buildJsonObject {
             put("accessToken", session.accessToken)
+            session.clientId?.let { put("clientId", it) }
+            session.refreshToken?.let { put("refreshToken", it) }
+            session.tokenExpiresAt?.let { put("tokenExpiresAt", it.toString()) }
             put("userId", session.userId)
             put("deviceId", session.deviceId)
             put("savedAt", session.savedAt.toString())
@@ -83,6 +86,9 @@ class SecureSessionStore(
             ) as JsonObject
             StoredTwitchSession(
                 accessToken = root.requiredString("accessToken"),
+                clientId = root["clientId"]?.jsonPrimitive?.contentOrNull,
+                refreshToken = root["refreshToken"]?.jsonPrimitive?.contentOrNull,
+                tokenExpiresAt = root["tokenExpiresAt"]?.jsonPrimitive?.contentOrNull?.let(Instant::parse),
                 userId = root.requiredString("userId"),
                 deviceId = root.requiredString("deviceId"),
                 savedAt = Instant.parse(root.requiredString("savedAt")),

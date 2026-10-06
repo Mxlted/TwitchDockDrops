@@ -13,6 +13,7 @@ import com.nathan.twitchdropsminer.android.data.model.RuntimeSnapshot
 import com.nathan.twitchdropsminer.android.data.twitch.CategorySearchRequest
 import com.nathan.twitchdropsminer.android.data.twitch.TwitchCategoryPage
 import com.nathan.twitchdropsminer.android.runtime.CampaignPrioritySelector
+import com.nathan.twitchdropsminer.android.data.model.withRewardEligibility
 import java.time.Duration
 import java.time.Instant
 import kotlinx.serialization.json.Json
@@ -64,6 +65,8 @@ private fun AppSettings.toJson(): JsonObject = buildJsonObject {
     put("inventoryRefreshMinutes", inventoryRefreshMinutes)
     put("fallbackToOtherGames", fallbackToOtherGames)
     put("debugLogging", debugLogging)
+    put("allowedRewardTypes", allowedRewardTypes.sorted().toJsonArray { buildStringJson(it) })
+    put("excludedRewardNames", excludedRewardNames.toJsonArray { buildStringJson(it) })
     put("selectedGamePriority", selectedGamePriority.toJsonArray { buildStringJson(it) })
     put("excludedCampaignIds", excludedCampaignIds.sorted().toJsonArray { buildStringJson(it) })
     put(
@@ -149,7 +152,7 @@ private fun Campaign.toJson(settings: AppSettings): JsonObject = buildJsonObject
     put("excluded", settings.isCampaignExcluded(this@toJson))
     put("priorityIndex", settings.gamePriorityIndex(gameName) ?: -1)
     put("earnable", canEarnLocally)
-    put("drops", drops.toJsonArray(CampaignDrop::toJson))
+    put("drops", withRewardEligibility(settings).drops.toJsonArray(CampaignDrop::toJson))
 }
 
 private fun CampaignDrop.toJson(): JsonObject = buildJsonObject {
@@ -161,6 +164,9 @@ private fun CampaignDrop.toJson(): JsonObject = buildJsonObject {
     put("progress", progressFraction.toDouble())
     put("claimed", isClaimed)
     put("canClaim", canClaim)
+    putNullable("blockedReason", blockedReason)
+    put("eligibleByFilter", eligibleByFilter)
+    put("preconditionDropIds", preconditionDropIds.toJsonArray { buildStringJson(it) })
     put("completed", hasCompletedProgress)
     putInstant("startsAt", startsAt)
     putInstant("endsAt", endsAt)

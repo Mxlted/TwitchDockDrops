@@ -33,6 +33,8 @@ fun main() {
         secureSessionStore = sessionStore,
         logRepository = logRepository,
         twitchApiClient = TwitchApiClient(httpClient),
+        twitchEvents = com.nathan.twitchdropsminer.android.data.twitch.TwitchEvents(httpClient),
+        tvAuthenticationApi = TwitchApiClient(httpClient, deviceClientId = com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId),
         networkStatusProvider = networkStatusProvider,
         browserRenewal = browserRenewal?.let { client -> { context -> client.renew(context) } },
         browserLeaseRevoke = browserRenewal?.let { client -> { lease -> client.revoke(lease) } },

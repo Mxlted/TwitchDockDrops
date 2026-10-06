@@ -103,7 +103,8 @@ encrypted save. Each helper lease binds to the first accepted account. Renewal g
 generation-guarded runtime authentication command and resumes saved mining intent. Chromium is not
 installed in the JVM image; renewal runs in the optional browser companion or desktop helper.
 Upstream's helper protocol is not supported.
-Existing Android sessions remain supported; the superseded Smart TV client switch is not adopted.
+Existing Android mobile sessions remain supported. The older proposal to replace the default client
+was not adopted; the new Android TV flow is separate and experimental (see below).
 
 `BrowserLoginAdmission` owns a single in-memory pairing lease: a random 72-bit one-use code with a
 ten-minute expiry and five-guess limit becomes a random 256-bit helper ticket. The initial ticket
@@ -266,7 +267,7 @@ local logs. `GET /api/events` is a server-sent event stream of the same document
 device code secret, encryption key, and filesystem paths are never serialized. Campaign ACL
 membership remains server-side for selection and is not included in campaign state payloads.
 
-`snapshot.account.method` is `device`, `browser`, or `dashboard` during integrated sign-in. An accepted
+`snapshot.account.method` is `device`, `android_tv` (experimental), `browser`, or `dashboard` during integrated sign-in. An accepted
 integrated session uses `browser`, since its persisted credential type is the same as the helper's.
 `snapshot.account.username` is nullable public identity from the OAuth validation response's `login`
 field, exposed only while authenticated. Browser and device login save it inside the existing
@@ -365,6 +366,75 @@ Direct execution listens on loopback by default. Compose explicitly uses a conta
 Reverse proxies must configure external trusted hosts and origins explicitly.
 
 ## Persistence
+
+### Experimental TV authentication, claim recovery, and event updates
+
+The optional `POST /api/auth/tv/start` command accepts only `{}` with the normal Host/Origin and
+body restrictions. It creates a fresh device identity using the Android TV OAuth client, never
+converts an Android mobile or browser token. Browser login remains the default. Acceptance requires
+matching OAuth client/account identity and successful direct Twitch Inventory **and** Campaigns
+responses. No external campaign catalog is used. The reference's catalog-based discovery is not
+evidence that Android TV supports these direct operations; live compatibility remains unverified.
+
+TV access/refresh tokens, client identity, and expiry live inside the existing AES-GCM session
+envelope. Renewal starts five minutes before expiry, validates the same account and both Drops
+queries, and atomically saves both tokens through the serialized runtime. Generation checks reject
+late reset/replacement/shutdown results. Stop preserves authentication renewal but does not resume
+mining. HTTP 429 renewal retries are bounded (five attempts, 1–60 seconds); an ambiguous exchange is
+not replayed. After receiving a rotation, validation/storage retries retain that candidate in memory
+rather than spending the preceding refresh token again. A crash between Twitch rotation and local
+commit can require reconnecting; atomic local replacement is not a distributed transaction. An
+expired TV access token preserves its encrypted refresh credential for renewal.
+
+`ClaimHistoryStore` writes account-scoped `claims-<numeric-user-id>.json` files using owner-only atomic
+replacement. Each file holds at most 2,000 pending/confirmed records and has a 4 MiB read/write limit.
+Only old confirmed records may be evicted; pending records are never silently evicted. Unreadable or
+corrupt history stays in place and prevents further automatic claims until recovered. Intent is
+durable before an upstream claim. Success/already-claimed responses confirm it; ambiguous network,
+authentication, and unknown responses keep it pending. Explicit terminal rejection releases intent
+while preserving the existing in-process terminal suppression. Restart reconciliation uses only
+freshly returned inventory, never absence from a partial inventory or a local watch estimate.
+Claimed evidence confirms intent. An explicit unclaimed, claimable drop with a claim identifier can
+release pending intent after the existing five-minute cooldown. This is not exactly-once delivery.
+Importing benefit evidence requires every benefit and a matching award window. Dates shown in
+history are local first-confirmation times, not asserted Twitch award times. Sign-out retains history
+on disk, while another account cannot read it through the API.
+
+`GET /api/claims` returns only `{records:[{campaignId,dropId,campaign,reward,game,state,recordedAt}]}`
+for the authenticated snapshot account. Loading failures return a stable 503 `error`. No claim
+instance IDs, access/refresh tokens, or filesystem paths are returned.
+
+`TwitchEvents` subscribes server-side to `user-drop-events.<account>`, and current-channel
+`video-playback-by-id` / `broadcast-settings-update` topics at the fixed TLS PubSub endpoint.
+Progress, claim availability, offline, stream-up and broadcast changes are **invalidation hints**:
+the authoritative runtime reloads inventory and reselects/rechecks channels. Notifications never
+set claimed/progress state themselves. A conflated queue, 128-message duplicate window, ten-second
+refresh coalescing, subscription acknowledgement timeout, PING/PONG checks, and capped reconnect
+backoff bound work. Session/mining generations reject stale hints; subscriptions are children of
+the mining job and cancel on Stop, reset, replacement, or shutdown. Polling remains active whether
+subscriptions succeed or fail. Private protocol compatibility needs live verification.
+
+### Reward eligibility contract
+
+Settings add `allowedRewardTypes` (at most 100 strings of 80 characters) and `excludedRewardNames`
+(at most 100 literal substrings of 200 characters). Both accept empty arrays; an empty type set
+allows all types. Names are trimmed and deduplicated case-insensitively, types normalized uppercase.
+Types use the existing Twitch `benefit.distributionType`, falling back to `benefit.type`/edge type
+or `UNKNOWN`; the UI lists values observed in inventory plus saved choices, without guessing types
+from names. Any matching benefit selects a drop. Required prerequisites remain eligible even when
+their type is not selected. Explicit name exclusions apply to drop and benefit names and block
+dependent branches. Open Reward Campaigns remain display-only.
+
+The dependency evaluator detects missing IDs, duplicate IDs, cycles/excessive depth, impossible
+windows, expired unearned prerequisites, and non-watch rewards. Shared prerequisites remain useful
+to any viable selected branch. Claimed prerequisites stay satisfied regardless of filters/old dates;
+unknown dependencies never count as claimed. Unclaimed predecessors must be authoritatively claimed
+before successors unlock. Graph and filter results are recomputed on settings changes without
+discarding original metadata or game priorities. Campaign drops expose `blockedReason`,
+`eligibleByFilter`, and `preconditionDropIds`; the dashboard escapes the compact reason. These checks
+use the earliest possible finish along prerequisite paths to reject chains that cannot fit their
+remaining watch time. This optimistic lower bound does not guarantee completion when branches
+compete for watch time, streams go offline, or progress/claims are delayed.
 
 The Compose volume at `/data` is the only mutable application filesystem:
 
