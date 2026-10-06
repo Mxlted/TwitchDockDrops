@@ -123,12 +123,15 @@ internal fun validateCampaignMetadata(record: JsonObject): JsonObject {
     val restriction = allow.getValue("isEnabled").jsonPrimitive
     require(!restriction.isString)
     val restricted = requireNotNull(restriction.booleanOrNull)
+    require(allow["channels"] == null || allow["channels"] == JsonNull || allow["channels"] is JsonArray)
     val channels = if (restricted) allow.getValue("channels").jsonArray else JsonArray(emptyList())
     require(channels.size <= 100 && (!restricted || channels.isNotEmpty()))
-    channels.forEach {
+    val cleanChannels = channels.map {
         val channel = it.jsonObject
         require(channel.text("id").toLong() > 0)
-        require(channel.text("login").matches(Regex("[A-Za-z0-9_]{1,100}")))
+        val login = channel.text(if (channel["login"] == null || channel["login"] == JsonNull) "name" else "login")
+        require(login.matches(Regex("[A-Za-z0-9_]{1,100}")))
+        JsonObject(channel + ("login" to JsonPrimitive(login)))
     }
     val drops = record.getValue("timeBasedDrops").jsonArray
     require(drops.size <= 256)
@@ -157,5 +160,5 @@ internal fun validateCampaignMetadata(record: JsonObject): JsonObject {
         JsonObject(drop - "self" + if (subs > 0) mapOf("requiredMinutesWatched" to JsonPrimitive(0)) else emptyMap())
     }
     return JsonObject(record - "self" + mapOf("timeBasedDrops" to JsonArray(cleanDrops),
-        "allow" to JsonObject(allow + ("channels" to channels))))
+        "allow" to JsonObject(allow + ("channels" to JsonArray(cleanChannels)))))
 }

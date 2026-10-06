@@ -98,6 +98,10 @@ OAuth token endpoint, never URLs, logs, or public state. Redirects and implicit 
 are disabled; ambiguous token rotation requires reconnecting instead of blindly replaying it.
 TV acceptance/rotation requires OAuth identity and usable Twitch account inventory before atomic
 encrypted save. Catalog failure never invalidates Twitch credentials.
+Usable partial inventory can pass that check: malformed campaign records remain excluded and cannot
+acquire account state from the public feed. Invalid historical awards supply no claim evidence.
+A nonempty campaign list with no usable records still fails admission/rotation, preserving the saved
+credential. Diagnostics expose only fixed record categories and counts.
 An absent/null/zero token lifetime records no advertised deadline, not proof of indefinite validity;
 identity/Drops checks and authoritative-invalidity handling remain required. Malformed successful
 device exchanges are terminal because the code may already be consumed. Public rejection messages

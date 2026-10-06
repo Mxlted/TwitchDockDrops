@@ -434,6 +434,11 @@ It does not convert existing mobile/browser credentials. Existing encrypted cred
 failed attempt. Restarting reloads the saved credentials, subject to their existing renewal mode;
 a retained browser session may still require reconnecting. Browser login remains available.
 OAuth identity and usable Twitch account inventory must both succeed before acceptance/renewal.
+If an older build reports **Twitch inventory is incomplete or malformed; TV credentials preserved**,
+rebuild the app and start TV login with a fresh code. The inventory adapter now accepts the query's
+optional metadata fields and claimed drops without watched minutes. One malformed neighboring
+record no longer blocks an otherwise usable inventory. Campaigns still reports partial data with
+rejection categories/counts; a wholly unusable response still preserves the previous credentials.
 TV campaign discovery uses SunkwiBOT's public catalog; TV sessions never require the gated Twitch
 campaign list/detail operations. Browser sessions retain their direct discovery path. No new
 configuration, credentials, volume, ports or companion service is required. The JVM needs outbound

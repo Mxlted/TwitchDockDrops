@@ -9,7 +9,50 @@ internal data class TvAccountInventory(
     val awards: Map<String, Instant>,
     val rejectedIds: Set<String>,
     val diagnostics: List<String>,
+    val usableForLogin: Boolean,
 )
+
+/** Inventory is a different projection from the public catalog, not a catalog record with self added. */
+private fun normalizeTvCampaignMetadata(record: JsonObject): JsonObject {
+    val game = record.getValue("game").jsonObject
+    val allow = record.getValue("allow").jsonObject
+    val channels = allow["channels"]
+    val flag = allow["isEnabled"]
+    val normalizedAllow = if (flag == null || flag == JsonNull) {
+        // Inventory can omit isEnabled: the returned channel list itself is the restriction.
+        require(channels == JsonNull || channels is JsonArray)
+        JsonObject(allow + ("isEnabled" to JsonPrimitive(channels is JsonArray && channels.isNotEmpty())))
+    } else allow
+    val rawDrops = record.getValue("timeBasedDrops").jsonArray.also { require(it.size <= 256) }
+    val drops = rawDrops.map { element ->
+        val drop = element.jsonObject
+        val benefits = drop.getValue("benefitEdges").jsonArray.also { require(it.size in 1..64) }.map { edge ->
+            val obj = edge.jsonObject
+            val benefit = obj.getValue("benefit").jsonObject
+            val kind = benefit["distributionType"]
+            JsonObject(obj + ("benefit" to if (kind == null || kind == JsonNull)
+                JsonObject(benefit + ("distributionType" to JsonPrimitive("UNKNOWN"))) else benefit))
+        }
+        JsonObject(drop + ("benefitEdges" to JsonArray(benefits)))
+    }
+    val status = record["status"]
+    val normalized = JsonObject(record + mapOf(
+        "game" to if (game["displayName"] == null || game["displayName"] == JsonNull)
+            JsonObject(game + ("displayName" to game.getValue("name"))) else game,
+        "allow" to normalizedAllow,
+        "timeBasedDrops" to JsonArray(drops),
+        // The shared mapper derives active/upcoming/expired from these validated dates.
+        "status" to if (status == null || status == JsonNull) JsonPrimitive("ACTIVE") else status,
+    ))
+    val metadata = validateCampaignMetadata(normalized)
+    // Metadata validation deliberately removes self. Restore only Twitch's separately validated state.
+    return JsonObject(metadata + mapOf(
+        "self" to (record["self"] ?: JsonNull),
+        "timeBasedDrops" to JsonArray(metadata.getValue("timeBasedDrops").jsonArray.mapIndexed { index, drop ->
+            JsonObject(drop.jsonObject + ("self" to (drops[index]["self"] ?: JsonNull)))
+        }),
+    ))
+}
 
 internal fun parseTvAccountInventory(response: JsonObject): TvAccountInventory {
     val inventory = (response["data"] as? JsonObject)?.get("currentUser") as? JsonObject
@@ -19,42 +62,56 @@ internal fun parseTvAccountInventory(response: JsonObject): TvAccountInventory {
     if (response["errors"]?.let { it !is JsonArray || it.isNotEmpty() } == true || records == null || awards == null || records.size > 2000 || awards.size > 10000) {
         throw TwitchApiException(TwitchApiErrorType.UnexpectedResponse, "Twitch inventory is unavailable or malformed; TV credentials preserved.")
     }
-    var partial = false
+    var rejectedAwards = 0
+    val failures = linkedMapOf<String, Int>()
+    fun reject(reason: String) { failures[reason] = (failures[reason] ?: 0) + 1 }
     val awardMap = linkedMapOf<String, Instant>()
     awards.forEach { element ->
         val parsed = runCatching {
             val award = element.jsonObject
-            val id = award.getValue("id").jsonPrimitive.content.also { require(it.isNotBlank()) }
+            val id = award.getValue("id").jsonPrimitive.also { require(it.isString && it.content.isNotBlank() && it.content.length <= 2048) }.content
             id to Instant.parse(award.getValue("lastAwardedAt").jsonPrimitive.content)
         }.getOrNull()
-        if (parsed == null) partial = true else awardMap[parsed.first] = parsed.second
+        if (parsed == null) rejectedAwards++ else {
+            // Multiple awards of one benefit are legal; response order must not change the evidence.
+            awardMap[parsed.first] = maxOf(awardMap[parsed.first] ?: Instant.MIN, parsed.second)
+        }
     }
     val seen = mutableSetOf<String>()
     val rejected = mutableSetOf<String>()
     val campaigns = linkedMapOf<String, Campaign>()
     records.forEach { element ->
         val record = element as? JsonObject
-        val id = (record?.get("id") as? JsonPrimitive)?.contentOrNull
-        if (id != null && !seen.add(id)) { rejected += id; campaigns.remove(id); partial = true; return@forEach }
+        val id = (record?.get("id") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+        if (id != null && !seen.add(id)) { rejected += id; campaigns.remove(id); reject("duplicate campaign IDs"); return@forEach }
+        var stage = "campaign metadata"
         val campaign = runCatching {
             requireNotNull(record)
-            val metadata = validateCampaignMetadata(record)
+            val metadata = normalizeTvCampaignMetadata(record)
+            stage = "campaign account state"
             require(record["self"] == null || record["self"] == JsonNull || record["self"] is JsonObject)
             val self = record["self"] as? JsonObject
             val linked = (self?.get("isAccountConnected") as? JsonPrimitive)?.booleanOrNull
-            require(self == null || (linked != null && !(self["isAccountConnected"] as JsonPrimitive).isString))
-            val dropRecords = record.getValue("timeBasedDrops").jsonArray.associateBy { it.jsonObject.getValue("id").jsonPrimitive.content }
-            dropRecords.values.forEach {
+            require(self?.get("isAccountConnected") == null || self["isAccountConnected"] == JsonNull ||
+                (linked != null && !(self["isAccountConnected"] as JsonPrimitive).isString))
+            stage = "drop account state"
+            val dropRecords = metadata.getValue("timeBasedDrops").jsonArray.associateBy { it.jsonObject.getValue("id").jsonPrimitive.content }
+            val validatedDrops = dropRecords.values.map {
+                val drop = it.jsonObject
                 val state = it.jsonObject["self"]
                 if (state != null && state != JsonNull) {
                     val obj = state.jsonObject
                     require(!obj.getValue("isClaimed").jsonPrimitive.isString && obj.getValue("isClaimed").jsonPrimitive.booleanOrNull != null)
-                    require(!obj.getValue("currentMinutesWatched").jsonPrimitive.isString && obj.getValue("currentMinutesWatched").jsonPrimitive.intOrNull in 0..100000)
+                    val minutes = obj["currentMinutesWatched"]
+                    val claimedWithoutMinutes = obj.getValue("isClaimed").jsonPrimitive.boolean && (minutes == null || minutes == JsonNull)
+                    require(claimedWithoutMinutes || (minutes is JsonPrimitive && !minutes.isString && minutes.intOrNull in 0..100000))
                     require(obj["dropInstanceID"] == null || obj["dropInstanceID"] == JsonNull || obj["dropInstanceID"]!!.jsonPrimitive.isString)
                     require((obj["dropInstanceID"] as? JsonPrimitive)?.contentOrNull.orEmpty().length <= 2048)
-                }
+                    if (claimedWithoutMinutes) JsonObject(drop + ("self" to JsonObject(obj + ("currentMinutesWatched" to JsonPrimitive(0)))))
+                    else drop
+                } else drop
             }
-            val mapped = TwitchCampaignMapper.mapCampaign(JsonObject(record + ("allow" to metadata.getValue("allow"))), awardMap)
+            val mapped = TwitchCampaignMapper.mapCampaign(JsonObject(metadata + ("timeBasedDrops" to JsonArray(validatedDrops))), awardMap)
             require(mapped.diagnostics.isEmpty())
             requireNotNull(mapped.campaign).let { value -> value.copy(
                 publicCatalog = true, linked = linked == true, linkStatusKnown = linked != null,
@@ -66,11 +123,16 @@ internal fun parseTvAccountInventory(response: JsonObject): TvAccountInventory {
                 },
             ) }
         }.getOrNull()
-        if (campaign == null) { partial = true; if (id != null) rejected += id }
+        if (campaign == null) { reject(stage); if (id != null) rejected += id }
         else campaigns[campaign.id] = campaign
     }
-    return TvAccountInventory(campaigns.values.toList(), awardMap, rejected,
-        if (partial) listOf("Twitch inventory is partial; account state for rejected records is unknown.") else emptyList())
+    val diagnostics = buildList {
+        if (failures.isNotEmpty()) add("Twitch inventory is partial: ${campaigns.size} of ${records.size} campaigns usable; " +
+            failures.entries.joinToString { "${it.key}: ${it.value}" } + ". Rejected account state is unknown.")
+        if (rejectedAwards > 0) add("Twitch award history is partial: $rejectedAwards invalid records ignored; no claims inferred from them.")
+    }
+    return TvAccountInventory(campaigns.values.toList(), awardMap, rejected, diagnostics,
+        usableForLogin = records.isEmpty() || campaigns.isNotEmpty())
 }
 
 internal fun mergeTvSources(account: TvAccountInventory, catalog: PublicCatalogResult): CampaignInventory {

@@ -376,6 +376,20 @@ matching OAuth client/account identity and a usable Twitch account Inventory res
 client never calls gated Campaigns or CampaignDetails operations, including admission, renewal,
 manual refresh, mining and claim recovery. Browser admission and discovery are unchanged.
 Public catalog availability is not an authentication requirement; OAuth success alone is insufficient.
+Inventory usability is separate from completeness: a correctly shaped empty campaign list or at
+least one safely parsed campaign permits acceptance/renewal. A bad neighboring campaign or historical
+award produces incomplete-data diagnostics rather than rejecting the entire login. A nonempty list
+with no usable campaigns, missing/wrong collection types, or GraphQL errors still rejects replacement.
+
+The TV inventory adapter normalizes its own query projection before metadata validation: omitted
+status uses validated dates, `game.name` can supply the display name, and an omitted/null restriction
+flag uses the returned channel list (nonempty means restricted; empty/null means unrestricted).
+It never invents a missing channel list when the flag is absent. Channels accept `login` or `name`;
+missing reward distribution type is `UNKNOWN`. Missing/null linkage stays unknown. Claimed drops
+may omit watched minutes, but unclaimed drops must supply a nonnegative integer. Missing dependency
+lists and malformed restrictions still reject the campaign. Public catalog records retain their
+stricter explicit status/restriction/type requirements; public account fields remain discarded.
+Diagnostics contain only fixed rejection categories and counts, never IDs or upstream values.
 
 TV discovery combines account Inventory with `https://twitch-drops-api.sunkwi.com/v2/drops`.
 `PublicCatalogClient` owns an independent anonymous HTTP client and a bounded in-memory metadata

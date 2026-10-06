@@ -3,6 +3,50 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## TV inventory projection and partial admission repair - 2026-10-05
+
+The reported **Twitch inventory is incomplete or malformed; TV credentials preserved** message
+came from rejecting any per-record inventory diagnostic during TV admission. Inspection also found
+that the adapter required public-catalog metadata fields from the differently shaped account
+Inventory response. No real account response was captured, so the exact rejected field in the user's
+session remains unverified. Read-only reference inspection of `ohne-b/twitch-drops-miner` at
+`c9c2c3a550625354ba162cb71ce31725ef537bae` (`domain.rs`, `inventory.rs`, `catalog.rs`) and an anonymous
+public-feed read informed the supported variants; implementation and synthetic fixtures are independent.
+
+- [x] TV-only normalization supports optional status, game name fallback, omitted restriction flags
+  with explicit channel lists, channel `name`/`login`, unknown reward types and unknown linkage.
+  Claimed drops may omit watched minutes; unclaimed drops still require valid numeric progress.
+- [x] Login/renewal accepts a correctly shaped empty inventory or at least one usable campaign.
+  Malformed neighbors/history retain incomplete-data diagnostics; nonempty wholly unusable inventory
+  and invalid response envelopes still reject replacement and preserve the saved credential.
+- [x] Rejected campaign IDs remain excluded from catalog substitution. Missing prerequisites,
+  malformed channel restrictions and invalid account state still fail parsing. Public metadata keeps
+  its strict schema and cannot supply linkage/progress/claim evidence. No gated discovery calls added.
+- [x] Fixed category/count diagnostics distinguish campaign metadata, campaign/drop account state,
+  duplicate IDs and historical awards without logging raw fields, IDs or private responses.
+- [x] Restricted public catalog channels now accept `name` as well as `login`. Browser flow unchanged.
+
+Verification:
+
+- Root `gradle test installDist`: **236 JVM tests passed**, zero failures/errors/skips; JDK 21 /
+  Gradle 9.5.1 distribution built. Initial sandbox dependency resolution failed; the permitted run
+  passed. Six new tests cover inventory projections, restrictions, nullable claimed progress, partial
+  admission, wholly unusable rejection, bad award history and sanitized diagnostics. Existing
+  credential-preservation, lifecycle, catalog isolation and claim tests passed.
+- **48 Node tests passed**. No web scripts, state contract or visual layout changed.
+- Docker `desktop-linux`, engine 29.8.2: `dockdrops:tv-inventory-fix-20261005` built once, including
+  clean JVM tests/distribution. An isolated non-root, read-only container with no network/published
+  ports and tmpfs data passed the existing app health command: running, healthy, zero restarts.
+  The disposable container was stopped and removed; health confirms local readiness only.
+- Complete task diff review and `git diff --check` passed.
+- Baseline was clean `main` at `15d75ed`. Optional Android checkout remains clean at
+  `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. Saved data, credentials and running services untouched.
+
+Remaining user checks: rebuild/restart the app and request a fresh TV login code; confirm admission,
+catalog coverage and partial-data messages, natural renewal, confirmed earning, restricted-channel
+selection/failover and claims. Synthetic checks cannot establish that this real-account failure is
+resolved. No live account, browser visual, deployment or push work was performed.
+
 ## TV public catalog discovery - 2026-10-05
 
 This supersedes the direct Campaigns requirement in the earlier TV implementation/expiry records.

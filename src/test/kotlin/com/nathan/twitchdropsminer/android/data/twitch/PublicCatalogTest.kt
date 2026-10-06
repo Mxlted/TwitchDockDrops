@@ -35,6 +35,112 @@ class PublicCatalogTest {
         gqlEndpoint = twitch.url("/gql").toString(), oauthBaseUrl = twitch.url("/").toString(),
         publicCatalogClient = PublicCatalogClient(catalog.url("/catalog").toString()) { now })
 
+    private fun inventoryProjection(claimed: Boolean = false): JsonObject {
+        val original = record(minutes = 12)
+        val drop = original.getValue("timeBasedDrops").jsonArray.single().jsonObject
+        val benefit = drop.getValue("benefitEdges").jsonArray.single().jsonObject.getValue("benefit").jsonObject
+        return JsonObject(original - "status" + mapOf(
+            "game" to buildJsonObject { put("id", "1"); put("name", "Game") },
+            "allow" to Json.parseToJsonElement("""{"channels":[{"id":"7","name":"allowed"}]}"""),
+            "self" to buildJsonObject {},
+            "timeBasedDrops" to JsonArray(listOf(JsonObject(drop + mapOf(
+                "benefitEdges" to buildJsonArray { add(buildJsonObject { put("benefit", JsonObject(benefit - "distributionType")) }) },
+                "self" to if (claimed) buildJsonObject { put("isClaimed", true); put("currentMinutesWatched", JsonNull) }
+                    else drop.getValue("self"),
+            )))),
+        ))
+    }
+
+    @Test fun `inventory projection accepts nullable claimed minutes and omitted metadata without public assumptions`() {
+        for (claimed in listOf(false, true)) {
+            val account = parseTvAccountInventory(inventory(inventoryProjection(claimed)))
+            assertTrue(account.usableForLogin); assertTrue(account.diagnostics.isEmpty())
+            val campaign = account.campaigns.single()
+            assertEquals("Game", campaign.gameName)
+            assertEquals("allowed", campaign.allowedChannels.single().login)
+            assertFalse(campaign.linkStatusKnown)
+            assertEquals(claimed, campaign.drops.single().isClaimed)
+            assertEquals(if (claimed) 60 else 12, campaign.drops.single().currentMinutes)
+            assertEquals("UNKNOWN", campaign.drops.single().rewards.single().type)
+            assertTrue(campaign.drops.single().progressKnown)
+        }
+    }
+
+    @Test fun `inventory optional flags never widen malformed or explicit channel restrictions`() {
+        val original = inventoryProjection()
+        for (channels in listOf(JsonNull, JsonArray(emptyList()))) {
+            val unrestricted = JsonObject(original + ("allow" to buildJsonObject { put("channels", channels) }))
+            assertTrue(parseTvAccountInventory(inventory(unrestricted)).campaigns.single().allowedChannels.isEmpty())
+        }
+        for (allow in listOf("{}", "null", """{"channels":{}}""", """{"isEnabled":true,"channels":[]}""",
+            """{"isEnabled":"false","channels":[]}""", """{"channels":[{"id":"7","name":"https://bad.invalid"}]}""")) {
+            val bad = JsonObject(original + ("allow" to Json.parseToJsonElement(allow)))
+            val account = parseTvAccountInventory(inventory(bad))
+            assertFalse(account.usableForLogin, allow)
+            assertEquals(setOf("campaign"), account.rejectedIds)
+        }
+    }
+
+    @Test fun `public restricted channels accept name while public schema remains strict`() {
+        val restricted = JsonObject(record() + ("allow" to Json.parseToJsonElement(
+            """{"isEnabled":true,"channels":[{"id":"7","name":"allowed"}]}""")))
+        assertEquals("allowed", parsePublicCatalog(feed(restricted), now).campaigns.single().allowedChannels.single().login)
+        assertTrue(parsePublicCatalog(feed(inventoryProjection()), now).campaigns.isEmpty())
+        val bad = JsonObject(record() + ("allow" to Json.parseToJsonElement("""{"isEnabled":false,"channels":{}}""")))
+        assertTrue(parsePublicCatalog(feed(bad), now).campaigns.isEmpty())
+    }
+
+    @Test fun `unclaimed drops still require typed progress and malformed account state cannot be filled by catalog`() {
+        val original = record(minutes = 12)
+        val drop = original.getValue("timeBasedDrops").jsonArray.single().jsonObject
+        for (state in listOf("{}", """{"isClaimed":false}""", """{"isClaimed":false,"currentMinutesWatched":null}""",
+            """{"isClaimed":"true","currentMinutesWatched":60}""", """{"isClaimed":false,"currentMinutesWatched":-1}""")) {
+            val bad = JsonObject(original + ("timeBasedDrops" to JsonArray(listOf(JsonObject(drop + ("self" to Json.parseToJsonElement(state)))))))
+            val account = parseTvAccountInventory(inventory(bad))
+            assertFalse(account.usableForLogin)
+            assertContains(account.diagnostics.single(), "drop account state: 1")
+            assertTrue(mergeTvSources(account, parsePublicCatalog(feed(record(minutes = 60)), now)).campaigns.isEmpty())
+        }
+    }
+
+    @Test fun `TV admission accepts usable partial inventory and still rejects wholly unusable responses`() = runBlocking {
+        MockWebServer().use { twitch -> MockWebServer().use { catalog ->
+            twitch.start(); catalog.start(); val client = api(twitch, catalog)
+            val damaged = JsonObject(record("damaged") - "allow")
+            twitch.enqueue(response("""{"client_id":"$TwitchTvClientId","user_id":"42"}"""))
+            twitch.enqueue(response(inventory(inventoryProjection(), damaged).toString()))
+            client.validateDropsAccess(session)
+            val partial = parseTvAccountInventory(inventory(inventoryProjection(), damaged))
+            assertContains(partial.diagnostics.single(), "1 of 2 campaigns usable")
+            assertEquals(setOf("damaged"), partial.rejectedIds)
+            for (body in listOf(inventory(damaged).toString(), """{"data":{"currentUser":{"inventory":{}}}}""",
+                """{"errors":[{"message":"private-error"}],"data":{"currentUser":null}}""")) {
+                twitch.enqueue(response("""{"client_id":"$TwitchTvClientId","user_id":"42"}"""))
+                twitch.enqueue(response(body))
+                val error = assertFails { client.validateDropsAccess(session) }
+                assertContains(error.message!!, "credentials preserved")
+                assertFalse(error.message!!.contains("private-error"))
+            }
+            assertEquals(0, catalog.requestCount)
+        } }
+    }
+
+    @Test fun `bad award history does not block usable login or invent claim evidence`() {
+        val response = inventory(record())
+        val data = response.getValue("data").jsonObject
+        val user = data.getValue("currentUser").jsonObject
+        val raw = user.getValue("inventory").jsonObject
+        val awards = Json.parseToJsonElement("""[{"id":"private-benefit","lastAwardedAt":"private-invalid"}]""")
+        val changed = JsonObject(response + ("data" to JsonObject(data + ("currentUser" to JsonObject(user +
+            ("inventory" to JsonObject(raw + ("gameEventDrops" to awards))))))))
+        val account = parseTvAccountInventory(changed)
+        assertTrue(account.usableForLogin)
+        assertTrue(account.awards.isEmpty())
+        assertContains(account.diagnostics.single(), "1 invalid records")
+        assertFalse(account.diagnostics.single().contains("private"))
+        assertFalse(account.campaigns.single().drops.single().isClaimed)
+    }
+
     @Test fun `catalog discards forged account state and selection preserves unknowns`() {
         val catalog = parsePublicCatalog(feed(record(minutes = 60)), now)
         assertNull(catalog.problem)

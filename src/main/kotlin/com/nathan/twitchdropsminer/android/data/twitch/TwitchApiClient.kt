@@ -363,8 +363,8 @@ class TwitchApiClient(
         validateSession(session)
         if (sessionClientId(session) == TwitchTvClientId) {
             val account = fetchTvAccountInventory(session)
-            if (account.diagnostics.isNotEmpty()) throw IllegalStateException(
-                "Twitch inventory is incomplete or malformed; TV credentials preserved.")
+            if (!account.usableForLogin) throw IllegalStateException(
+                "Twitch inventory has no usable campaign records; TV credentials preserved. " + account.diagnostics.joinToString(" "))
             return
         }
         val inventory = gql(session, TwitchOperation.Inventory.request())
