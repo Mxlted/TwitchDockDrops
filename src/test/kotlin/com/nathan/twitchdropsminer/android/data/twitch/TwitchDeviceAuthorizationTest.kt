@@ -42,6 +42,7 @@ class TwitchDeviceAuthorizationTest {
                 "access_denied" to "access_denied",
                 "expired_token" to "expired_token",
                 "invalid device code" to "expired_token",
+                "invalid_grant" to "invalid_grant",
             )) {
                 server.enqueue(json("""{"status":400,"message":"$message"}""", 400))
                 assertEquals(expected, assertFailsWith<DeviceAuthorizationException> {
@@ -91,6 +92,8 @@ class TwitchDeviceAuthorizationTest {
             }
             assertEquals("unsupported_error", pollError.oauthError)
             assertFalse(pollError.message.orEmpty().contains("sensitive-upstream-value"))
+            assertEquals(pollError.message, app.twitchdockdrops.security.SafeText.diagnostic(pollError.message))
+            assertFalse(pollError.message.orEmpty().contains("[redacted]"))
             for (body in listOf("sensitive-upstream-value", "[]", "null")) {
                 server.enqueue(json(body))
                 val malformed = assertFailsWith<TwitchApiException> {

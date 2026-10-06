@@ -48,6 +48,87 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test fun `malformed TV exchange stops polling and preserves the previous session`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val old = store.twitchSession()
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            server.start()
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody(
+                """{"access_token":"private-access","refresh_token":"private-refresh","expires_in":-1}"""))
+            val transport = com.nathan.twitchdropsminer.android.data.twitch.TwitchApiClient(
+                okhttp3.OkHttpClient(), oauthBaseUrl = server.url("/").toString(),
+                deviceClientId = com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId)
+            val api = object : TwitchApi by AuthenticationTwitchApi() {
+                override suspend fun pollDeviceToken(deviceCode: String, deviceId: String) =
+                    transport.pollDeviceToken(deviceCode, deviceId)
+            }
+            val runtime = runtime(store, api, tvAuthenticationApi = api)
+            try {
+                runtime.startTvAuthentication()
+                withTimeout(3000) { runtime.snapshot.first { it.currentTask == "Twitch login failed" } }
+                assertEquals(1, server.requestCount)
+                assertEquals(old, store.twitchSession())
+                assertTrue(runtime.snapshot.value.error!!.contains("new code"))
+                assertFalse(runtime.snapshot.value.error!!.contains("private-"))
+                assertFalse(runtime.snapshot.value.error!!.contains("Retrying"))
+            } finally { runtime.stopMiningAndJoin(shutdown = true) }
+        }
+    }
+
+    @Test fun `TV session without a deadline does not rotate continuously after restore`() = runBlocking {
+        val store = sessionStore()
+        val old = storedSession().copy(clientId = com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId,
+            refreshToken = "old-refresh", tokenExpiresAt = null)
+        store.saveTwitchSession(old)
+        val rotations = AtomicInteger()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun refreshTvSession(session: StoredTwitchSession): StoredTwitchSession {
+                rotations.incrementAndGet()
+                return session
+            }
+        }
+        val runtime = runtime(store, api)
+        try {
+            runtime.bootstrap()
+            withTimeout(3000) { runtime.snapshot.first { it.account.isAuthenticated } }
+            delay(1200) // The previous null-as-expired scheduler rotated after one second.
+            assertEquals(0, rotations.get())
+            assertEquals(old.accessToken, store.twitchSession()?.accessToken)
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `TV session without a deadline still renews after authoritative invalidation`() = runBlocking {
+        val store = sessionStore()
+        val old = storedSession().copy(clientId = com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId,
+            refreshToken = "old-refresh", tokenExpiresAt = null)
+        store.saveTwitchSession(old)
+        val rotations = AtomicInteger()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override suspend fun validateSession(session: StoredTwitchSession): ValidatedToken {
+                if (session.accessToken == old.accessToken) throw TwitchApiException(TwitchApiErrorType.InvalidToken, "Expired")
+                return ValidatedToken(session.userId, session.clientId!!)
+            }
+            override suspend fun refreshTvSession(session: StoredTwitchSession): StoredTwitchSession {
+                rotations.incrementAndGet()
+                return session.copy(accessToken = "new-access", refreshToken = "new-refresh", tokenExpiresAt = null)
+            }
+            override suspend fun validateDropsAccess(session: StoredTwitchSession) { validateSession(session) }
+            override suspend fun fetchCampaignInventory(session: StoredTwitchSession): CampaignInventory {
+                validateSession(session)
+                return CampaignInventory(emptyList())
+            }
+        }
+        val runtime = runtime(store, api)
+        try {
+            runtime.bootstrap()
+            withTimeout(4000) { while (store.twitchSession()?.refreshToken != "new-refresh") delay(10) }
+            delay(1200)
+            assertEquals(1, rotations.get())
+            assertEquals("new-access", store.twitchSession()?.accessToken)
+            assertNull(store.twitchSession()?.tokenExpiresAt)
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
     @Test fun `experimental TV acceptance failure preserves previous encrypted session`() = runBlocking {
         val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
         val old = store.twitchSession()

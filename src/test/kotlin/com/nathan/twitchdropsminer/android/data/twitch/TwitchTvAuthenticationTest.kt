@@ -17,6 +17,56 @@ class TwitchTvAuthenticationTest {
     private val session = StoredTwitchSession("old", "42", "tv-device", Instant.EPOCH,
         clientId = TwitchTvClientId, refreshToken = "private-refresh", tokenExpiresAt = Instant.EPOCH)
 
+    @Test fun `TV login and renewal accept unspecified and long token lifetimes`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val api = TwitchApiClient(OkHttpClient(), oauthBaseUrl = server.url("/").toString(), deviceClientId = TwitchTvClientId)
+            for (lifetime in listOf(null, "null", "0", "3600", "31536001", "4294967295", "\"4294967295\"")) {
+                val body = """{"access_token":"new-access","refresh_token":"new-refresh"${lifetime?.let { ",\"expires_in\":$it" }.orEmpty()}}"""
+                val before = Instant.now()
+                server.enqueue(response(body))
+                val issued = assertIs<DeviceTokenPollResult.Authorized>(api.pollDeviceToken("code", "device")).token
+                server.enqueue(response(body))
+                val renewed = api.refreshTvSession(session)
+                for (expiry in listOf(issued.expiresAt, renewed.tokenExpiresAt)) {
+                    val seconds = lifetime?.trim('"')?.toLongOrNull()
+                    if (seconds == null || seconds == 0L) assertNull(expiry)
+                    else {
+                        assertNotNull(expiry)
+                        assertTrue(expiry >= before.plusSeconds(seconds))
+                        assertTrue(expiry <= Instant.now().plusSeconds(seconds))
+                    }
+                }
+                assertEquals("new-refresh", issued.refreshToken)
+                val store = SecureSessionStore(directory)
+                store.saveTwitchSession(renewed)
+                assertEquals(renewed, store.twitchSession())
+            }
+        }
+    }
+
+    @Test fun `malformed successful exchanges are terminal and do not expose credentials`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val api = TwitchApiClient(OkHttpClient(), oauthBaseUrl = server.url("/").toString(), deviceClientId = TwitchTvClientId)
+            val invalidLifetimes = listOf("-1", "1.5", "true", "{}", "[]", "\"secret-lifetime\"", "9223372036854775807", "18446744073709551615")
+            val bodies = invalidLifetimes.map {
+                """{"access_token":"secret-access","refresh_token":"secret-refresh","expires_in":$it}"""
+            } + listOf("secret-body", "[]", "{}", """{"access_token":"secret-access","expires_in":3600}""")
+            for (body in bodies) {
+                server.enqueue(response(body))
+                val failure = assertFailsWith<DeviceAuthorizationException> { api.pollDeviceToken("secret-code", "device") }
+                assertEquals("invalid_token_response", failure.oauthError)
+                assertContains(failure.message!!, "new code")
+                assertFalse(failure.message!!.contains("secret-"))
+                assertNull(failure.cause)
+                server.enqueue(response(body))
+                assertFailsWith<IllegalStateException> { api.refreshTvSession(session) }
+            }
+            assertEquals(bodies.size * 2, server.requestCount)
+        }
+    }
+
     @Test fun `TV uses separate identity and refresh rotation remains encrypted`() = runBlocking {
         MockWebServer().use { server ->
             server.start()

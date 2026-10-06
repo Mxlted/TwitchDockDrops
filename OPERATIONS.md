@@ -443,6 +443,15 @@ retries are bounded; lost/ambiguous refresh replies require reconnecting, since 
 have been consumed. Process death between remote rotation and local save can also require login.
 Browser sessions retain their existing renewal behavior.
 
+If an older build reported **Invalid TV token expiry** after authorization, rebuild the app with
+the fix and start **Try experimental TV login** again to obtain a fresh code. The old code may have
+already been consumed. Login and renewal now accept an unspecified lifetime or a lifetime longer
+than one year; malformed successful replies stop with a new-code instruction. A session without
+an advertised deadline still has to pass identity and direct Drops checks and can be revoked.
+An **unsupported OAuth [redacted]** message in the older build was its generic rejection text
+passing through credential redaction, not the actual Twitch error. New messages remain readable
+without exposing Twitch response bodies. Live TV login and renewal still require verification.
+
 History retains at most 2,000 records per account and evicts only old confirmed entries. Sign-out
 keeps these files for that account's next login. Pending records are reconciled from fresh Twitch
 evidence after restart; a missing reward or failed inventory never proves failure or success.

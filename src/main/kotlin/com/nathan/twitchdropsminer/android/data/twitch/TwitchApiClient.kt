@@ -35,6 +35,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.FormBody
@@ -285,14 +286,23 @@ class TwitchApiClient(
                         "Twitch token polling temporarily failed (HTTP ${response.code}).",
                     )
                 }
-                val root = response.body.readOAuthObject("token polling")
                 if (response.isSuccessful) {
-                    return@withContext DeviceTokenPollResult.Authorized(
-                        TokenResponse(root["access_token"].asRequiredNonBlank("access_token"),
-                            if (deviceClientId == TwitchTvClientId) root["refresh_token"].asRequiredNonBlank("refresh_token") else null,
-                            if (deviceClientId == TwitchTvClientId) Instant.now().plusSeconds(root["expires_in"].asIntOrNull()?.takeIf { it in 1..31536000 }?.toLong() ?: error("Invalid TV token expiry.")) else null),
-                    )
+                    // A successful exchange may consume the code even when its reply is unusable.
+                    // Never send the runtime back to polling that same code after a parse failure.
+                    return@withContext try {
+                        val root = response.body.readOAuthObject("token polling")
+                        DeviceTokenPollResult.Authorized(
+                            if (deviceClientId == TwitchTvClientId) root.tvTokenResponse()
+                            else TokenResponse(root["access_token"].asRequiredNonBlank("access_token")),
+                        )
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        throw DeviceAuthorizationException("invalid_token_response",
+                            "Twitch returned an unusable authorization reply. Start login again for a new code; existing credentials were preserved.")
+                    }
                 }
+                val root = response.body.readOAuthObject("token polling")
                 // Twitch documents {status:400,message:"authorization_pending"}; also accept
                 // the standard OAuth error field, which takes precedence when present.
                 when (val oauthError = (root["error"] ?: root["message"]).asStringOrNull()) {
@@ -306,13 +316,17 @@ class TwitchApiClient(
                         "expired_token",
                         "Twitch device authorization expired.",
                     )
+                    "invalid_grant" -> throw DeviceAuthorizationException(
+                        "invalid_grant",
+                        "Twitch rejected the device authorization grant. Start login again for a new code.",
+                    )
                     null -> throw TwitchApiException(
                         TwitchApiErrorType.UnexpectedResponse,
                         "Twitch token polling returned a malformed error response.",
                     )
                     else -> throw DeviceAuthorizationException(
                         "unsupported_error",
-                        "Twitch token polling returned an unsupported OAuth error.",
+                        "Twitch rejected device authorization (HTTP ${response.code}). Start login again or use browser login.",
                     )
                 }
             }
@@ -354,10 +368,9 @@ class TwitchApiClient(
         okHttpClient.newCall(request).execute().use { response ->
             if (response.code == 429) throw TvRefreshThrottledException(response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 60) ?: 15)
             if (!response.isSuccessful) throw IllegalStateException("TV token renewal failed; saved credentials preserved. Reconnect if this persists.")
-            val root = response.body.readOAuthObject("TV renewal")
-            session.copy(accessToken = root["access_token"].asRequiredNonBlank("access_token"),
-                refreshToken = root["refresh_token"].asRequiredNonBlank("refresh_token"), savedAt = Instant.now(),
-                tokenExpiresAt = Instant.now().plusSeconds(root["expires_in"].asIntOrNull()?.takeIf { it in 1..31536000 }?.toLong() ?: error("Invalid TV token expiry.")))
+            val token = response.body.readOAuthObject("TV renewal").tvTokenResponse()
+            session.copy(accessToken = token.accessToken, refreshToken = token.refreshToken,
+                savedAt = Instant.now(), tokenExpiresAt = token.expiresAt)
         }
     }
 
@@ -1358,6 +1371,22 @@ private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
 private fun JsonElement?.asArray(): List<JsonElement> =
     (this as? JsonArray)?.toList() ?: emptyList()
+
+private fun JsonObject.tvTokenResponse(): TokenResponse {
+    val expiry = this["expires_in"]
+    // First-party token replies can omit a finite lifetime. Keep that distinct from an
+    // expired token; acceptance still requires OAuth identity and both direct Drops queries.
+    val seconds = if (expiry == null || expiry == JsonNull) null else
+        (expiry as? JsonPrimitive)?.longOrNull
+            ?.takeIf { it in 0..(Long.MAX_VALUE / 1000) }
+            ?: throw IllegalStateException("Invalid TV token lifetime.")
+    return TokenResponse(
+        accessToken = this["access_token"].asRequiredNonBlank("access_token"),
+        refreshToken = this["refresh_token"].asRequiredNonBlank("refresh_token"),
+        // Bound to a representable millisecond delay, not an arbitrary one-year policy.
+        expiresAt = seconds?.takeIf { it > 0 }?.let { Instant.now().plusSeconds(it) },
+    )
+}
 
 private fun JsonElement?.asString(default: String = ""): String =
     asStringOrNull() ?: default

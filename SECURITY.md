@@ -97,6 +97,10 @@ It never reuses tokens under another client. Refresh tokens are form fields to t
 OAuth token endpoint, never URLs, logs, or public state. Redirects and implicit transport retries
 are disabled; ambiguous token rotation requires reconnecting instead of blindly replaying it.
 Acceptance/rotation requires identity and both direct Drops queries before atomic encrypted save.
+An absent/null/zero token lifetime records no advertised deadline, not proof of indefinite validity;
+identity/Drops checks and authoritative-invalidity handling remain required. Malformed successful
+device exchanges are terminal because the code may already be consumed. Public rejection messages
+use fixed wording and HTTP status only, never raw upstream details; credential redaction is unchanged.
 Browser login and its trust boundary remain available and unchanged. No SunkwiBOT catalog request
 or transfer of account information to that service is implemented.
 

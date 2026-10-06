@@ -3,6 +3,49 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## Experimental TV token expiry repair - 2026-10-05
+
+The user reported `Invalid TV token expiry. Retrying in 15s.` after authorizing a TV code,
+followed by `Twitch token polling returned an unsupported OAuth [redacted]`. Inspection found
+that login and renewal required an integer expiry between one second and one year, rejected
+unspecified lifetimes, and retried the device-code exchange after rejecting its successful reply.
+The second message was fixed diagnostic text altered by credential redaction; it did not reveal
+Twitch's underlying rejection. The exact live expiry value and rejection were not captured.
+
+- Login and renewal share optional lifetime parsing: omitted/null/zero means no advertised
+  deadline; positive 64-bit seconds are bounded to a representable millisecond delay. Negative,
+  fractional, malformed, and overflowing values remain rejected. No fallback lifetime is invented.
+- No-deadline sessions retain OAuth identity and direct Inventory/Campaigns acceptance checks,
+  encrypted refresh credentials, and authoritative invalid-token recovery. They do not rotate
+  every second after restore or after receiving another no-deadline token.
+- An unusable successful exchange ends the attempt and requests a new code instead of polling
+  a possibly consumed code. Unknown rejections use readable fixed text and HTTP status;
+  `invalid_grant` requests a new code. Redaction remains intact and no raw replies are exposed.
+- Reference inspection was read-only: `ohne-b/twitch-drops-miner` at `c9c2c3a...` uses
+  `twitch_oauth2` 0.17.1, whose response lifetime is optional. The implementation remains independent.
+
+Verification:
+
+- Root `gradle test installDist`: **215 JVM tests passed**, distribution built with JDK 21 and
+  Gradle 9.5.1. The sandbox could not resolve the Kotlin plugin; the permitted run passed.
+  One new invalidation fixture initially failed before reaching validation and was corrected;
+  the final complete suite passed with no failures or skipped tests.
+- Node regression suite: **47 passed**. No dashboard markup/styles/scripts changed.
+- New regressions cover optional/zero/long lifetimes, encrypted round trips, malformed exchange
+  termination, redaction-safe errors, saved-session preservation, no renewal loop, and recovery
+  after authoritative invalidation. Existing reset and replacement protections remain covered.
+- Docker `desktop-linux`, engine 29.8.2: `dockdrops:tv-expiry-fix-20261005` built successfully,
+  including clean JVM tests/distribution in the image build. A disposable container with no network,
+  read-only root, dropped capabilities, and tmpfs data reported **running, healthy, zero restarts**
+  with the existing health command. The container was removed; no running user service was changed.
+- Complete task diff and `git diff --check` passed. Root baseline was clean at `ff64e89`;
+  the optional Android checkout remains clean at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`.
+
+Live limitation: these synthetic checks do not establish that the reported real-account login now
+completes. Rebuild the app and authorize a **new** TV code; the old one may have been consumed.
+Direct Inventory/Campaigns acceptance, renewal, earning, and claims remain user-owned live checks.
+No account login, mining, claim, push, or deployment was attempted during this repair.
+
 ## Six improvements - 2026-10-05
 
 Baseline inspection confirmed clean root `main` at `9aef73f`, and a clean optional Android checkout

@@ -376,8 +376,16 @@ matching OAuth client/account identity and successful direct Twitch Inventory **
 responses. No external campaign catalog is used. The reference's catalog-based discovery is not
 evidence that Android TV supports these direct operations; live compatibility remains unverified.
 
-TV access/refresh tokens, client identity, and expiry live inside the existing AES-GCM session
-envelope. Renewal starts five minutes before expiry, validates the same account and both Drops
+TV access/refresh tokens, client identity, and optional expiry live inside the existing AES-GCM session
+envelope. Token replies with omitted, null, or zero `expires_in` retain an unspecified deadline;
+positive lifetimes use 64-bit seconds bounded to a representable millisecond delay, without a
+one-year cutoff. An unspecified deadline does not prove permanent validity: normal identity/Drops
+validation still applies, and an authoritative validation 401 triggers refresh recovery. Such
+sessions do not schedule immediate recurring refreshes merely because a deadline is absent.
+Malformed successful device exchanges terminate the attempt with a new-code instruction rather
+than polling a possibly consumed code again. Fixed rejection messages survive credential redaction;
+raw upstream errors remain private.
+Renewal starts five minutes before a finite expiry, validates the same account and both Drops
 queries, and atomically saves both tokens through the serialized runtime. Generation checks reject
 late reset/replacement/shutdown results. Stop preserves authentication renewal but does not resume
 mining. HTTP 429 renewal retries are bounded (five attempts, 1–60 seconds); an ambiguous exchange is

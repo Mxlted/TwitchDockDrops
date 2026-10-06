@@ -941,9 +941,12 @@ class LocalMinerRuntime(
 
     private fun scheduleTvRenewal(session: StoredTwitchSession) {
         if (shuttingDown || session.refreshToken == null) return
+        // No advertised deadline is not an expired token. Authoritative validation failure
+        // still schedules recovery with an explicit deadline through handleExpiredSession.
+        val expiresAt = session.tokenExpiresAt ?: return
         val generation = sessionGeneration
         browserRenewalJob = scope.launch(RuntimeOperationGuard { generation == sessionGeneration && !shuttingDown }) {
-            delay(Duration.between(now(), (session.tokenExpiresAt ?: now()).minusSeconds(300)).toMillis().coerceAtLeast(1000))
+            delay(Duration.between(now(), expiresAt.minusSeconds(300)).toMillis().coerceAtLeast(1000))
             // A successful rotation is held while validation/storage retry; never spend its predecessor again.
             val candidate = try {
                 var rotated: StoredTwitchSession? = null
@@ -980,7 +983,7 @@ class LocalMinerRuntime(
                 catch (_: Throwable) {
                     ensureCurrentOperation()
                     updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "TV rotation awaits same-account Drops validation or storage. Existing credentials preserved.") }
-                    if (candidate.tokenExpiresAt?.isAfter(now()) != true) return@launch
+                    if (candidate.tokenExpiresAt?.isAfter(now()) == false) return@launch
                     delay(retry); retry = (retry * 2).coerceAtMost(300_000)
                 }
             }
