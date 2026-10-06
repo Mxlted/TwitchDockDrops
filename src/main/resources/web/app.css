@@ -86,7 +86,7 @@
 
   --ink: #1c1c1a;
   --ink-soft: #454541;
-  --muted: #6f6e68;
+  --muted: #62615c;
 
   --twitch: #efe6ff;
   --twitch-deep: #6f2fd8;
@@ -1351,7 +1351,7 @@ h1, h2, h3, h4 {
 .status-chip.is-ended,
 .status-chip.is-unknown,
 .status-chip.is-waiting {
-  color: var(--muted);
+  color: var(--ink-soft);
   background: var(--paper-3);
 }
 
@@ -2245,7 +2245,7 @@ input[type="range"]::-moz-range-thumb {
     bottom: 0;
     left: 0;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     min-height: 64px;
     padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
     border-top: 1px solid var(--line);
@@ -2293,3 +2293,8 @@ input[type="range"]::-moz-range-thumb {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Reward filters use existing opaque surfaces and accessible control sizes. */
+.reward-filter-option { display: inline-flex; align-items: center; min-height: 44px; gap: 8px; margin-right: 16px; }
+#excludedRewardNames { display: block; width: 100%; min-height: 100px; padding: 12px; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+#rewardTypes { border: 1px solid var(--line); border-radius: 8px; margin: 16px 0; }

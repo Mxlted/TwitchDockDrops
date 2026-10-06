@@ -53,6 +53,7 @@ const titleByView = {
   overview: "Overview",
   campaigns: "Campaigns",
   activity: "Activity",
+  history: "Claim history",
   settings: "Settings",
 };
 const previewVariants = ["active", "loggedout", "preparing", "code", "expired"];
@@ -76,6 +77,7 @@ function viewFromHash() {
 
 function showView(view) {
   ui.view = view;
+  if (view === "history") loadClaimHistory();
   const hash = view === "overview" ? "" : `#${view}`;
   if (window.location.hash !== hash) {
     // Keep the URL in step with the view so refresh, back, and bookmarks land on the same page.
@@ -153,6 +155,7 @@ function connectEvents() {
 
 function render() {
   if (!ui.data) return;
+  if (ui.view === "history" && ui.data.snapshot.account.authenticated && ui.historyAccount !== ui.data.snapshot.account.userId) { loadClaimHistory(); return; }
   pageTitle.textContent = titleByView[ui.view];
   campaignCount.textContent = String(ui.data.snapshot.campaigns.length);
   document.querySelectorAll(".primary-nav [data-view], .mobile-nav [data-view]").forEach((button) => {
@@ -168,6 +171,7 @@ function render() {
     overview: renderOverview,
     campaigns: renderCampaigns,
     activity: renderActivity,
+    history: renderHistory,
     settings: renderSettings,
   }[ui.view];
   const markup = view(ui.data);
@@ -326,7 +330,7 @@ function renderAccountOverview(account, showSettings = true) {
   const identity = username ? `@${username}` : "Twitch account";
   const initials = username ? Array.from(username).slice(0, 2).join("").toUpperCase() : "TW";
   const details = [account.userId ? `ID ${account.userId}` : "Username unavailable",
-    account.method === "browser" ? "Browser sign-in" : account.method === "device" ? "Device sign-in" : null]
+    account.method === "android_tv" ? "Experimental Android TV" : account.method === "browser" ? "Browser sign-in" : account.method === "device" ? "Device sign-in" : null]
     .filter(Boolean).join(" · ");
   return `<section class="soft-card account-overview" aria-label="Signed-in Twitch account">
     <span class="account-avatar" aria-hidden="true">${esc(initials)}</span>
@@ -365,6 +369,9 @@ function renderLoginOptions() {
     <h3>In this dashboard</h3>
     <p>Sign in using the Docker browser. No desktop download or Node.js installation. Keep the browser service running for automatic renewal.</p>
     ${ui.dashboardLoginAvailable ? '<a class="button button-primary" href="/browser-login.html">Open dashboard login</a>' : '<p class="field-hint">Enable the optional browser service on the Docker host:</p><p><code>docker compose -f compose.yaml -f compose.browser.yaml up --build -d</code></p>'}
+    <h3>Experimental Android TV</h3>
+    <p>Optional device-code login with encrypted token renewal. Direct Twitch campaign discovery may reject this client. OAuth success alone does not verify earning, claims, or renewal. Browser login remains recommended.</p>
+    <button class="button button-quiet" data-action="connect-tv" type="button">Try experimental TV login</button>
     <h3>On your desktop</h3>
     <p>Use Chrome, Edge, or Chromium in a separate temporary profile. Requires Node.js 22.4 or newer and the helper running on your computer.</p>
     <div class="hero-actions"><button class="button button-quiet" data-action="connect-helper" type="button">Use desktop helper</button><button class="button button-quiet" data-action="close-login-options" type="button">Back</button></div>
@@ -779,13 +786,14 @@ function renderDropList(campaign, id) {
   return `
     <ul class="drop-list" id="${attr(id)}">
       ${campaign.drops.map((drop) => {
-        const state = drop.claimed ? ["is-claimed", "Claimed"] : drop.canClaim ? ["is-ready", "Ready to claim"] : drop.currentMinutes > 0 ? ["is-progress", "In progress"] : ["is-waiting", "Not started"];
+        const state = drop.blockedReason && !drop.claimed ? ["is-waiting", "Blocked"] : drop.claimed ? ["is-claimed", "Claimed"] : drop.canClaim ? ["is-ready", "Ready to claim"] : drop.currentMinutes > 0 ? ["is-progress", "In progress"] : ["is-waiting", "Not started"];
         const rewards = drop.rewards.map((reward) => reward.name).filter(Boolean);
         return `
           <li class="drop-item">
             <div class="drop-copy">
               <strong>${esc(drop.name)}</strong>
               <span>${rewards.length ? esc(rewards.join(", ")) : "Reward details unavailable"}</span>
+              ${drop.blockedReason ? `<span>${esc(drop.blockedReason)}</span>` : ""}
             </div>
             <span class="drop-time">${drop.currentMinutes}/${drop.requiredMinutes} min</span>
             <span class="status-chip ${state[0]}">${state[1]}</span>
@@ -795,6 +803,31 @@ function renderDropList(campaign, id) {
 }
 
 /* Activity ---------------------------------------------------------------- */
+
+async function loadClaimHistory() {
+  const account = ui.data?.snapshot.account;
+  if (!account?.authenticated) return;
+  const generation = (ui.historyGeneration || 0) + 1;
+  ui.historyGeneration = generation;
+  ui.historyAccount = account.userId;
+  ui.historyLoading = true; ui.historyError = null; ui.historyRecords = []; render();
+  try {
+    const response = ui.preview ? null : await fetch("/api/claims", {cache:"no-store"});
+    const body = response ? await response.json() : {records: []};
+    if (response && !response.ok) throw new Error(body.error || "History could not be loaded.");
+    if (generation !== ui.historyGeneration || ui.data.snapshot.account.userId !== account.userId) return;
+    ui.historyRecords = body.records;
+  } catch (error) { if (generation === ui.historyGeneration) ui.historyError = error.message; }
+  finally { if (generation === ui.historyGeneration) { ui.historyLoading = false; render(); } }
+}
+
+function renderHistory(data) {
+  const account = data.snapshot.account;
+  const rows = ui.historyAccount === account.userId ? (ui.historyRecords || []) : [];
+  return `<section class="soft-card section-card"><div class="section-head"><div><h2>Claim history</h2><p>Saved for this Twitch account. Dates show when confirmation was first recorded. Pending claims await fresh Twitch evidence; they are never blindly replayed.</p></div><button class="button button-quiet" data-action="reload-history" type="button">Refresh history</button></div>
+    ${!account.authenticated ? '<p>Connect Twitch to view claim history.</p>' : ui.historyLoading ? '<p role="status">Loading claim history…</p>' : ui.historyError ? renderError(ui.historyError) : !rows.length ? '<p>No recorded claims yet.</p>' : `<ul class="drop-list">${rows.map(row => `<li class="drop-item"><div class="drop-copy"><strong>${esc(row.reward)}</strong><span>${esc(row.game)} · ${esc(row.campaign)}</span></div><span>${row.state === "confirmed" ? "Confirmed" : "Pending reconciliation"}</span><time datetime="${attr(row.recordedAt)}">${esc(formatDateTime(row.recordedAt))}</time></li>`).join("")}</ul>`}
+  </section>`;
+}
 
 function renderActivity(data) {
   const activities = data.snapshot.activity.slice().reverse();
@@ -862,6 +895,17 @@ function renderSettings(data) {
           <div class="card-actions actions-spaced"><button class="button button-primary" data-action="connect" type="button">${linkIcon()} ${authenticated ? "Reconnect Twitch" : "Connect Twitch"}</button></div>
         </section>
       </div>
+      <section class="soft-card section-card">
+        <h2>Reward filters</h2>
+        <p class="field-hint">Types are Twitch distribution metadata. Leave all unchecked to allow every type. Required prerequisites remain eligible; name exclusions block their dependent rewards. Open Reward Campaigns are view-only.</p>
+        <fieldset id="rewardTypes"><legend>Allowed reward types</legend>
+          ${[...new Set([...(settings.allowedRewardTypes || []), ...snapshot.campaigns.flatMap(c => c.drops.flatMap(d => d.rewards.map(r => (r.type || "UNKNOWN").trim().toUpperCase())))])].sort().map(type => `<label class="reward-filter-option"><input type="checkbox" name="rewardType" id="reward-type-${attr(cssId(type))}" value="${attr(type)}" ${(ui.rewardTypeDraft ?? settings.allowedRewardTypes ?? []).includes(type) ? "checked" : ""}> ${esc(type)}</label>`).join("") || '<p>No reward types loaded yet. All types allowed.</p>'}
+        </fieldset>
+        <label for="excludedRewardNames">Exclude rewards by name</label>
+        <textarea id="excludedRewardNames" rows="4" maxlength="20100" placeholder="One literal substring per line">${esc(ui.rewardNameDraft ?? (settings.excludedRewardNames || []).join("\n"))}</textarea>
+        <p class="field-hint">Case-insensitive. Up to 100 names, 200 characters each.</p>
+        <button class="button button-primary" data-action="save-reward-filters" type="button">Save reward filters</button>
+      </section>
       <section class="soft-card section-card">
         <div class="section-head"><div><h2>Auto Mode order</h2><p>Pinned games always come first. These groups decide the remaining route.</p></div></div>
         <ol class="auto-list">
@@ -976,10 +1020,18 @@ async function handleClick(event) {
   const action = button.dataset.action;
   try {
     if (action === "toggle-theme") toggleTheme();
+    if (action === "save-reward-filters") {
+      const excludedRewardNames = document.querySelector("#excludedRewardNames").value.split(/\r?\n/).map(v => v.trim()).filter(Boolean);
+      const allowedRewardTypes = [...document.querySelectorAll('input[name="rewardType"]:checked')].map(input => input.value);
+      await command("/api/settings", {excludedRewardNames, allowedRewardTypes}, "Reward filters saved");
+      ui.rewardNameDraft = null; ui.rewardTypeDraft = null; render();
+    }
+    if (action === "reload-history") await loadClaimHistory();
     if (action === "connect") { ui.loginOptionsOpen = true; showView("overview"); }
     if (action === "close-login-options") { ui.loginOptionsOpen = false; render(); }
+    if (action === "connect-tv") { await command("/api/auth/tv/start"); ui.loginOptionsOpen = false; showView("overview"); }
     if (action === "connect-helper") { await command("/api/auth/browser/start"); ui.loginOptionsOpen = false; showView("overview"); }
-    if (action === "replace-code") await command("/api/auth/replace");
+    if (action === "replace-code") await command(ui.data?.snapshot?.account?.method === "android_tv" ? "/api/auth/tv/start" : "/api/auth/replace");
     if (action === "start") await command("/api/miner/start");
     if (action === "stop") await command("/api/miner/stop");
     if (action === "refresh") await command("/api/inventory/refresh", {}, "Refreshing inventory");
@@ -1504,3 +1556,8 @@ function bloomIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path
 function giftIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16v10H4zM3 6h18v4H3zM12 6v14M12 6H8.5A2.5 2.5 0 1 1 11 3.5L12 6Zm0 0h3.5A2.5 2.5 0 1 0 13 3.5L12 6Z"></path></svg>'; }
 function clockIcon() { return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="M12 8v4l3 2"></path></svg>'; }
 function sproutIcon() { return '<svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 40V20M24 29c-8 0-13-4-13-12 8 0 13 4 13 12Zm0-6c0-8 6-12 13-12 0 8-5 12-13 12Z"></path></svg>'; }
+
+document.addEventListener("input", event => {
+  if (event.target.id === "excludedRewardNames") ui.rewardNameDraft = event.target.value;
+  if (event.target.name === "rewardType") ui.rewardTypeDraft = [...document.querySelectorAll('input[name="rewardType"]:checked')].map(input => input.value);
+});
