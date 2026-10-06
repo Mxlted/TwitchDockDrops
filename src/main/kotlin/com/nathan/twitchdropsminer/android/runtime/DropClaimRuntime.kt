@@ -39,6 +39,10 @@ internal object DropClaimResolver {
         if (drop.isClaimed) {
             return DropClaimPreparation.NotClaimable("Drop is already claimed.")
         }
+        if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId &&
+            (!drop.claimEvidenceKnown || drop.claimId.isNullOrBlank())) {
+            return DropClaimPreparation.NotClaimable("Awaiting Twitch inventory claim eligibility and identifier.")
+        }
         if (!drop.hasCompletedProgress && !drop.canClaim) {
             return DropClaimPreparation.NotClaimable("Drop progress is not complete.")
         }

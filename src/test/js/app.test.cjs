@@ -324,3 +324,20 @@ test('reward dates, pagination and unavailable states remain separate from drop 
   assert.match(c.renderCampaigns(data), /No open reward campaigns/);
   assert.equal(c.ui.rewardPage, 0);
 });
+
+test('TV catalog status and unknown progress are rendered without claiming account knowledge', () => {
+  const c = client();
+  const data = c.previewState();
+  data.snapshot.inventoryStatus = 'Public catalog incomplete <script>';
+  const campaign = data.snapshot.campaigns[0];
+  campaign.linked = false; campaign.linkStatusKnown = false; campaign.publicCatalog = true;
+  campaign.drops.forEach((drop) => { drop.progressKnown = false; });
+  c.ui.expandedCampaigns.add(campaign.id);
+  const html = c.renderCampaigns(data);
+  assert.match(html, /Public catalog incomplete &lt;script&gt;/);
+  assert.match(html, /Link unknown/);
+  assert.match(html, /Progress incomplete/);
+  assert.match(html, /Progress unknown/);
+  assert.match(html, /\?\/120 min/);
+  assert.doesNotMatch(html, /<script>/);
+});

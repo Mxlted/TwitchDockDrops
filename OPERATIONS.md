@@ -433,10 +433,21 @@ Connect Twitch → **Try experimental TV login** requests a new code using the A
 It does not convert existing mobile/browser credentials. Existing encrypted credentials survive a
 failed attempt. Restarting reloads the saved credentials, subject to their existing renewal mode;
 a retained browser session may still require reconnecting. Browser login remains available.
-Direct Twitch Inventory and Campaigns validation must both succeed before acceptance.
-The reference implementation discovers campaigns through an external catalog; this project does
-not use that catalog, and direct-TV compatibility is still unknown. Synthetic tests are not live
-Drops evidence. Do not remove the optional browser service based on successful OAuth alone.
+OAuth identity and usable Twitch account inventory must both succeed before acceptance/renewal.
+TV campaign discovery uses SunkwiBOT's public catalog; TV sessions never require the gated Twitch
+campaign list/detail operations. Browser sessions retain their direct discovery path. No new
+configuration, credentials, volume, ports or companion service is required. The JVM needs outbound
+HTTPS to `twitch-drops-api.sunkwi.com` in addition to its Twitch destinations.
+
+OAuth errors identify identity/session validation, Twitch inventory errors identify account access,
+and public catalog errors identify discovery coverage. Catalog outages, stale timestamps, malformed
+or partial responses preserve known metadata while reporting incomplete data on Campaigns. Refresh
+inventory retries discovery subject to the one-minute request floor. Catalog cache is memory-only;
+a restart during an outage can show only account-inventory campaigns. A link URL does not prove
+linkage, and unknown progress is not zero progress. Check/link the game account on Twitch.
+Public metadata cannot make a reward claimable. Synthetic checks do not establish real-account
+login, natural renewal, discovery coverage, earning, failover or claims; verify these before relying
+on TV login as your only method.
 
 TV renewal saves access and refresh tokens together after same-account verification. Throttling
 retries are bounded; lost/ambiguous refresh replies require reconnecting, since a refresh token may
@@ -447,7 +458,7 @@ If an older build reported **Invalid TV token expiry** after authorization, rebu
 the fix and start **Try experimental TV login** again to obtain a fresh code. The old code may have
 already been consumed. Login and renewal now accept an unspecified lifetime or a lifetime longer
 than one year; malformed successful replies stop with a new-code instruction. A session without
-an advertised deadline still has to pass identity and direct Drops checks and can be revoked.
+an advertised deadline still has to pass OAuth identity and usable Twitch inventory checks and can be revoked.
 An **unsupported OAuth [redacted]** message in the older build was its generic rejection text
 passing through credential redaction, not the actual Twitch error. New messages remain readable
 without exposing Twitch response bodies. Live TV login and renewal still require verification.

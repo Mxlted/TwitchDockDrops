@@ -148,9 +148,11 @@ or open `/?preview=active` on your instance. Preview controls do not change the 
 - Connect Twitch uses browser login because Twitch can reject the older device-code flow. Existing
   sessions are preserved. The new durable renewal path still needs real-account endurance testing.
 - **Experimental Android TV login** is an optional choice with encrypted refresh-token renewal. It uses
-  a different identity from the older Android mobile flow and requires successful direct Twitch
-  Inventory and Campaigns checks. Compatibility with discovery, earning, claims, and renewal is not
-  live-verified; no external campaign catalog is used. Keep browser login available.
+  a different identity from the older Android mobile flow. Acceptance and renewal validate OAuth
+  identity and Twitch account inventory. TV discovery uses the anonymous [SunkwiBOT public catalog](https://twitch-drops-api.sunkwi.com/v2/drops);
+  linkage, progress and claims remain Twitch-authoritative. Unknown account state is labeled, and
+  incomplete catalog coverage preserves known metadata. Real-account discovery, earning, claims
+  and renewal still need verification. Browser login keeps its existing direct Twitch discovery.
 - Twitch event subscriptions request faster inventory/channel checks while mining. Polling remains
   the fallback; the private event protocol still needs real-account verification.
 - Local activity logs can contain campaign and channel names; review them before sharing.

@@ -96,13 +96,21 @@ Experimental Android TV device login uses its own fixed client identity and TV O
 It never reuses tokens under another client. Refresh tokens are form fields to the fixed Twitch
 OAuth token endpoint, never URLs, logs, or public state. Redirects and implicit transport retries
 are disabled; ambiguous token rotation requires reconnecting instead of blindly replaying it.
-Acceptance/rotation requires identity and both direct Drops queries before atomic encrypted save.
+TV acceptance/rotation requires OAuth identity and usable Twitch account inventory before atomic
+encrypted save. Catalog failure never invalidates Twitch credentials.
 An absent/null/zero token lifetime records no advertised deadline, not proof of indefinite validity;
 identity/Drops checks and authoritative-invalidity handling remain required. Malformed successful
 device exchanges are terminal because the code may already be consumed. Public rejection messages
 use fixed wording and HTTP status only, never raw upstream details; credential redaction is unchanged.
-Browser login and its trust boundary remain available and unchanged. No SunkwiBOT catalog request
-or transfer of account information to that service is implemented.
+Browser login and its trust boundary remain available and unchanged. TV discovery uses the fixed
+HTTPS SunkwiBOT public catalog endpoint through a newly constructed, separate OkHttp client. It
+receives no session argument, shared interceptors/authenticators/cookie jar, Twitch headers, tokens,
+account IDs or device IDs. Requests are anonymous GETs; redirects and implicit retries are disabled.
+Only constructor-only literal loopback URLs are injectable for tests. No public API configures the
+endpoint. Bodies, deadlines, concurrency, record counts and cache retention are bounded (see
+ARCHITECTURE.md). Public account-looking fields are ignored; catalog HTTP 401/403 is a discovery
+failure, never proof of invalid Twitch OAuth. Diagnostics expose fixed failure categories/status
+codes, never response bodies. Metadata remains untrusted text and uses the existing escaped UI.
 
 The server also sends an access token in LISTEN messages only to
 `wss://pubsub-edge.twitch.tv/v1`. There is no user-configurable subscription URL or arbitrary topic

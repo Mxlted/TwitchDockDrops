@@ -136,7 +136,7 @@ class LocalMinerRuntimeExecutionTest {
             override suspend fun pollDeviceToken(deviceCode: String, deviceId: String) = DeviceTokenPollResult.Authorized(
                 TokenResponse("tv-access", "tv-refresh", Instant.now().plusSeconds(3600)))
             override suspend fun validateAccessToken(accessToken: String) = ValidatedToken("12345", com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId)
-            override suspend fun validateDropsAccess(session: StoredTwitchSession) { error("Direct Twitch campaign discovery unavailable") }
+            override suspend fun validateDropsAccess(session: StoredTwitchSession) { error("Twitch inventory unavailable") }
         }
         val runtime = runtime(store, api, tvAuthenticationApi = api)
         try {
@@ -192,6 +192,36 @@ class LocalMinerRuntimeExecutionTest {
             assertEquals("new-access", store.twitchSession()?.accessToken)
             assertEquals(old.userId, store.twitchSession()?.userId)
         } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `rotated TV candidate with unusable Twitch inventory preserves encrypted session`() = runBlocking {
+        val store = sessionStore()
+        val old = storedSession().copy(clientId = com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId,
+            refreshToken = "old-refresh", tokenExpiresAt = Instant.EPOCH)
+        store.saveTwitchSession(old)
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            server.start()
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody(
+                """{"client_id":"${old.clientId}","user_id":"${old.userId}"}"""))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody(
+                """{"data":{"currentUser":{"inventory":{}}}}"""))
+            val transport = com.nathan.twitchdropsminer.android.data.twitch.TwitchApiClient(okhttp3.OkHttpClient(),
+                gqlEndpoint = server.url("/gql").toString(), oauthBaseUrl = server.url("/").toString())
+            val api = object : TwitchApi by AuthenticationTwitchApi() {
+                override suspend fun refreshTvSession(session: StoredTwitchSession) = session.copy(
+                    accessToken = "new-access", refreshToken = "new-refresh", tokenExpiresAt = Instant.now().plusSeconds(3600))
+                override suspend fun validateDropsAccess(session: StoredTwitchSession) = transport.validateDropsAccess(session)
+            }
+            val runtime = runtime(store, api)
+            try {
+                runtime.bootstrap()
+                withTimeout(4000) { runtime.snapshot.first { it.error?.contains("Twitch inventory") == true } }
+                assertEquals(old, store.twitchSession())
+                assertEquals(2, server.requestCount)
+                server.takeRequest()
+                assertTrue(server.takeRequest().body.readUtf8().contains("\"operationName\":\"Inventory\""))
+            } finally { runtime.stopMiningAndJoin(shutdown = true) }
+        }
     }
 
     @Test fun `shutdown ignores queued start and inventory commands without changing saved intent`() = runBlocking {

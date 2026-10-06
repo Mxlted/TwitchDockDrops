@@ -144,6 +144,9 @@ data class CampaignInventory(
     val diagnostics: List<String> = emptyList(),
     val rewardCampaigns: List<RewardCampaign> = emptyList(),
     val rewardCampaignsAvailable: Boolean = false,
+    val publicCatalog: Boolean = false,
+    val catalogUpdatedAt: Instant? = null,
+    val rejectedAccountIds: Set<String> = emptySet(),
 ) {
     val isPartial: Boolean
         get() = diagnostics.isNotEmpty()
@@ -176,7 +179,15 @@ interface TwitchApi {
         login: String,
         campaign: Campaign,
     ): Channel {
+        if (campaign.publicCatalog && campaign.allowedChannels.isNotEmpty() &&
+            campaign.allowedChannels.none { it.login.equals(login, ignoreCase = true) }) {
+            return Channel(0, login, login = login)
+        }
         val channel = fetchChannel(session, login, campaign.gameName)
+        if (campaign.publicCatalog && campaign.allowedChannels.isNotEmpty() &&
+            campaign.allowedChannels.none { it.id == channel.id && it.login.equals(channel.login, ignoreCase = true) }) {
+            return channel.copy(dropsEnabled = false)
+        }
         // Only Twitch's explicit participant ACL permits cross-category earning.
         return if (campaign.permitsCrossCategoryChannel(channel)) {
             channel.copy(dropsEnabled = channel.online)
@@ -199,6 +210,7 @@ class TwitchApiClient(
     private val oauthBaseUrl: String = "https://id.twitch.tv",
     private val watchEventTime: () -> Instant = Instant::now,
     private val deviceClientId: String = TwitchClientId,
+    private val publicCatalogClient: PublicCatalogClient = PublicCatalogClient(),
 ) : TwitchApi {
     init { require(deviceClientId in setOf(TwitchClientId, TwitchTvClientId)) }
     private val okHttpClient = okHttpClient.newBuilder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
@@ -349,6 +361,12 @@ class TwitchApiClient(
 
     override suspend fun validateDropsAccess(session: StoredTwitchSession) {
         validateSession(session)
+        if (sessionClientId(session) == TwitchTvClientId) {
+            val account = fetchTvAccountInventory(session)
+            if (account.diagnostics.isNotEmpty()) throw IllegalStateException(
+                "Twitch inventory is incomplete or malformed; TV credentials preserved.")
+            return
+        }
         val inventory = gql(session, TwitchOperation.Inventory.request())
         val campaigns = gql(session, TwitchOperation.Campaigns.request())
         if (inventory["errors"].asArray().isNotEmpty() || campaigns["errors"].asArray().isNotEmpty() ||
@@ -446,6 +464,11 @@ class TwitchApiClient(
         fetchCampaignInventory(session).campaigns
 
     override suspend fun fetchCampaignInventory(session: StoredTwitchSession): CampaignInventory {
+        if (sessionClientId(session) == TwitchTvClientId) {
+            val account = fetchTvAccountInventory(session)
+            val catalog = publicCatalogClient.fetch()
+            return mergeTvSources(account, catalog)
+        }
         val inventoryResponse = gql(session, TwitchOperation.Inventory.request())
         val upstreamDiagnostics = inventoryResponse.graphQlDiagnostics("Inventory")
         val inventory = inventoryResponse.path("data", "currentUser", "inventory")
@@ -506,6 +529,15 @@ class TwitchApiClient(
             rewardCampaigns = rewardListing.campaigns,
             rewardCampaignsAvailable = rewardListing.available && campaignDiagnostics.isEmpty(),
         )
+    }
+
+    private suspend fun fetchTvAccountInventory(session: StoredTwitchSession): TvAccountInventory {
+        val response = try { gql(session, TwitchOperation.Inventory.request()) }
+        catch (error: CancellationException) { throw error }
+        catch (error: TwitchApiException) {
+            throw TwitchApiException(error.type, "Twitch inventory request failed; TV credentials preserved.")
+        }
+        return parseTvAccountInventory(response)
     }
 
     private suspend fun fetchCampaignDetails(
@@ -722,7 +754,7 @@ class TwitchApiClient(
         session: StoredTwitchSession,
         channelId: Long,
     ): CurrentDropProgress? {
-        val response = gql(
+        val response = try { gql(
             session,
             TwitchOperation.CurrentDrop.request(
                 buildJsonObject {
@@ -730,9 +762,20 @@ class TwitchApiClient(
                     put("channelLogin", "")
                 },
             ),
-        )
+        ) } catch (error: TwitchApiException) {
+            if (sessionClientId(session) != TwitchTvClientId) throw error
+            throw TwitchApiException(error.type, "Twitch progress request failed.")
+        }
+        if (sessionClientId(session) == TwitchTvClientId &&
+            (response["errors"].asArray().isNotEmpty() || !response.path("data", "currentUser").containsKey("dropCurrentSession"))) {
+            throw TwitchApiException(TwitchApiErrorType.UnexpectedResponse, "Twitch progress is unavailable.")
+        }
         val drop = response.path("data", "currentUser")["dropCurrentSession"].asObjectOrNull()
             ?: return null
+        if (sessionClientId(session) == TwitchTvClientId &&
+            (drop["dropID"].asStringOrNull().isNullOrBlank() || drop["currentMinutesWatched"].asIntOrNull()?.let { it >= 0 } != true)) {
+            throw TwitchApiException(TwitchApiErrorType.UnexpectedResponse, "Twitch progress is malformed.")
+        }
         return CurrentDropProgress(
             dropId = drop["dropID"].asString(),
             currentMinutes = drop["currentMinutesWatched"].asInt(0),
@@ -811,6 +854,10 @@ class TwitchApiClient(
         session: StoredTwitchSession,
         payload: JsonObject,
     ): JsonObject = withContext(Dispatchers.IO) {
+        check(sessionClientId(session) != TwitchTvClientId || payload["operationName"].asString() !in
+            setOf(TwitchOperation.Campaigns.operationName, TwitchOperation.CampaignDetails.operationName)) {
+            "TV sessions use public catalog discovery."
+        }
         val request = Request.Builder()
             .url(gqlUrl)
             .headers(sessionHeaders(session, graphql = true))
@@ -1375,7 +1422,7 @@ private fun JsonElement?.asArray(): List<JsonElement> =
 private fun JsonObject.tvTokenResponse(): TokenResponse {
     val expiry = this["expires_in"]
     // First-party token replies can omit a finite lifetime. Keep that distinct from an
-    // expired token; acceptance still requires OAuth identity and both direct Drops queries.
+    // expired token; TV acceptance still requires OAuth identity and usable account inventory.
     val seconds = if (expiry == null || expiry == JsonNull) null else
         (expiry as? JsonPrimitive)?.longOrNull
             ?.takeIf { it in 0..(Long.MAX_VALUE / 1000) }

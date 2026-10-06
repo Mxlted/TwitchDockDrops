@@ -72,6 +72,7 @@ data class CampaignDrop(
     val blockedReason: String? = null,
     val eligibleByFilter: Boolean = true,
     val claimEvidenceKnown: Boolean = false,
+    val progressKnown: Boolean = true,
 ) {
     val watchedMinutes: Int
         get() = if (requiredMinutes > 0) {
@@ -91,7 +92,7 @@ data class CampaignDrop(
         }
 
     val hasCompletedProgress: Boolean
-        get() = requiredMinutes > 0 && currentMinutes >= requiredMinutes
+        get() = progressKnown && requiredMinutes > 0 && currentMinutes >= requiredMinutes
 }
 
 data class Campaign(
@@ -114,7 +115,12 @@ data class Campaign(
     val allowedChannels: List<Channel> = emptyList(),
     val selected: Boolean = false,
     val gameId: String? = null,
+    val publicCatalog: Boolean = false,
+    val accountStateUsable: Boolean = true,
 ) {
+    // Public discovery permits a supervised attempt, never an assertion of linkage.
+    val canProbeAccount: Boolean
+        get() = accountStateUsable && (linked || (publicCatalog && !linkStatusKnown))
     fun permitsCrossCategoryChannel(channel: Channel): Boolean =
         gameId in setOf("509663", "509672") && allowedChannels.any {
             it.id > 0 && it.id == channel.id && it.login.equals(channel.login, ignoreCase = true)
@@ -165,19 +171,19 @@ data class Campaign(
         }
 
     val isKnownUnlinked: Boolean
-        get() = !linked && (linkStatusKnown || linkUrl != null)
+        get() = !linked && (linkStatusKnown || (!publicCatalog && linkUrl != null))
 
     val canEarnLocally: Boolean
         get() = canEarnLocallyAt(Instant.now())
 
     fun canEarnLocallyAt(now: Instant): Boolean =
-        isActiveAt(now) && linked && hasEarnableDropsAt(now)
+        isActiveAt(now) && canProbeAccount && hasEarnableDropsAt(now)
 
     val canTryUnlinkedLocally: Boolean
         get() = canTryUnlinkedLocallyAt(Instant.now())
 
     fun canTryUnlinkedLocallyAt(now: Instant): Boolean =
-        isActiveAt(now) && isKnownUnlinked && hasEarnableDropsAt(now)
+        isActiveAt(now) && accountStateUsable && isKnownUnlinked && hasEarnableDropsAt(now)
 
     fun watchableDrop(
         preferredDropId: String? = null,

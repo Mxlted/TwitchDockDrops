@@ -372,9 +372,47 @@ Reverse proxies must configure external trusted hosts and origins explicitly.
 The optional `POST /api/auth/tv/start` command accepts only `{}` with the normal Host/Origin and
 body restrictions. It creates a fresh device identity using the Android TV OAuth client, never
 converts an Android mobile or browser token. Browser login remains the default. Acceptance requires
-matching OAuth client/account identity and successful direct Twitch Inventory **and** Campaigns
-responses. No external campaign catalog is used. The reference's catalog-based discovery is not
-evidence that Android TV supports these direct operations; live compatibility remains unverified.
+matching OAuth client/account identity and a usable Twitch account Inventory response. The TV
+client never calls gated Campaigns or CampaignDetails operations, including admission, renewal,
+manual refresh, mining and claim recovery. Browser admission and discovery are unchanged.
+Public catalog availability is not an authentication requirement; OAuth success alone is insufficient.
+
+TV discovery combines account Inventory with `https://twitch-drops-api.sunkwi.com/v2/drops`.
+`PublicCatalogClient` owns an independent anonymous HTTP client and a bounded in-memory metadata
+cache. One request per minute is coalesced across callers, with no automatic retries, a 30-second
+call deadline and an 8 MiB decoded-body cap. The feed must have an RFC3339 `lastUpdatedAt` within
+30 minutes past / five minutes future and a `data[]` collection of groups with `rewards[]` campaign
+records. Limits are 2,000 groups/campaigns, 256 drops/dependencies per campaign/drop, 64 benefits
+per drop and 100 allowed channels; the merged runtime retains at most 4,000 campaigns.
+Required IDs, dates, types, benefits, prerequisites and enabled
+channel restrictions are validated; unsupported/ambiguous records make coverage incomplete.
+Public `self` fields are discarded. Subscription-only rewards are not watchable. No feed URL or
+refresh interval can redirect requests or configure the runtime scheduler.
+
+Twitch inventory wins overlapping campaign/drop state; catalog-only drops remain unknown. All
+benefits must have Twitch award timestamps inside the reward window to infer a confirmed claim.
+Duplicate or malformed account campaign IDs cannot be replaced with public assumptions; retained
+versions are disabled for that incomplete account response. Unknown linkage permits a supervised
+watch attempt in the existing priority/fallback selector, without changing the `linked` flag.
+Reward filters, prerequisite claims, campaign/drop windows, ACL checks, channel failover and
+confirmed-progress supervision still apply. TV claims require Twitch inventory evidence and a
+Twitch-issued claim identifier; CurrentDrop completion without that evidence triggers an inventory
+refresh, with minute polling while claim evidence is pending. Pending claim history reconciles only
+from Twitch evidence. TV sessions do not query the display-only Open Reward Campaigns endpoint;
+that panel remains unavailable for TV.
+
+Catalog failure/partial results retain bounded, unexpired metadata and fresh account inventory.
+Missing account progress can retain the last confirmed number but is marked unknown, and stale
+claim eligibility/identifiers are cleared. Whole inventory failures retain the prior snapshot and
+suspend that mining pass. The cache is not persisted; after restart discovery outside account
+inventory requires a usable feed. Third-party coverage is not a guarantee of Twitch eligibility.
+
+The explicit state contract adds `inventorySource` (`twitch` or `twitch_public_catalog`),
+`inventoryComplete`, sanitized `inventoryStatus`, and `catalogUpdatedAt`. Completeness describes
+source parsing/freshness, not guaranteed worldwide catalog coverage. Campaigns add `publicCatalog`
+and `accountStateUsable`; `linkStatusKnown=false` denotes unknown linkage. Drops add `progressKnown`;
+false means the numeric progress is not a current account observation, never confirmed zero.
+The dashboard labels these states and incomplete discovery separately from transient mining errors.
 
 TV access/refresh tokens, client identity, and optional expiry live inside the existing AES-GCM session
 envelope. Token replies with omitted, null, or zero `expires_in` retain an unspecified deadline;
@@ -385,8 +423,8 @@ sessions do not schedule immediate recurring refreshes merely because a deadline
 Malformed successful device exchanges terminate the attempt with a new-code instruction rather
 than polling a possibly consumed code again. Fixed rejection messages survive credential redaction;
 raw upstream errors remain private.
-Renewal starts five minutes before a finite expiry, validates the same account and both Drops
-queries, and atomically saves both tokens through the serialized runtime. Generation checks reject
+Renewal starts five minutes before a finite expiry, validates the same account and usable Twitch
+inventory, and atomically saves both tokens through the serialized runtime. Generation checks reject
 late reset/replacement/shutdown results. Stop preserves authentication renewal but does not resume
 mining. HTTP 429 renewal retries are bounded (five attempts, 1–60 seconds); an ambiguous exchange is
 not replayed. After receiving a rotation, validation/storage retries retain that candidate in memory

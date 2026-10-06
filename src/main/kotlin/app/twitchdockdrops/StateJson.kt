@@ -89,6 +89,10 @@ private fun RuntimeSnapshot.toJson(settings: AppSettings): JsonObject = buildJso
     put("account", account.toJson())
     put("campaigns", campaigns.toJsonArray { it.toJson(settings) })
     put("rewardCampaignsAvailable", rewardCampaignsAvailable)
+    put("inventorySource", inventorySource)
+    put("inventoryComplete", inventoryComplete)
+    putNullable("inventoryStatus", inventoryStatus?.let { SafeText.diagnostic(it) })
+    putInstant("catalogUpdatedAt", catalogUpdatedAt)
     put("rewardCampaigns", rewardCampaigns.toJsonArray { campaign ->
         buildJsonObject {
             put("id", campaign.id)
@@ -141,6 +145,8 @@ private fun Campaign.toJson(settings: AppSettings): JsonObject = buildJsonObject
     putInstant("endsAt", endsAt)
     put("linked", linked)
     put("linkStatusKnown", linkStatusKnown)
+    put("publicCatalog", publicCatalog)
+    put("accountStateUsable", accountStateUsable)
     put("active", active)
     put("upcoming", upcoming)
     put("expired", expired)
@@ -159,6 +165,7 @@ private fun CampaignDrop.toJson(): JsonObject = buildJsonObject {
     put("id", id)
     put("name", name)
     put("currentMinutes", currentMinutes)
+    put("progressKnown", progressKnown)
     put("requiredMinutes", requiredMinutes)
     put("remainingMinutes", remainingMinutes)
     put("progress", progressFraction.toDouble())

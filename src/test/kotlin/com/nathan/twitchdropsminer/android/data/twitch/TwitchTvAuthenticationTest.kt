@@ -84,7 +84,7 @@ class TwitchTvAuthenticationTest {
             assertFalse(Files.readString(directory.resolve("session.enc")).contains("new-refresh"))
         }
     }
-    @Test fun `TV acceptance rejects identity mismatch and missing direct campaign access`() = runBlocking {
+    @Test fun `TV acceptance rejects identity mismatch and unusable account inventory`() = runBlocking {
         MockWebServer().use { server ->
             server.start()
             val api = TwitchApiClient(OkHttpClient(), gqlEndpoint = server.url("/gql").toString(), oauthBaseUrl = server.url("/").toString(), deviceClientId = TwitchTvClientId)
@@ -94,7 +94,6 @@ class TwitchTvAuthenticationTest {
             assertFailsWith<TwitchApiException> { api.validateSession(session) }
             server.enqueue(response("""{"client_id":"$TwitchTvClientId","user_id":"42"}"""))
             server.enqueue(response("""{"data":{"currentUser":{"inventory":{}}}}"""))
-            server.enqueue(response("""{"data":{"currentUser":{}}}"""))
             assertFailsWith<IllegalStateException> { api.validateDropsAccess(session) }
         }
     }

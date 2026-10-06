@@ -294,6 +294,10 @@ class LocalMinerRuntime(
                 ),
                 currentTask = "Twitch login complete",
                 progressSummary = "Loading drops inventory.",
+                inventorySource = if (session.clientId == com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId) "twitch_public_catalog" else "twitch",
+                inventoryComplete = false,
+                inventoryStatus = null,
+                catalogUpdatedAt = null,
                 campaigns = emptyList(),
                 rewardCampaigns = emptyList(),
                 rewardCampaignsAvailable = false,
@@ -980,9 +984,10 @@ class LocalMinerRuntime(
                     completed.await()
                     return@launch
                 } catch (error: CancellationException) { throw error }
-                catch (_: Throwable) {
+                catch (error: Throwable) {
                     ensureCurrentOperation()
-                    updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "TV rotation awaits same-account Drops validation or storage. Existing credentials preserved.") }
+                    updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error =
+                        "TV rotation validation/storage failed: ${app.twitchdockdrops.security.SafeText.diagnostic(error.message ?: "unavailable")}. Existing credentials preserved.") }
                     if (candidate.tokenExpiresAt?.isAfter(now()) == false) return@launch
                     delay(retry); retry = (retry * 2).coerceAtMost(300_000)
                 }
@@ -1192,7 +1197,8 @@ class LocalMinerRuntime(
             ensureCurrentMiningRun(expectedSessionGeneration, runGeneration)
             val inventoryLoadedAt = now()
             val inventoryRefreshAt = inventoryLoadedAt.plus(
-                Duration.ofMinutes(settings.inventoryRefreshMinutes.toLong()),
+                if (campaignSnapshot.any { it.awaitingTvClaimEvidence() }) Duration.ofMinutes(1)
+                else Duration.ofMinutes(settings.inventoryRefreshMinutes.toLong()),
             )
             val selectedWork = try {
                 selectCampaignWork(
@@ -1837,7 +1843,7 @@ class LocalMinerRuntime(
                                 watchConfigurationRenewals = 0
                                 appendActivity(
                                     RuntimePhase.Watching,
-                                    "Linked drop progress confirmed",
+                                    if (currentCampaign.publicCatalog && !currentCampaign.linkStatusKnown) "Account drop progress confirmed" else "Linked drop progress confirmed",
                                     "${currentCampaign.gameName} is continuing to earn progress.",
                                 )
                             }
@@ -1883,6 +1889,12 @@ class LocalMinerRuntime(
                     }
                 }
 
+                if (currentCampaign.awaitingTvClaimEvidence()) {
+                    // CurrentDrop can finish a reward before Inventory exposes its claim instance.
+                    // Refresh through the normal guarded loader; do not synthesize a TV claim ID.
+                    updateSnapshot(RuntimePhase.LoadingInventory, "Confirming TV claim eligibility with Twitch inventory")
+                    break
+                }
                 val claimable = firstClaimableDrop(session, currentCampaign)
                 if (claimable != null) {
                     updateSnapshot(RuntimePhase.Claiming, "Claiming ${claimable.name}") {
@@ -2251,11 +2263,13 @@ class LocalMinerRuntime(
         decision: CampaignCandidateDecision.Try,
     ) {
         val activityTitle = when {
+            decision.candidates.any { it.publicCatalog && !it.linkStatusKnown } -> "Considering campaigns with unknown linkage"
             decision.mode.isLinkedFallback -> "Falling back to linked games"
             decision.mode.isUnlinked -> "Trying unlinked games"
             else -> return
         }
-        updateSnapshot(RuntimePhase.SelectingCampaign, decision.task) {
+        updateSnapshot(RuntimePhase.SelectingCampaign,
+            if (decision.candidates.any { it.publicCatalog && !it.linkStatusKnown }) "Checking public campaigns with Twitch" else decision.task) {
             it.copy(
                 campaigns = markSelected(campaignSnapshot, settings),
                 currentChannel = null,
@@ -2279,7 +2293,8 @@ class LocalMinerRuntime(
             appendDebug(
                 "Selection candidate ${candidate.gameName} (${decision.mode.name}); checking eligible channels.",
             )
-            updateSnapshot(RuntimePhase.SelectingCampaign, decision.mode.selectionTask(candidate)) {
+            updateSnapshot(RuntimePhase.SelectingCampaign,
+                if (candidate.publicCatalog && !candidate.linkStatusKnown) "Checking ${candidate.gameName} (link unknown)" else decision.mode.selectionTask(candidate)) {
                 it.copy(
                     campaigns = markSelected(campaignSnapshot, settings),
                     activeCampaign = candidate,
@@ -2380,7 +2395,7 @@ class LocalMinerRuntime(
             }
             error.throwIfInvalidToken()
             val message = error.message ?: "Unable to load Twitch inventory."
-            _snapshot.update { it.copy(rewardCampaignsAvailable = false) }
+            _snapshot.update { it.copy(rewardCampaignsAvailable = false, inventoryComplete = false, inventoryStatus = message) }
             appendActivity(RuntimePhase.Error, "Inventory fetch failed", message)
             return CampaignLoadResult(
                 campaigns = previousCampaigns,
@@ -2393,7 +2408,9 @@ class LocalMinerRuntime(
         }
         ensureCurrentOperation()
         claimHistory.reconcile(session.userId, loaded.campaigns)
-        val campaigns = if (loaded.isPartial) {
+        val campaigns = if (loaded.publicCatalog) {
+            com.nathan.twitchdropsminer.android.data.twitch.retainTvInventory(previousCampaigns, loaded, now())
+        } else if (loaded.isPartial) {
             mergePartialInventory(previousCampaigns, loaded.campaigns)
         } else {
             loaded.campaigns
@@ -2405,10 +2422,15 @@ class LocalMinerRuntime(
                 rewardCampaigns = if (loaded.rewardCampaignsAvailable) loaded.rewardCampaigns else
                     (loaded.rewardCampaigns + it.rewardCampaigns).distinctBy { campaign -> campaign.id }.take(500),
                 rewardCampaignsAvailable = loaded.rewardCampaignsAvailable,
+                inventorySource = if (loaded.publicCatalog) "twitch_public_catalog" else "twitch",
+                inventoryComplete = !loaded.isPartial,
+                inventoryStatus = loaded.diagnostics.joinToString("; ").take(768).ifBlank { null },
+                catalogUpdatedAt = loaded.catalogUpdatedAt,
             )
         }
         val warning = loaded.diagnostics.takeIf(List<String>::isNotEmpty)?.let { diagnostics ->
-            "Twitch inventory was only partially parsed; retained safe prior data. " +
+            (if (loaded.publicCatalog) "Campaign data is incomplete; retained safe prior data. " else
+                "Twitch inventory was only partially parsed; retained safe prior data. ") +
                 diagnostics.joinToString("; ").take(768)
         }
         if (warning != null) {
@@ -2916,6 +2938,7 @@ private fun Campaign.watchingTask(
     unlinkedProgressProbe: UnlinkedProgressProbe?,
 ): String =
     when {
+        publicCatalog && !linkStatusKnown -> "Checking account progress on ${channel.name} (link unknown)"
         unlinkedProgressProbe != null && !unlinkedProgressProbe.progressDetected ->
             "Checking unlinked progress on ${channel.name}"
 
@@ -2937,6 +2960,11 @@ private fun RuntimeSnapshot.matchesActiveWatch(
         !channelSearchInProgress &&
         error == null
 
+internal fun Campaign.awaitingTvClaimEvidence(): Boolean = publicCatalog && drops.any {
+    !it.isClaimed && it.requiredMinutes > 0 && it.currentMinutes >= it.requiredMinutes &&
+        (!it.claimEvidenceKnown || it.claimId.isNullOrBlank())
+}
+
 internal sealed class TwitchProgressUpdate {
     data class Updated(val campaign: Campaign) : TwitchProgressUpdate()
     object UnexpectedDrop : TwitchProgressUpdate()
@@ -2957,8 +2985,10 @@ internal fun Campaign.applyTwitchProgress(progress: CurrentDropProgress): Twitch
             val reported = progress.currentMinutes.coerceIn(0, required)
             drop.copy(
                 currentMinutes = reported,
+                progressKnown = true,
                 progress = if (required == 0) 0f else reported.toFloat() / required,
-                canClaim = required > 0 && reported >= required && !drop.isClaimed,
+                canClaim = required > 0 && reported >= required && !drop.isClaimed &&
+                    (!publicCatalog || (drop.claimEvidenceKnown && !drop.claimId.isNullOrBlank())),
             )
         },
     )
@@ -3396,7 +3426,7 @@ internal object CampaignPrioritySelector {
 
     fun autoFallbackCandidates(settings: AppSettings, campaigns: List<Campaign>): List<Campaign> =
         fallbackCandidates(settings, campaigns)
-            .filter { campaign -> campaign.linked }
+            .filter { campaign -> campaign.canProbeAccount }
 
     fun unlinkedCandidates(settings: AppSettings, campaigns: List<Campaign>): List<Campaign> =
         if (settings.fallbackToOtherGames) {
@@ -3558,19 +3588,19 @@ internal object CampaignPrioritySelector {
 
         val fallbackCandidates = fallbackCandidates(settings, selectableCampaigns, now)
         val linkedClaimed = fallbackCandidates.filter { campaign ->
-            campaign.linked && campaign.hasClaimedDropProgress
+            campaign.canProbeAccount && campaign.hasClaimedDropProgress
         }
         val unlinkedClaimed = fallbackCandidates.filter { campaign ->
             campaign.canTryUnlinkedLocallyAt(now) && campaign.hasClaimedDropProgress
         }
         val linkedViewing = fallbackCandidates.filter { campaign ->
-            campaign.linked && !campaign.hasClaimedDropProgress && campaign.hasViewingProgress
+            campaign.canProbeAccount && !campaign.hasClaimedDropProgress && campaign.hasViewingProgress
         }
         val unlinkedViewing = fallbackCandidates.filter { campaign ->
             campaign.canTryUnlinkedLocallyAt(now) && !campaign.hasClaimedDropProgress && campaign.hasViewingProgress
         }
         val linkedFresh = fallbackCandidates.filter { campaign ->
-            campaign.linked && !campaign.hasClaimedDropProgress && !campaign.hasViewingProgress
+            campaign.canProbeAccount && !campaign.hasClaimedDropProgress && !campaign.hasViewingProgress
         }
         val unlinkedFresh = fallbackCandidates.filter { campaign ->
             campaign.canTryUnlinkedLocallyAt(now) && !campaign.hasClaimedDropProgress && !campaign.hasViewingProgress

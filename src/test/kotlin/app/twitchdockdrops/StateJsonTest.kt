@@ -21,6 +21,22 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 class StateJsonTest {
+    @Test fun `TV discovery status and unknown account progress are explicit and redacted`() {
+        val drop = CampaignDrop("drop", "Reward", 0, 30, 0f, false, false, emptyList(), progressKnown = false,
+            claimId = "private-claim")
+        val encoded = StateJson().encode(RuntimeSnapshot(
+            inventorySource = "twitch_public_catalog", inventoryComplete = false,
+            inventoryStatus = "Public catalog unavailable", catalogUpdatedAt = Instant.EPOCH,
+            campaigns = listOf(Campaign("campaign", "Campaign", "Game", publicCatalog = true,
+                linkStatusKnown = false, drops = listOf(drop)))), AppSettings(), emptyList())
+        val snapshot = Json.parseToJsonElement(encoded).jsonObject.getValue("snapshot").jsonObject
+        assertEquals("twitch_public_catalog", snapshot.getValue("inventorySource").jsonPrimitive.content)
+        assertEquals("false", snapshot.getValue("inventoryComplete").toString())
+        val campaign = snapshot.getValue("campaigns").jsonArray.single().jsonObject
+        assertEquals("false", campaign.getValue("linkStatusKnown").toString())
+        assertEquals("false", campaign.getValue("drops").jsonArray.single().jsonObject.getValue("progressKnown").toString())
+        assertFalse(encoded.contains("private-claim"))
+    }
     @Test fun `reward settings and prerequisite reasons are serialized without claim identifiers`() {
         val drop = CampaignDrop("drop", "Reward", 0, 30, 0f, false, false, emptyList(),
             claimId = "private-claim-instance", preconditionDropIds = listOf("missing"))

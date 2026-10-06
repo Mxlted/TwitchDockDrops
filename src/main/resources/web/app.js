@@ -291,9 +291,9 @@ function renderOverview(data) {
       ${renderAccountOverview(account)}
       <div class="stat-grid">
         ${renderStat("Claimed this session", snapshot.dropsClaimedThisSession, "drops claimed by the miner", "twitch", dropletIcon())}
-        ${renderStat("Active campaigns", snapshot.activeCampaignCount, `${campaigns.length} loaded from Twitch`, "sky", bloomIcon())}
+        ${renderStat("Active campaigns", snapshot.activeCampaignCount, `${campaigns.length} loaded ${snapshot.inventorySource === "twitch_public_catalog" ? "from Twitch + public catalog" : "from Twitch"}`, "sky", bloomIcon())}
         ${renderStat("Ready to claim", claimable, claimable ? "claiming on the next pass" : "nothing waiting right now", "peach", giftIcon())}
-        ${renderStat("Current drop", activeDrop ? `${percent(activeDrop.progress)}%` : "—", activeDrop ? `${activeDrop.remainingMinutes}m left · done ${formatEta(activeDrop.remainingMinutes)}` : "no drop in progress", "mint", clockIcon())}
+        ${renderStat("Current drop", activeDrop ? (activeDrop.progressKnown === false ? "Unknown" : `${percent(activeDrop.progress)}%`) : "—", activeDrop ? (activeDrop.progressKnown === false ? "awaiting Twitch progress" : `${activeDrop.remainingMinutes}m left · done ${formatEta(activeDrop.remainingMinutes)}`) : "no drop in progress", "mint", clockIcon())}
       </div>
       <div class="grid-two">
         <section class="soft-card section-card">
@@ -370,7 +370,7 @@ function renderLoginOptions() {
     <p>Sign in using the Docker browser. No desktop download or Node.js installation. Keep the browser service running for automatic renewal.</p>
     ${ui.dashboardLoginAvailable ? '<a class="button button-primary" href="/browser-login.html">Open dashboard login</a>' : '<p class="field-hint">Enable the optional browser service on the Docker host:</p><p><code>docker compose -f compose.yaml -f compose.browser.yaml up --build -d</code></p>'}
     <h3>Experimental Android TV</h3>
-    <p>Optional device-code login with encrypted token renewal. Direct Twitch campaign discovery may reject this client. OAuth success alone does not verify earning, claims, or renewal. Browser login remains recommended.</p>
+    <p>Optional device-code login with encrypted token renewal. Uses SunkwiBOT public campaign metadata with Twitch account inventory. Public coverage may lag or be incomplete. OAuth success alone does not verify earning, claims, or renewal. Browser login remains recommended.</p>
     <button class="button button-quiet" data-action="connect-tv" type="button">Try experimental TV login</button>
     <h3>On your desktop</h3>
     <p>Use Chrome, Edge, or Chromium in a separate temporary profile. Requires Node.js 22.4 or newer and the helper running on your computer.</p>
@@ -491,11 +491,11 @@ function renderWatchCard(campaign, drop, channel, channels = [], channelSearchIn
         </div>
         <h3>${dropName}</h3>
         <p>${esc(campaign.gameName)} · ${renderCampaignLink(campaign)}${dropPosition}</p>
-        <progress class="progress-track" max="100" value="${progress}" aria-label="${progress}% watched"></progress>
-        <div class="progress-line"><span>${drop.currentMinutes} of ${drop.requiredMinutes} min</span><span>${drop.remainingMinutes}m left · done ${esc(formatEta(drop.remainingMinutes))}</span></div>
+        <progress class="progress-track" max="100" value="${progress}" aria-label="${drop.progressKnown === false ? "Progress unknown" : `${progress}% watched`}"></progress>
+        <div class="progress-line"><span>${drop.progressKnown === false ? "Unknown" : drop.currentMinutes} of ${drop.requiredMinutes} min</span><span>${drop.progressKnown === false ? "Awaiting Twitch progress" : `${drop.remainingMinutes}m left · done ${esc(formatEta(drop.remainingMinutes))}`}</span></div>
         ${channel ? `<div class="inline-actions"><button class="tiny-button" data-action="find-channel" type="button" aria-expanded="${showChannelPicker}" aria-controls="channelPicker" ${searching ? "disabled" : ""}>${searching ? "Finding channels…" : showChannelPicker ? "Refresh channel list" : "Switch channel"}</button></div>` : ""}
       </div>
-      <div class="progress-ring"><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18"></circle><circle class="ring-progress" cx="22" cy="22" r="18" pathLength="100" stroke-dasharray="${progress} 100"></circle></svg><strong>${progress}%</strong></div>
+      <div class="progress-ring"><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18"></circle><circle class="ring-progress" cx="22" cy="22" r="18" pathLength="100" stroke-dasharray="${progress} 100"></circle></svg><strong>${drop.progressKnown === false ? "?" : `${progress}%`}</strong></div>
       ${channel && showChannelPicker ? renderChannelPicker(alternatives, searching) : ""}
     </div>`;
 }
@@ -653,6 +653,7 @@ function renderCampaigns(data) {
   return `
     <div class="page-stack">
       ${data.snapshot.error ? renderError(data.snapshot.error) : ""}
+      ${data.snapshot.inventoryStatus ? `<p class="field-hint" role="status">${esc(data.snapshot.inventoryStatus)}</p>` : ""}
       ${renderGamePriorities(data)}
       <section class="soft-card toolbar">
         <label class="search-field">
@@ -752,7 +753,7 @@ function renderCampaignRow(campaign) {
       : campaign.expired && campaign.endsAt
         ? `Ended ${formatDateTime(campaign.endsAt)}`
         : "";
-  const linkUrl = campaign.linkStatusKnown && !campaign.linked ? safeUrl(campaign.linkUrl) : null;
+  const linkUrl = (campaign.linkStatusKnown || campaign.publicCatalog) && !campaign.linked ? safeUrl(campaign.linkUrl) : null;
   const detailsId = `drops-${cssId(campaign.id)}`;
   return `
     <article class="campaign-row ${campaign.excluded ? "is-excluded" : ""}">
@@ -766,8 +767,8 @@ function renderCampaignRow(campaign) {
         </div>
         <h3>${esc(campaign.gameName)}</h3>
         <p>${renderCampaignLink(campaign)}</p>
-        <progress class="progress-track" max="100" value="${progress}" aria-label="${progress}% watched"></progress>
-        <div class="progress-line"><span>${progress}% watched</span><span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.remainingMinutes}m left</span></div>
+        <progress class="progress-track" max="100" value="${progress}" aria-label="${campaign.drops.some((drop) => drop.progressKnown === false) ? "Progress unknown" : `${progress}% watched`}"></progress>
+        <div class="progress-line"><span>${campaign.drops.some((drop) => drop.progressKnown === false) ? "Progress incomplete" : `${progress}% watched`}</span><span>${campaign.claimedDrops}/${campaign.totalDrops} claimed · ${campaign.remainingMinutes}m left</span></div>
       </div>
       <div class="campaign-actions">
         <button class="tiny-button ${priority >= 0 ? "" : "is-accent"}" type="button" data-action="toggle-priority" data-game="${attr(campaign.gameName)}">${priority >= 0 ? "Unpin" : "Pin game"}</button>
@@ -786,7 +787,7 @@ function renderDropList(campaign, id) {
   return `
     <ul class="drop-list" id="${attr(id)}">
       ${campaign.drops.map((drop) => {
-        const state = drop.blockedReason && !drop.claimed ? ["is-waiting", "Blocked"] : drop.claimed ? ["is-claimed", "Claimed"] : drop.canClaim ? ["is-ready", "Ready to claim"] : drop.currentMinutes > 0 ? ["is-progress", "In progress"] : ["is-waiting", "Not started"];
+        const state = drop.progressKnown === false ? ["is-waiting", "Progress unknown"] : drop.blockedReason && !drop.claimed ? ["is-waiting", "Blocked"] : drop.claimed ? ["is-claimed", "Claimed"] : drop.canClaim ? ["is-ready", "Ready to claim"] : drop.currentMinutes > 0 ? ["is-progress", "In progress"] : ["is-waiting", "Not started"];
         const rewards = drop.rewards.map((reward) => reward.name).filter(Boolean);
         return `
           <li class="drop-item">
@@ -795,7 +796,7 @@ function renderDropList(campaign, id) {
               <span>${rewards.length ? esc(rewards.join(", ")) : "Reward details unavailable"}</span>
               ${drop.blockedReason ? `<span>${esc(drop.blockedReason)}</span>` : ""}
             </div>
-            <span class="drop-time">${drop.currentMinutes}/${drop.requiredMinutes} min</span>
+            <span class="drop-time">${drop.progressKnown === false ? "?" : drop.currentMinutes}/${drop.requiredMinutes} min</span>
             <span class="status-chip ${state[0]}">${state[1]}</span>
           </li>`;
       }).join("")}

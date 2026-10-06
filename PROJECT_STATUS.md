@@ -3,6 +3,64 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## TV public catalog discovery - 2026-10-05
+
+This supersedes the direct Campaigns requirement in the earlier TV implementation/expiry records.
+Root baseline was clean `main` at `7ff70d4`. The optional Android checkout was clean at
+`dfd7d8c5316ff896c838301bd3c769c84aef8d15` and remains unchanged.
+
+Reference inspection used current upstream HEAD
+[`c9c2c3a550625354ba162cb71ce31725ef537bae`](https://github.com/ohne-b/twitch-drops-miner/tree/c9c2c3a550625354ba162cb71ce31725ef537bae),
+specifically `src/twitch/catalog.rs`, `inventory.rs`, endpoint definitions and its PolyForm
+Noncommercial license. An anonymous read of the live SunkwiBOT `/v2/drops` feed confirmed the grouped
+`lastUpdatedAt` / `data[].rewards[]` schema. These are behavioral/protocol references only; no upstream
+implementation was copied or added as a dependency. This repository's license remains unchanged.
+
+- [x] TV admission/rotation validates OAuth client/account identity and usable Twitch account
+  inventory before atomic encrypted replacement. It does not depend on catalog availability.
+- [x] TV login, renewal, refresh, mining and claim recovery never request gated Twitch campaign
+  list/details. Browser login and direct discovery retain their existing route.
+- [x] Separate anonymous catalog transport has no session input or shared Twitch credentials,
+  headers, cookies or interceptors. Requests, body size, concurrency, cache and freshness are bounded.
+- [x] Catalog metadata joins Twitch account inventory. Public account fields are discarded;
+  unknown linkage/progress are explicit. Twitch alone supplies progress, linkage and claim evidence.
+- [x] Priorities, reward filters, prerequisites, subscription exclusion, time windows, restricted
+  channels, failover and progress supervision apply to catalog discoveries. Missing claim evidence
+  prompts inventory recovery; TV never synthesizes claim IDs. Pending history uses Twitch evidence.
+- [x] Stale/malformed/partial/unavailable catalog responses preserve bounded known metadata and
+  fresh Twitch inventory, with persistent incomplete-data diagnostics. Rejected account records
+  cannot be replaced with public account assumptions or mined from retained stale state.
+- [x] README, architecture/state contract, security boundary and operator troubleshooting updated.
+
+Verification:
+
+- Root `gradle test installDist`: **230 JVM tests passed**, zero skipped/failures/errors; distribution
+  built using existing repository-local JDK 21 and Gradle 9.5.1. Sandbox dependency resolution and
+  default JDK discovery initially failed; the permitted run with the existing JDK succeeded.
+- **48 Node tests passed**; `node --check src/main/resources/web/app.js` passed. New rendering and
+  serializer checks cover incomplete discovery, escaped diagnostics, unknown linkage/progress and
+  redacted claim IDs. Existing browser acceptance/discovery and lifecycle race checks remain green.
+- Thirteen new catalog tests cover routing/admission, parsing/merging, forged public state,
+  credential/header isolation, caching, body bounds, redirects, freshness, partial/duplicate data,
+  filters/prerequisites, restricted channels, pending claims and malformed progress. A new runtime
+  test verifies rejected renewed inventory preserves the previous encrypted session.
+- Docker `desktop-linux`, engine **29.8.2**: `dockdrops:tv-catalog-20261005` built once, including
+  clean root JVM tests/distribution. A disposable no-network/no-published-port container with
+  non-root user, read-only root, dropped capabilities and tmpfs data reported **running, healthy,
+  zero restarts** through the existing app health command. It was stopped and removed.
+- Complete task diff/markup review and `git diff --check` passed; Android status/HEAD matched the
+  baseline. Saved data, credentials, ignored research artifacts and running services were untouched.
+
+Remaining user-owned checks: real TV authorization and usable inventory; catalog discovery coverage;
+natural token renewal and restart recovery; confirmed earning, priorities/filters/prerequisites,
+restricted-channel discovery and failover; successful claims and interrupted-claim reconciliation.
+Manually review desktop/mobile, dark/light themes, unknown/incomplete/error states, and keyboard/focus
+behavior. No real-account or browser visual testing was performed for this change. Docker health is
+local readiness only. The feed may omit account-specific campaigns; cache is memory-only and a
+restart during an outage can only rediscover account inventory. Display-only Open Reward Campaigns
+remain unavailable for TV because their endpoint belongs to the direct discovery flow.
+No push or deployment was performed.
+
 ## Experimental TV token expiry repair - 2026-10-05
 
 The user reported `Invalid TV token expiry. Retrying in 15s.` after authorizing a TV code,
