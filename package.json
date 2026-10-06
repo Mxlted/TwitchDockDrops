@@ -1,0 +1,12 @@
+{
+  "name": "twitch-dock-drops-browser-tests",
+  "private": true,
+  "scripts": {
+    "test": "node --test src/test/js/*.cjs src/test/js/*.mjs",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.63.0"
+  }
+}

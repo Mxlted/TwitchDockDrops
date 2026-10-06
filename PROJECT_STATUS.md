@@ -3,6 +3,75 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## Six improvements - 2026-10-05
+
+Baseline inspection confirmed clean root `main` at `9aef73f`, and a clean optional Android checkout
+at `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. The reference's current HEAD was still
+[`c9c2c3a550625354ba162cb71ce31725ef537bae`](https://github.com/ohne-b/twitch-drops-miner/commit/c9c2c3a550625354ba162cb71ce31725ef537bae).
+Its `src/twitch/oauth.rs`, `mod.rs`, `pubsub.rs`, and `LICENSE.md` were inspected read-only.
+The reference uses PolyForm Noncommercial. These changes independently implement behavior and
+protocol integration; no reference implementation was copied or added as a dependency. This project
+remains MIT. No external SunkwiBOT campaign catalog, publishing automation, deployment, or branch
+refresh was added.
+
+- [x] **1 — Alternative login:** optional, visibly experimental Android TV device authorization,
+  separate client/device identity, encrypted refresh token and expiry, same-account validation,
+  atomic rotation, generation guards, bounded throttle retry, and conservative ambiguous-exchange
+  handling. Browser remains the default. Acceptance requires direct Twitch Inventory and Campaigns;
+  the reference's external catalog does not establish compatibility with these operations.
+- [x] **2 — Claim history:** bounded account-scoped confirmed/pending records, intent before claims,
+  authoritative restart reconciliation, preserved cooldowns, corruption preservation, and dashboard
+  loading/empty/error/retry states. Ambiguous requests are not blindly replayed. Incomplete benefit
+  evidence no longer marks a multi-benefit reward claimed.
+- [x] **4 — Event updates:** server-side account/current-channel subscriptions for progress, claim
+  availability, offline and broadcast changes. Bounded/coalesced notifications request authoritative
+  refresh through the runtime. Polling, reconnect backoff, acknowledgement/heartbeat checks,
+  duplicate handling, and lifecycle cancellation remain in control.
+- [x] **5 — Individual filters:** saved distribution-type selection and literal case-insensitive
+  reward-name exclusions across settings/API/UI/selection. Defaults allow all; required shared
+  prerequisites survive type filtering, explicit name exclusions block dependents, and Open Reward
+  Campaigns remain display-only.
+- [x] **6 — Dependencies:** missing/duplicate IDs, cycles/depth bounds, expired/non-watchable or
+  impossible-window/insufficient-watch-time prerequisites, claimed prerequisites, and overlapping/shared branches have
+  explicit eligibility reasons. Unknown prerequisites no longer unlock rewards. Priorities remain
+  independent of the inventory.
+- [x] **7 — Browser/accessibility:** Playwright + axe development-only suite with isolated JVM data,
+  synthetic account/history fixtures, external browser traffic blocked, both themes and desktop/
+  mobile layouts, keyboard/dialog/focus checks, persistence/schema checks, login fixture states,
+  filters/reasons and history states. Fixed fixture time and reduced motion make checks deterministic.
+  Light-mode muted/status contrast was corrected using the existing design tokens.
+
+Verification on this change:
+
+- `gradle test installDist`: **210 JVM tests passed**, distribution built with the existing JDK 21.
+  The initial restricted run could not resolve dependencies; the permitted build used the existing
+  Gradle 9.5.1 distribution and JDK 21. No machine configuration or Android build inputs changed.
+- `node --test src/test/js/*.cjs src/test/js/*.mjs`: **47 passed**.
+- `npm run test:browser`: **24 passed** in Chromium across four viewport/theme projects, including
+  axe WCAG A/AA checks. These are synthetic/local checks, not real-account evidence.
+- Syntax checks passed for changed web JavaScript, Playwright config, test launcher, and browser tests.
+- Base and browser-merged Compose configurations passed quiet validation. Docker context was
+  `desktop-linux`, engine `29.8.2`. The final app image `dockdrops:review-20261005` built successfully
+  (including clean JVM tests/distribution inside Docker). A brief isolated startup with disposable
+  tmpfs data, no network, read-only root and existing health command reported **running, healthy,
+  zero restarts**; the task container was removed. No live service or saved session was touched.
+- Complete diff/whitespace review and Android baseline comparison performed; ignored credentials,
+  saved data, optional checkout, and pre-existing generated research artifacts are preserved.
+
+Remaining live/manual verification:
+
+- Android TV's direct Campaigns/Inventory acceptance, discovery coverage, earning, claims, naturally
+  scheduled refresh-token rotation and restart recovery have **not** been tested with a real account.
+  Missing direct-Twitch compatibility rejects acceptance; no checks were weakened to substitute a
+  catalog or OAuth-only success. Keep Chromium available. An ambiguous refresh or crash between
+  upstream rotation and local save may require reconnecting.
+- Private event subscription acceptance/delivery, actual faster progress/claim/offline handling and
+  reconnect behavior on Twitch need live verification. Polling remains the fallback.
+- Real interrupted-claim reconciliation and all natural earning/failover/claim flows remain
+  user-owned. History dates are local first-confirmation times; this is not exactly-once delivery.
+- Manual screen-reader navigation, zoom, touch ergonomics, focus in real states and both themes still
+  need review. Automated axe scans cannot prove full accessibility conformance.
+
 ## Verification scope - 2026-10-05
 
 - Routine Docker Desktop verification is limited to affected image builds and brief isolated

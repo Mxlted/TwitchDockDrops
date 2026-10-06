@@ -34,6 +34,10 @@ you care about, and leave the miner to handle the rest.
 - **Persistent game priorities:** save categories before their next campaign, set their order, and let
   Auto Mode find useful fallback work.
 - **Automatic claiming:** attempts to claim completed Drops and retries temporary failures.
+- **Claim history and recovery:** saves account-specific history and pending intent, reconciling uncertain
+  claims with Twitch inventory after interruptions.
+- **Individual reward filters:** choose observed reward types and exclude reward names while preserving
+  prerequisites needed for selected rewards. Blocked chains show a reason.
 - **Pick up after restarts:** restores your encrypted login, preferences, priorities, and saved
   Start/Stop choice.
 - **A real dashboard:** watch progress, browse campaigns, switch channels, and review activity from
@@ -117,6 +121,7 @@ The interface is a flat, Twitch-purple dashboard that keeps the important parts 
   cached for five minutes. You can also search loaded/saved categories or narrow to active or linked
   campaigns.
 - **Activity** explains what the miner selected, refreshed, watched, or claimed, above the runtime log.
+- **Claim history** shows saved confirmations and claims awaiting reconciliation for your current account.
 - **Settings** controls timing, Auto Mode order, fallback behavior, and resets, and reports the
   service version, uptime, and Twitch connection.
 - **Switch channel** opens a compatible live-channel picker. The current channel keeps running until
@@ -142,6 +147,12 @@ or open `/?preview=active` on your instance. Preview controls do not change the 
 - Private Twitch behavior can change, so review the [Project Status](./PROJECT_STATUS.md) when troubleshooting.
 - Connect Twitch uses browser login because Twitch can reject the older device-code flow. Existing
   sessions are preserved. The new durable renewal path still needs real-account endurance testing.
+- **Experimental Android TV login** is an optional choice with encrypted refresh-token renewal. It uses
+  a different identity from the older Android mobile flow and requires successful direct Twitch
+  Inventory and Campaigns checks. Compatibility with discovery, earning, claims, and renewal is not
+  live-verified; no external campaign catalog is used. Keep browser login available.
+- Twitch event subscriptions request faster inventory/channel checks while mining. Polling remains
+  the fallback; the private event protocol still needs real-account verification.
 - Local activity logs can contain campaign and channel names; review them before sharing.
 
 ## Documentation

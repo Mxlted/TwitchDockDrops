@@ -10,3 +10,7 @@ data
 **/*.iml
 **/.DS_Store
 **/local.properties
+
+node_modules
+playwright-report
+test-results

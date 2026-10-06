@@ -320,6 +320,7 @@ The `twitch-dock-drops-data` named volume is mounted at `/data` and stores:
 
 - encrypted Twitch session material and its local encryption key;
 - normalized runtime settings, game priorities, and campaign exclusions;
+- reward-type/name filters and account-scoped `claims-<user-id>.json` history/pending-claim files;
 - the bounded local activity log.
 
 Settings and sessions use atomic replacement and owner-only permissions where POSIX permissions are
@@ -399,6 +400,57 @@ maximum heap, and bounded metaspace, code cache, and direct memory. An override 
 `TWITCH_DROPS_JAVA_OPTS` replaces the complete option string.
 
 ## Build and verification
+
+### Browser and accessibility tests
+
+After building the JVM distribution, run the development-only Playwright suite (Node.js 22+):
+
+```bash
+gradle test installDist
+npm ci
+npx playwright install chromium
+npm run test:browser
+```
+
+Set `JAVA_HOME` to your JDK 21 if `java` is not on PATH. Tests bind an isolated JVM to loopback
+port 18743 and fail if it is already occupied. The launcher ignores all inherited `TWITCH_DROPS_*`
+variables, creates a fresh OS-temporary data directory, and removes it on orderly exit. Forced
+termination can leave a `dockdrops-browser-*` temporary directory; remove only the directory created
+by that run after its JVM stops. Never point this suite at a running miner or real session.
+
+Four Chromium projects cover desktop/mobile and dark/light. Fixtures use synthetic accounts and
+intercept inventory/history responses, block external browser requests, and never activate login,
+mining, or claims. Settings persistence/schema checks use the disposable logged-out JVM. The suite
+covers navigation, new login choices, reward filters, draft/focus preservation, dialog Escape,
+history loading/empty/error/retry, horizontal overflow, and axe WCAG A/AA scans. Reduced motion
+makes scans stable. Traces/reports/dependencies are ignored and excluded from Docker context.
+Automated accessibility checks do not establish complete WCAG conformance: manually check screen
+reader flow, zoom, touch ergonomics, both themes, and real-account states.
+
+### Experimental TV login and recovery
+
+Connect Twitch → **Try experimental TV login** requests a new code using the Android TV identity.
+It does not convert existing mobile/browser credentials. Existing encrypted credentials survive a
+failed attempt. Restarting reloads the saved credentials, subject to their existing renewal mode;
+a retained browser session may still require reconnecting. Browser login remains available.
+Direct Twitch Inventory and Campaigns validation must both succeed before acceptance.
+The reference implementation discovers campaigns through an external catalog; this project does
+not use that catalog, and direct-TV compatibility is still unknown. Synthetic tests are not live
+Drops evidence. Do not remove the optional browser service based on successful OAuth alone.
+
+TV renewal saves access and refresh tokens together after same-account verification. Throttling
+retries are bounded; lost/ambiguous refresh replies require reconnecting, since a refresh token may
+have been consumed. Process death between remote rotation and local save can also require login.
+Browser sessions retain their existing renewal behavior.
+
+History retains at most 2,000 records per account and evicts only old confirmed entries. Sign-out
+keeps these files for that account's next login. Pending records are reconciled from fresh Twitch
+evidence after restart; a missing reward or failed inventory never proves failure or success.
+If history is corrupt/unreadable, the file stays intact and automatic claims pause. Stop the miner,
+back up the affected history file, and restore a known-good copy or correct permissions before
+restarting. Do not delete pending intent merely to force another claim. The dashboard history error
+offers a retry after recovery. History is metadata, not an exactly-once ledger or complete Twitch
+account export; unavailable historical rewards cannot be reconstructed.
 
 The root project requires JDK 21 and Gradle 9.5.1 for local builds:
 
