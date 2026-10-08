@@ -51,9 +51,31 @@ behavior from UI labels or treat historical test results as verification of new 
 - `Dockerfile`, `compose.yaml`, `compose.browser.yaml`, `.dockerignore`: container delivery.
 - `docs/`: public showcase assets; use synthetic data, never real account/login captures.
 
-`main` is the development branch. `deployment` is a separately published minimal server snapshot;
-normal development does not update it. Follow `OPERATIONS.md` when explicitly asked to refresh it,
-retaining its exclusions rather than merging the whole development tree.
+`main` is the development branch. The former `deployment` branch has been removed. Server uploads
+use the local `docker-server/` copy folder described below and in `OPERATIONS.md`.
+
+## Docker server copy folder
+
+When completing changes intended for the Docker server, refresh the ignored root `docker-server/`
+folder so the user can drag its contents into the existing server directory. This is a source build
+bundle for `docker compose -f compose.yaml -f compose.browser.yaml up --build -d`.
+
+- Copy reviewed, tracked files from `src/` and `browser/`, plus `.dockerignore`, `.env.example`,
+  `build.gradle`, `settings.gradle`, `Dockerfile`, `compose.yaml`, `compose.browser.yaml`, `LICENSE`,
+  and `THIRD_PARTY_NOTICES.md`. Include JVM tests because the Dockerfile runs them.
+- Do not copy `.env`, data, credentials, sessions, logs, browser profiles, Git metadata, the Android
+  reference, generated `build/`, or `node_modules/`. Root package/Playwright files are test tooling
+  and are not required by either Dockerfile. Keep the copy folder ignored by Git and Docker.
+- Refresh only this generated folder after verifying its resolved path stays inside the repository;
+  preserve unexpected user files, especially any `.env` or data placed there. Remove stale generated
+  source files when refreshing so renamed/deleted code cannot remain in the upload.
+- Verify every copy against its source and validate both base and browser-merged Compose configs
+  from the copy folder with `config --quiet`. Do not start the real Compose services to test packaging.
+- Tell the user to upload the folder's contents, preserve the server's existing `.env` and named data
+  volume, and run the command above from the server directory. For a fresh installation only, copy
+  `.env.example` to `.env` and configure it. Report the absolute copy-folder path in the handoff.
+- This workflow does not authorize pushes or remote deployment; obtain explicit user authorization
+  for those actions as required by the Git rules below.
 
 ## Isolation and Git discipline
 

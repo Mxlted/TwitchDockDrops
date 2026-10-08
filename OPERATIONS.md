@@ -42,33 +42,28 @@ same command. The `twitch-dock-drops-data` volume keeps its name and contents. A
 network may remain after upgrading; do not delete the data volume. Explicit container/network names
 assume one instance per Docker host; override those names for multiple instances.
 
-### Deployment branch
+### Server copy folder
 
-`main` is the full development repository. `deployment` is a deliberately published server snapshot
-with the application, browser service, Docker/Compose files, Gradle build inputs, ignore rules, and
-license notices. JVM tests stay because the Docker build runs them. Documentation, screenshots,
-optional test harnesses, and all `.env` files are omitted.
+The former `deployment` branch has been removed. `main` is the supported Git checkout. For a
+drag-and-drop update, use the locally prepared, Git-ignored `docker-server/` folder:
 
-For a new checkout (the destination must be absent or empty):
+1. Copy its **contents** into the existing server directory containing `compose.yaml`. Replace the
+   supplied source/build files; replace the `src/` and `browser/` directories completely so deleted
+   source files do not linger. Preserve any intentional server-side source edits first.
+2. Keep the server's existing `.env` and `twitch-dock-drops-data` volume. The bundle includes only
+   `.env.example`; copy it to `.env` and configure it for a fresh installation only.
+3. Run from that server directory:
 
-```bash
-git clone --single-branch --branch deployment https://github.com/Mxlted/TwitchDockDrops.git /opt/TwitchDockDrops
-```
+   ```bash
+   docker compose -f compose.yaml -f compose.browser.yaml up --build -d
+   ```
 
-Place your server's local `.env` in that checkout. To update it:
-
-```bash
-cd /opt/TwitchDockDrops
-git pull --ff-only
-docker compose -f compose.yaml -f compose.browser.yaml up --build -d
-```
-
-An existing Git checkout can switch with `git fetch origin` followed by
-`git switch --track origin/deployment`. Preserve local edits before switching; uploaded folders
-without a `.git` directory need a Git checkout first. Ignored `.env` files remain local.
-
-Changes on `main` do not automatically publish to `deployment`. Refresh the deployment snapshot
-deliberately, retaining its exclusions; do not merge the full development tree into the server branch.
+The folder contains tracked `src/` (including build-time tests), `browser/`, both Compose files,
+both Gradle files, the root Dockerfile, `.dockerignore`, `.env.example`, and license notices. Docker
+generates `build/` inside its builder; no local `build/`, root Node/Playwright test tooling, or Git
+checkout is needed on the server. The copy folder is generated locally and is not part of a clone.
+`AGENTS.md` defines its preparation and verification steps. Uploading it does not replace saved data
+or require `docker compose down -v`.
 
 ### Debian Docker inside Proxmox LXC
 

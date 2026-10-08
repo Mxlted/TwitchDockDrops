@@ -49,9 +49,9 @@ you care about, and leave the miner to handle the rest.
 
 ## Quick start
 
-For a minimal server checkout, use the [`deployment` branch](https://github.com/Mxlted/TwitchDockDrops/tree/deployment).
-It contains the build/runtime inputs and license notices; keep your `.env` local. See the
-[deployment branch workflow](./OPERATIONS.md#deployment-branch) for cloning and updates.
+Use `main` for a Git checkout, or upload the contents of a prepared local `docker-server/` folder.
+See the [server copy folder workflow](./OPERATIONS.md#server-copy-folder) for updates that preserve
+your server's `.env` and saved session.
 
 You need [Docker](https://docs.docker.com/get-docker/) with Docker Compose and a Twitch account that
 can participate in Drops campaigns. The optional browser service lets you sign in directly through the

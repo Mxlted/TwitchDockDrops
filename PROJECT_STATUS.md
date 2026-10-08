@@ -3,6 +3,21 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## Docker server copy handoff - 2026-10-08
+
+- Added the `AGENTS.md` workflow for refreshing a local, ignored `docker-server/` source bundle for
+  the browser-enabled Compose command. It copies tracked source/build inputs and license notices;
+  the server's existing `.env` and named data volume stay in place.
+- Remote branch inspection confirmed only `main` among the queried `main`/`deployment` refs. Replaced
+  stale deployment-branch instructions with the copy-folder workflow.
+- Verified 96 copied files against their source SHA-256 hashes and checked the folder contains no
+  private `.env`, data, build output, Git metadata, Android checkout or Node dependencies. Both base
+  and browser-merged Compose configurations passed `config --quiet` from inside the copy folder.
+- `git diff --check` passed; the Android checkout remains clean at
+  `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. This documentation/ignore-only follow-up does not change
+  runtime or build inputs; application checks remain the segment-transport results below.
+- No remote server deployment or live Twitch session testing is performed by this packaging step.
+
 ## Segment watch transport repair - 2026-10-08
 
 Investigated the dashboard-browser report of stalled progress on `rainbow6br` for campaign
@@ -330,7 +345,7 @@ Remaining live/manual verification:
 
 ## Implementation checklist
 
-- [x] Published `deployment` branch keeps server build/runtime inputs and excludes environment files
+- [x] Local `docker-server/` copy workflow supplies server build inputs and excludes private environment files
 - [x] Compact Overview/Settings account card shows the signed-in username, ID, and sign-in method
 - [x] Public username survives encrypted-session restore, with legacy ID fallback and guarded enrichment
 - [x] Device polling accepts Twitch message-based replies and keeps transient HTTP failures retryable

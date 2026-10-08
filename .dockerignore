@@ -2,6 +2,7 @@
 .gradle
 build
 data
+docker-server
 .env
 /TwitchDropsMinerAndroid/
 **/build
