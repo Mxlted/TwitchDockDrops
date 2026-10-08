@@ -3,6 +3,53 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## Segment watch transport repair - 2026-10-08
+
+Investigated the dashboard-browser report of stalled progress on `rainbow6br` for campaign
+`84fdd0fb-a22e-41b5-8e31-86431c76b3a7`. The clean root baseline was `a828a15`. Upstream
+[issue 163](https://github.com/rangermix/TwitchDropsMiner/issues/163) and
+[PR 164](https://github.com/rangermix/TwitchDropsMiner/pull/164), pinned at
+`bb832c223cb323275c36bc454db0103019a9e4b0` (v2.2.1), identify a matching telemetry-only watch
+regression. This root used only direct Spade posts and had no playlist/segment watch transport.
+The upstream source was read as a behavioral/protocol reference; the Kotlin implementation is
+root-owned. The optional Android checkout remains unchanged, an intentional parity difference.
+
+- [x] Authenticated PlaybackAccessToken, lowest-bandwidth HLS metadata polling and HEAD-only media
+  checks, successful-segment deduplication, retryable failures and expired playlist reacquisition.
+- [x] Ten-second stream polling is independent of configured progress checks and 59-second auxiliary
+  telemetry. No estimated minutes, fake completion or transport-driven claims were introduced.
+- [x] Dedicated credential-free media client, strict HTTPS host/path parsing, bounded response and
+  cache sizes, whole-poll/per-request deadlines, cancellable HTTP and stale channel/session guards.
+- [x] Same-broadcast cache retention; reset on account/broadcast/run replacement; old cleanup cannot
+  erase a newer run. Media rejection preserves OAuth; browser-proof expiry names both renewal options.
+- [x] Settings copy and architecture/security/operator guidance reflect the new transport.
+
+Verification actually performed:
+
+- Root `gradle --no-daemon clean test installDist` passed in the Docker build stage using Gradle
+  9.5.1 / JDK 21: **271 JVM tests, zero failures/errors/skips**. This is Linux build-stage evidence;
+  native Windows Gradle was not used. The 21 new regressions cover transport, parsing, security,
+  retries, deduplication, deadlines, cancellation, superseded runs and cadence/error preservation.
+- Full Node regression suite: **51 passed**; `node --check src/main/resources/web/app.js` passed.
+  The initial sandbox run denied loopback test connections; the permitted rerun passed.
+- Runtime image `dockdrops:watch-progress-20261008` built on Docker `desktop-linux`, Engine 29.8.2.
+  A brief network-disabled container with a read-only root, dropped capabilities, no-new-privileges
+  and disposable tmpfs data passed the existing app health command: running/healthy, zero restarts.
+  Test/report containers were removed; no live login, renewal, mutation or endurance test was run.
+- `git diff --check` passed. The ignored Android checkout remains clean at
+  `dfd7d8c5316ff896c838301bd3c769c84aef8d15`. No push, PR or deployment.
+
+The original session was not inspected:
+no miner container was running locally when Docker became available, and the supplied Twitch pages
+provided no account progress evidence. The code gap is confirmed; session expiry, campaign/channel
+eligibility and the specific live earning result remain unverified. No saved session was reset or used.
+Live CDN routing outside the currently allowlisted Twitch media hosts has not been verified.
+
+User-owned checks: deploy the rebuilt app, confirm dashboard-browser renewal status, and compare
+Twitch-reported minutes while watching an eligible live Rainbow6BR stream for the campaign; verify
+channel switch/failover and claims. Check the renamed Progress check setting on desktop/mobile,
+both themes, with keyboard focus. Synthetic tests and packaging health cannot establish live earning.
+
 ## Coherent experimental TV session path - 2026-10-05
 
 Implemented from clean `main` at `27fe527`. The reported real-account malformed-progress response
@@ -335,7 +382,7 @@ Remaining live/manual verification:
 - [x] Direct JVM listening defaults to loopback and Compose separates internal listen from host publication
 - [x] The example environment enables private-LAN access with same-origin Host/Origin enforcement
 - [x] OAuth credentials are restricted to trusted Twitch endpoints; Spade watch events retain session attribution
-- [x] Watch earning uses fresh direct-Spade form posts with canonical channel/stream/game/user attribution
+- [x] Watch transport polls HLS and deduplicates segment HEADs; direct Spade posts remain auxiliary
 - [x] Watch/configuration rejection is separate from authoritative invalid-token expiry
 - [x] Device authorization handles pending, slow-down, denial, expiry, malformed fields, and bounded bodies
 - [x] Campaign/drop windows are evaluated dynamically and active waits include campaign expiry

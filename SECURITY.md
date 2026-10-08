@@ -145,6 +145,18 @@ through constructor parameters used by local MockWebServer tests; an arbitrary H
 accepted. The Spade body also contains the numeric Twitch user ID required by the private event format;
 it is sent only upstream and is never exposed through the browser API.
 
+The HLS watch path obtains a scoped playback token through the existing authenticated GraphQL host.
+Only that token's signature/value go to the fixed `https://usher.ttvnw.net/api/channel/hls/` endpoint.
+Derived playlist/segment destinations must be HTTPS `ttvnw.net` or its subdomains, port 443, with no
+URL credentials/fragments. An independent HTTP client sends no OAuth, browser integrity/context,
+client/device headers, cookies or shared interceptors/authenticators/cache to those hosts. Redirects
+and implicit retries are disabled. Master/media GETs have bounded metadata bodies; segments use
+HEAD only. Size/count/cache/deadline limits and cancellation constrain malformed or stalled streams.
+Channel/session guards stop stale batches; a late old-run cleanup cannot clear newer watch state.
+Signed URLs/tokens and upstream bodies never enter logs, public state or durable storage. Media
+401/403/404 refreshes only the signed playlist; only authoritative OAuth validation 401 expires the
+saved session. Expired browser proof still blocks authenticated watch work and preserves credentials.
+
 ## Browser protections
 
 Public category search uses an anonymous query to the fixed `https://gql.twitch.tv/gql` endpoint.

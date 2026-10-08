@@ -48,6 +48,91 @@ import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.io.TempDir
 
 class LocalMinerRuntimeExecutionTest {
+    @Test fun `late stopped watch cannot commit or clear a newer runs transport state`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val finished = CompletableDeferred<Unit>()
+        val watches = AtomicInteger()
+        val resets = AtomicInteger()
+        val progress = AtomicInteger()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override val watchPollIntervalSeconds: Long = 10
+            override suspend fun validateSession(session: StoredTwitchSession) = ValidatedToken("12345", "client")
+            override suspend fun fetchCampaignInventory(session: StoredTwitchSession) = CampaignInventory(listOf(watchCampaign("race", "Status Game")))
+            override suspend fun fetchEligibleChannels(session: StoredTwitchSession, campaign: Campaign, limit: Int) = listOf(testChannel(7, "stream", "broadcast", 20))
+            override suspend fun pollWatchStream(session: StoredTwitchSession, channel: Channel, isCurrent: () -> Boolean): Boolean {
+                if (watches.incrementAndGet() == 1) {
+                    entered.complete(Unit)
+                    withContext(NonCancellable) { release.await() }
+                    assertFalse(isCurrent())
+                    finished.complete(Unit)
+                }
+                return true
+            }
+            override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress {
+                progress.incrementAndGet()
+                return CurrentDropProgress("race-drop", 1, 7)
+            }
+            override fun resetWatchSession() { resets.incrementAndGet() }
+        }
+        val runtime = runtime(store, api)
+        try {
+            runtime.startMining(); withTimeout(3_000) { entered.await() }
+            runtime.stopMining(); withTimeout(3_000) { runtime.snapshot.first { !it.miningActive } }
+            runtime.startMining(); withTimeout(3_000) { runtime.snapshot.first { it.progressStatus == "confirmed" } }
+            assertEquals(2, resets.get())
+            release.complete(Unit); withTimeout(3_000) { finished.await() }; delay(100)
+            assertEquals(2, resets.get())
+            assertEquals(1, progress.get())
+            assertTrue(runtime.snapshot.value.miningActive)
+        } finally { release.complete(Unit); runtime.stopMiningAndJoin(shutdown = true) }
+        assertEquals(3, resets.get())
+    }
+
+    @Test fun `ten second playlist polls preserve progress cadence errors and cleanup`() = runBlocking {
+        val store = sessionStore().also { it.saveTwitchSession(storedSession()) }
+        val settings = SettingsRepository(directory)
+        val clock = AtomicReference(Instant.parse("2026-10-08T12:00:00Z"))
+        val watches = CopyOnWriteArrayList<Instant>()
+        val progress = CopyOnWriteArrayList<Instant>()
+        val resets = AtomicInteger()
+        val api = object : TwitchApi by AuthenticationTwitchApi() {
+            override val watchPollIntervalSeconds: Long = 10
+            override suspend fun validateSession(session: StoredTwitchSession) = ValidatedToken("12345", "client")
+            override suspend fun fetchCampaignInventory(session: StoredTwitchSession) = CampaignInventory(listOf(watchCampaign("cadence", "Status Game")))
+            override suspend fun fetchEligibleChannels(session: StoredTwitchSession, campaign: Campaign, limit: Int) = listOf(testChannel(7, "stream", "broadcast", 20))
+            override suspend fun pollWatchStream(session: StoredTwitchSession, channel: Channel, isCurrent: () -> Boolean): Boolean {
+                assertTrue(isCurrent())
+                watches.add(clock.get())
+                return true
+            }
+            override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress {
+                progress.add(clock.get())
+                if (progress.size > 1) throw TwitchApiException(TwitchApiErrorType.Network, "Synthetic progress unavailable")
+                return CurrentDropProgress("cadence-drop", 1, 7)
+            }
+            override fun resetWatchSession() { resets.incrementAndGet() }
+        }
+        val runtime = runtime(store, api, settings, clock = clock::get)
+        try {
+            runtime.startMining()
+            withTimeout(3_000) { runtime.snapshot.first { it.progressStatus == "confirmed" } }
+            repeat(19) { index ->
+                clock.updateAndGet { it.plusSeconds(10) }
+                settings.update { it.copy(debugLogging = !it.debugLogging) }
+                withTimeout(3_000) { while (watches.size < index + 2) delay(1) }
+                delay(10)
+            }
+            assertEquals(20, watches.size)
+            assertEquals(listOf(0L, 60L, 120L, 180L), progress.map { Duration.between(watches.first(), it).seconds })
+            assertEquals(1, runtime.snapshot.value.activeDrop!!.currentMinutes)
+            assertEquals("Synthetic progress unavailable", runtime.snapshot.value.error)
+            assertEquals(storedSession(), store.twitchSession())
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+        assertEquals(2, resets.get())
+    }
+
     @Test fun `TV identity survives preparation expiry denial and issued token validation failure`() = runBlocking {
         for (mode in listOf("prepare", "expired", "denied", "issued")) {
             val store = sessionStore().also { it.saveTwitchSession(storedSession()) }

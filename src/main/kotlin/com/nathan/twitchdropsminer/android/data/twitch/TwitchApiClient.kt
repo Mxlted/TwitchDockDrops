@@ -23,6 +23,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -197,6 +200,11 @@ interface TwitchApi {
         }
     }
     suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel): Boolean
+    /** Null means the transport only needs the configured minute cadence. */
+    val watchPollIntervalSeconds: Long? get() = null
+    suspend fun pollWatchStream(session: StoredTwitchSession, channel: Channel, isCurrent: () -> Boolean): Boolean =
+        if (isCurrent()) sendWatchMinute(session, channel) else false
+    fun resetWatchSession() = Unit
     suspend fun currentDrop(session: StoredTwitchSession, channelId: Long): CurrentDropProgress?
     suspend fun claimDrop(session: StoredTwitchSession, dropInstanceId: String): DropClaimResult
     fun invalidateWatchConfiguration(channelId: Long) = Unit
@@ -212,6 +220,7 @@ class TwitchApiClient(
     private val watchEventTime: () -> Instant = Instant::now,
     private val deviceClientId: String = TwitchClientId,
     private val publicCatalogClient: PublicCatalogClient = PublicCatalogClient(),
+    private val watchMonotonicNanos: () -> Long = System::nanoTime,
 ) : TwitchApi {
     init { require(deviceClientId in setOf(TwitchClientId, TwitchTvClientId)) }
     private val okHttpClient = okHttpClient.newBuilder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
@@ -232,6 +241,59 @@ class TwitchApiClient(
     private val webBaseUrl = requireServiceUrl(twitchWebBaseUrl, setOf("www.twitch.tv", "twitch.tv"))
     private val oauthUrl = requireServiceUrl(oauthBaseUrl, setOf("id.twitch.tv"))
     private val localTestOrigin = webBaseUrl.takeIf { it.host.isLoopbackHost() }
+    private val hlsWatch = HlsWatchTransport(::playbackAccess, localTestOrigin)
+    private var lastTelemetryAt: Long? = null
+    override val watchPollIntervalSeconds: Long = 10
+
+    override fun resetWatchSession() {
+        hlsWatch.reset()
+        spadeUrls.clear()
+        lastTelemetryAt = null
+        lastWatchRejectionStatus = null
+    }
+
+    override suspend fun pollWatchStream(
+        session: StoredTwitchSession,
+        channel: Channel,
+        isCurrent: () -> Boolean,
+    ): Boolean {
+        lastWatchRejectionStatus = null
+        requireFreshBrowserContext(session)
+        if (!hlsWatch.poll(session, channel, isCurrent) || !isCurrent()) return false
+        val tick = watchMonotonicNanos()
+        if (lastTelemetryAt?.let { tick - it >= 59_000_000_000L } != false) {
+            lastTelemetryAt = tick
+            // Auxiliary telemetry cannot mask an HLS failure or hold up the next playlist poll.
+            try {
+                withTimeoutOrNull(5_000) { sendWatchTelemetry(session, channel, isCurrent) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // CurrentDrop/Inventory remain the authority, even when telemetry is rejected.
+            }
+        }
+        currentCoroutineContext().ensureActive()
+        return isCurrent()
+    }
+
+    private suspend fun playbackAccess(session: StoredTwitchSession, channel: Channel): PlaybackAccess? {
+        val response = try { gql(session, TwitchOperation.PlaybackAccessToken.request(buildJsonObject {
+            put("isLive", true)
+            put("isVod", false)
+            put("login", channel.login)
+            put("platform", "web")
+            put("playerType", "site")
+            put("vodID", "")
+        }), watchRequest = true) } catch (error: TwitchApiException) {
+            throw TwitchApiException(error.type, if (error.type == TwitchApiErrorType.InvalidToken)
+                "Twitch session expired or could not be validated." else "Twitch playback access request failed; saved credentials preserved.")
+        }
+        val token = response["data"].asObjectOrNull()?.get("streamPlaybackAccessToken").asObjectOrNull()
+            ?: return null
+        fun field(name: String): String? = (token[name] as? JsonPrimitive)
+            ?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() && it.length <= 16_384 }
+        return PlaybackAccess(field("value") ?: return null, field("signature") ?: return null)
+    }
 
     override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization =
         withContext(Dispatchers.IO) {
@@ -413,30 +475,30 @@ class TwitchApiClient(
                 .header("Authorization", "OAuth $accessToken")
                 .get()
                 .build()
-            val response = try {
-                okHttpClient.newCall(request).execute()
+            val (status, root) = try {
+                okHttpClient.newCall(request).readCancellable {
+                    it.code to if (it.isSuccessful) it.body.readOAuthObject("session validation") else null
+                }
             } catch (error: IOException) {
                 throw TwitchApiException(
                     TwitchApiErrorType.Network,
-                    "Twitch session validation failed: ${error.message ?: "network unavailable"}",
-                    error,
+                    "Twitch session validation network failure.",
                 )
             }
-            response.use {
-                if (it.code == 401) {
+            run {
+                if (status == 401) {
                     throw TwitchApiException(
                         TwitchApiErrorType.InvalidToken,
                         "Twitch session expired or could not be validated.",
                     )
                 }
-                if (!it.isSuccessful) {
+                if (status !in 200..299) {
                     throw TwitchApiException(
                         TwitchApiErrorType.Http,
-                        "Twitch session validation failed: HTTP ${it.code}.",
+                        "Twitch session validation failed: HTTP $status.",
                     )
                 }
-                val root = it.body.readOAuthObject("session validation")
-                val clientId = root["client_id"].asRequiredNonBlank("client_id")
+                val clientId = root!!["client_id"].asRequiredNonBlank("client_id")
                 if (clientId != expectedClientId) {
                     throw TwitchApiException(
                         TwitchApiErrorType.UnexpectedResponse,
@@ -673,7 +735,14 @@ class TwitchApiClient(
     override suspend fun sendWatchMinute(
         session: StoredTwitchSession,
         channel: Channel,
+    ): Boolean = sendWatchTelemetry(session, channel) { true }
+
+    private suspend fun sendWatchTelemetry(
+        session: StoredTwitchSession,
+        channel: Channel,
+        isCurrent: () -> Boolean,
     ): Boolean = withContext(Dispatchers.IO) {
+        if (!isCurrent()) return@withContext false
         lastWatchRejectionStatus = null
         val broadcastId = channel.broadcastId?.takeIf { it.isNotBlank() }
             ?: return@withContext false
@@ -681,7 +750,7 @@ class TwitchApiClient(
             ?: return@withContext false
         var usedCachedUrl = spadeUrls[channel.id] != null
         var spadeUrl = spadeUrls[channel.id]
-            ?: resolveSpadeUrl(session, channel)?.also { spadeUrls[channel.id] = it }
+            ?: resolveSpadeUrl(session, channel, isCurrent)?.also { if (isCurrent()) spadeUrls[channel.id] = it }
             ?: return@withContext false
         val encodedPayload = encodeWatchPayload(
             userId = userId,
@@ -690,16 +759,18 @@ class TwitchApiClient(
         )
         var retriedWithFreshConfiguration = false
         while (true) {
+            if (!isCurrent()) return@withContext false
             if (postWatchEvent(session, spadeUrl, encodedPayload)) {
                 return@withContext true
             }
+            if (!isCurrent()) return@withContext false
             if (!usedCachedUrl || retriedWithFreshConfiguration) {
-                invalidateWatchConfiguration(channel.id)
+                spadeUrls.remove(channel.id)
                 return@withContext false
             }
-            invalidateWatchConfiguration(channel.id)
-            spadeUrl = resolveSpadeUrl(session, channel)
-                ?.also { spadeUrls[channel.id] = it }
+            spadeUrls.remove(channel.id)
+            spadeUrl = resolveSpadeUrl(session, channel, isCurrent)
+                ?.also { if (isCurrent()) spadeUrls[channel.id] = it }
                 ?: return@withContext false
             usedCachedUrl = false
             retriedWithFreshConfiguration = true
@@ -710,11 +781,12 @@ class TwitchApiClient(
 
     override fun invalidateWatchConfiguration(channelId: Long) {
         spadeUrls.remove(channelId)
+        hlsWatch.invalidate(channelId)
     }
 
     override fun watchRejectionStatus(): Int? = lastWatchRejectionStatus
 
-    private fun postWatchEvent(
+    private suspend fun postWatchEvent(
         session: StoredTwitchSession,
         spadeUrl: String,
         encodedPayload: String,
@@ -730,22 +802,17 @@ class TwitchApiClient(
             .headers(sessionHeaders(session))
             .post(FormBody.Builder().add("data", encodedPayload).build())
             .build()
-        val response = try {
-            okHttpClient.newCall(request).execute()
+        val status = try {
+            okHttpClient.newCall(request).readCancellable { it.code }
         } catch (error: IOException) {
             throw TwitchApiException(
                 TwitchApiErrorType.Network,
-                "Twitch watch-event network failure: ${error.message ?: "network unavailable"}",
-                error,
+                "Twitch watch-event network failure.",
             )
         }
-        response.use {
-            lastWatchRejectionStatus = it.code.takeUnless { code -> code == 204 }
-            if (it.code == 401 || it.code == 403) {
-                return false
-            }
-            return it.code == 204
-        }
+        currentCoroutineContext().ensureActive()
+        lastWatchRejectionStatus = status.takeUnless { it == 204 }
+        return status == 204
     }
 
     override suspend fun currentDrop(
@@ -760,6 +827,7 @@ class TwitchApiClient(
                     put("channelLogin", "")
                 },
             ),
+            watchRequest = true,
         ) } catch (error: TwitchApiException) {
             if (sessionClientId(session) != TwitchTvClientId) throw error
             throw TwitchApiException(error.type, "Twitch progress request failed.")
@@ -838,6 +906,7 @@ class TwitchApiClient(
     private suspend fun gql(
         session: StoredTwitchSession,
         payload: JsonObject,
+        watchRequest: Boolean = false,
     ): JsonObject = withContext(Dispatchers.IO) {
         check(sessionClientId(session) != TwitchTvClientId || payload["operationName"].asString() !in
             setOf(TwitchOperation.Campaigns.operationName, TwitchOperation.CampaignDetails.operationName)) {
@@ -848,25 +917,30 @@ class TwitchApiClient(
             .headers(sessionHeaders(session, graphql = true))
             .post(payload.toString().toRequestBody(JsonMediaType))
             .build()
-        try {
-            okHttpClient.newCall(request).execute()
+        val (status, body) = try {
+            val call = okHttpClient.newCall(request)
+            if (watchRequest) call.timeout().timeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            call.readCancellable { response ->
+                response.code to if (response.isSuccessful) {
+                    response.body.readBoundedString(MaxGraphQlResponseBytes, "GraphQL")
+                } else ""
+            }
         } catch (error: IOException) {
             throw TwitchApiException(
                 TwitchApiErrorType.Network,
-                "Twitch GraphQL network failure: ${error.message ?: "network unavailable"}",
-                error,
+                "Twitch GraphQL network failure.",
             )
-        }.use { response ->
-            if (response.code == 401 || response.code == 403) {
-                rejectGraphQlAuthentication(session, "HTTP ${response.code}")
+        }
+        run {
+            if (status == 401 || status == 403) {
+                rejectGraphQlAuthentication(session, "HTTP $status", watchRequest)
             }
-            if (!response.isSuccessful) {
+            if (status !in 200..299) {
                 throw TwitchApiException(
                     TwitchApiErrorType.Http,
-                    "Twitch GraphQL failed: HTTP ${response.code}",
+                    "Twitch GraphQL failed: HTTP $status",
                 )
             }
-            val body = response.body.readBoundedString(MaxGraphQlResponseBytes, "GraphQL")
             val root = runCatching { json.parseToJsonElement(body) }.getOrElse { error ->
                 throw TwitchApiException(
                     TwitchApiErrorType.UnexpectedResponse,
@@ -887,7 +961,7 @@ class TwitchApiClient(
                         setOf("invalid oauth token", "failed integrity check")
                 }
             ) {
-                rejectGraphQlAuthentication(session, "authentication or integrity check")
+                rejectGraphQlAuthentication(session, "authentication or integrity check", watchRequest)
             }
             if (errors.isNotEmpty() && obj["data"].asObjectOrNull() == null) {
                 throw TwitchApiException(
@@ -899,9 +973,12 @@ class TwitchApiClient(
         }
     }
 
-    private suspend fun rejectGraphQlAuthentication(session: StoredTwitchSession, reason: String): Nothing {
+    private suspend fun rejectGraphQlAuthentication(session: StoredTwitchSession, reason: String, watchRequest: Boolean): Nothing {
         try {
-            validateSession(session)
+            if (watchRequest) {
+                withTimeoutOrNull(5_000) { validateSession(session) }
+                    ?: throw TwitchApiException(TwitchApiErrorType.Network, "Twitch session validation timed out.")
+            } else validateSession(session)
         } catch (error: TwitchApiException) {
             if (error.type == TwitchApiErrorType.InvalidToken) throw error
             throw TwitchApiException(
@@ -930,12 +1007,7 @@ class TwitchApiClient(
     private fun sessionHeaders(session: StoredTwitchSession, graphql: Boolean = false): okhttp3.Headers {
         val isTv = session.clientId == TwitchTvClientId
         val browser = session.browserContext
-        if (browser != null) {
-            try { browser.requireFresh() } catch (_: IllegalArgumentException) {
-                throw TwitchApiException(TwitchApiErrorType.Http,
-                    "Browser session proof expired. Keep the login helper running or reconnect Twitch.")
-            }
-        }
+        requireFreshBrowserContext(session)
         return okhttp3.Headers.Builder()
             .add("Accept", "*/*")
             .add("Client-Id", sessionClientId(session))
@@ -949,6 +1021,13 @@ class TwitchApiClient(
                 if (graphql && browser != null) browser.headers.forEach { (name, value) -> set(name, value) }
             }
             .build()
+    }
+
+    private fun requireFreshBrowserContext(session: StoredTwitchSession) {
+        try { session.browserContext?.requireFresh() } catch (_: IllegalArgumentException) {
+            throw TwitchApiException(TwitchApiErrorType.Http,
+                "Browser session proof expired. Keep the browser service or desktop helper running, or reconnect Twitch.")
+        }
     }
 
     private fun encodeWatchPayload(
@@ -983,14 +1062,16 @@ class TwitchApiClient(
         return Base64.getEncoder().encodeToString(payload.toByteArray(Charsets.UTF_8))
     }
 
-    private fun resolveSpadeUrl(
+    private suspend fun resolveSpadeUrl(
         session: StoredTwitchSession,
         channel: Channel,
+        isCurrent: () -> Boolean,
     ): String? {
         val channelUrl = webBaseUrl.newBuilder()
             .addPathSegment(channel.login)
             .build()
         val channelHtml = getWatchConfiguration(session, channelUrl.toString(), allowSettingsHost = false)
+        if (!isCurrent()) return null
         findAllowedSpadeUrl(channelHtml)?.let { return it }
         val settingsUrl = SettingsUrlPattern.find(channelHtml)?.groupValues?.get(1)
             ?.takeIf(::isAllowedSettingsUrl)
@@ -1004,7 +1085,7 @@ class TwitchApiClient(
             .flatMap { pattern -> pattern.findAll(configuration).map { it.groupValues[1] } }
             .firstOrNull(::isAllowedSpadeUrl)
 
-    private fun getWatchConfiguration(
+    private suspend fun getWatchConfiguration(
         session: StoredTwitchSession,
         url: String,
         allowSettingsHost: Boolean,
@@ -1021,29 +1102,19 @@ class TwitchApiClient(
             .headers(sessionHeaders(session))
             .get()
             .build()
-        val response = try {
-            okHttpClient.newCall(request).execute()
+        return try {
+            okHttpClient.newCall(request).readCancellable {
+                if (!it.isSuccessful) {
+                    throw TwitchApiException(TwitchApiErrorType.Http,
+                        "Twitch watch configuration failed: HTTP ${it.code}; cached configuration will be renewed.")
+                }
+                it.body.readBoundedString(MaxWatchConfigurationBytes, "watch configuration")
+            }
         } catch (error: IOException) {
             throw TwitchApiException(
                 TwitchApiErrorType.Network,
-                "Twitch watch configuration failed: ${error.message ?: "network unavailable"}",
-                error,
+                "Twitch watch configuration network failure.",
             )
-        }
-        return response.use {
-            if (it.code == 401 || it.code == 403) {
-                throw TwitchApiException(
-                    TwitchApiErrorType.Http,
-                    "Twitch watch configuration was rejected; cached configuration will be renewed.",
-                )
-            }
-            if (!it.isSuccessful) {
-                throw TwitchApiException(
-                    TwitchApiErrorType.Http,
-                    "Twitch watch configuration failed: HTTP ${it.code}.",
-                )
-            }
-            it.body.readBoundedString(MaxWatchConfigurationBytes, "watch configuration")
         }
     }
 
@@ -1172,6 +1243,10 @@ enum class TwitchOperation(
     val sha256Hash: String,
     val defaultVariables: JsonObject = buildJsonObject {},
 ) {
+    PlaybackAccessToken(
+        "PlaybackAccessToken",
+        "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9",
+    ),
     GetStreamInfo(
         "VideoPlayerStreamInfoOverlayChannel",
         "198492e0857f6aedead9665c81c5a06d67b25b58034649687124083ff288597d",

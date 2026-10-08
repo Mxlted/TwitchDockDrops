@@ -389,8 +389,15 @@ inventory deadlines, heartbeat deadlines, and claim retries. A sustained confirm
 renews watch configuration and then tries another channel or campaign. Progress endpoint failures are
 not treated as proof of a stall.
 
-The miner sends authenticated `minute-watched` events to the narrowly allowlisted Twitch collector
-discovered from the current Twitch configuration. It does not download or play stream video/audio.
+The miner polls stream playlists about every ten seconds and sends HEAD requests for newly listed
+segments. It reads metadata and response headers without downloading or playing stream video/audio.
+Authenticated `minute-watched` events remain auxiliary, at most once per 59 seconds. **Settings →
+Progress check** controls how often Twitch-reported progress is checked (default 59 seconds), not
+stream polling. Accepted watch requests alone do not prove credit; compare the actual minute count
+in Twitch inventory. This path incorporates the upstream v2.2.1 stalled-progress repair.
+If a deployment still uses the older telemetry-only version, rebuild the app from this checkout
+using the existing browser-enabled Compose command above, preserving its data volume. Reconnect
+only when session/proof status requires it; reconnecting alone does not install the transport fix.
 For implementation details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Runtime footprint

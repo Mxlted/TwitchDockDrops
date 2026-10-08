@@ -902,7 +902,7 @@ function renderSettings(data) {
         <section class="soft-card section-card">
           <div class="section-head"><div><h2>Timing</h2><p>Intervals are normalized by the server before they are saved.</p></div></div>
           <div class="settings-group">
-            ${renderRange("Watch heartbeat", "How often the runtime reports watch activity to Twitch.", "watchIntervalSeconds", settings.watchIntervalSeconds, 20, 300, 1, "seconds")}
+            ${renderRange("Progress check", "How often the runtime checks Twitch-reported Drop progress.", "watchIntervalSeconds", settings.watchIntervalSeconds, 20, 300, 1, "seconds")}
             ${renderRange("Inventory refresh", "How often campaigns and Twitch-reported progress are reloaded.", "inventoryRefreshMinutes", settings.inventoryRefreshMinutes, 15, 180, 1, "minutes")}
             ${renderToggle("Fallback to other games", "Use the ordered Auto Mode groups when preferred work is unavailable.", "fallbackToOtherGames", settings.fallbackToOtherGames)}
             ${renderToggle("Verbose local logs", "Record additional diagnostics for long-running troubleshooting.", "debugLogging", settings.debugLogging)}

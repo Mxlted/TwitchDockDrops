@@ -28,7 +28,7 @@ you care about, and leave the miner to handle the rest.
 
 ## Why Twitch Dock Drops?
 
-- **No stream playback:** earns timed progress without downloading video or audio.
+- **No stream playback:** polls playlist metadata and checks segment headers without downloading video or audio.
 - **Campaign tracking:** refreshes campaigns and keeps the inventory current.
 - **Channel hunting and recovery:** finds compatible live channels and moves on when progress stalls.
 - **Persistent game priorities:** save categories before their next campaign, set their order, and let

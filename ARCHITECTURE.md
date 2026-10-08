@@ -191,8 +191,25 @@ New helper login, reset, cancellation, and shutdown stop the companion session; 
 and lease revocation independently block late credential commits. A renewal request cannot replace an
 interactive login. Original encrypted credentials survive failed replacement and transient renewal.
 
-Watch earning telemetry uses the direct Spade transport restored by the current TwitchDropsMiner
-implementations. Every heartbeat builds a new uncompressed Base64 JSON array containing one
+Watch transport follows the playlist/segment repair in rangermix/TwitchDropsMiner
+[`bb832c2`](https://github.com/rangermix/TwitchDropsMiner/commit/bb832c223cb323275c36bc454db0103019a9e4b0).
+The root runtime polls HLS about every ten seconds: authenticated `PlaybackAccessToken` goes only
+to the existing GraphQL endpoint, its scoped signature/value authorize the fixed Usher master
+playlist, and the lowest advertised bandwidth variant supplies media segment URLs. Playlist GETs
+read metadata only; new segments receive HEAD requests, never video/audio body GETs. The parser
+requires `#EXTM3U`, paired variant/segment tags, trusted URLs, at most 128 entries and 256 KiB bodies.
+Successful segment URLs are deduplicated in a 256-entry cache for the selected account/channel/
+broadcast. Same-broadcast metadata/inventory reloads retain it; changed identity/broadcast and
+mining-run cleanup discard it. Failed segments retry, and media 401/403/404 invalidates the playlist
+for reacquisition without expiring OAuth. Every request boundary checks the selected channel and
+operation; cancelled HTTP calls close their responses. Cleanup ownership prevents an old cancelled
+run from clearing a newer run's state. A poll has a ten-second budget, playlist/playback requests
+five seconds, and individual HEADs three seconds. CurrentDrop requests and any subsequent OAuth
+revalidation each have a five-second budget so they cannot indefinitely delay stream polling.
+
+Direct Spade telemetry remains auxiliary, attempted at most once per 59 seconds with a five-second
+budget. It cannot turn a failed HLS poll into success, and telemetry failure does not invalidate the
+HLS cache. Each telemetry attempt builds a new uncompressed Base64 JSON array containing one
 `minute-watched` event, then form-POSTs it as `data` to the discovered Spade URL. The payload includes
 the canonical channel login, numeric user ID, broadcast/channel/game IDs, a millisecond UTC timestamp,
 and Twitch's live, logged-in, location, player, mute, hidden, and minutes fields. No
@@ -202,6 +219,11 @@ configuration bundles are accepted only from `assets.twitch.tv` or the legacy
 `static.twitchcdn.net` settings path. Collector discovery accepts either the `beacon_url`/`beaconUrl`
 or legacy `spade_url`/`spadeUrl` key; event delivery is restricted to the current
 `https://beacon.twitch.tv/track` collector or the legacy `https://spade.twitch.tv` host.
+Progress checks retain the configured `watchIntervalSeconds` cadence (59 seconds by default),
+including across channel and inventory refreshes within a run. Settings labels this **Progress
+check**; stream polling is independent. Neither a segment response nor a telemetry 204 adds minutes,
+completes prerequisites or unlocks a claim. Only Twitch CurrentDrop/Inventory evidence can do that.
+Intervening successful playlist polls preserve a progress error until a fresh progress observation.
 
 Automatic selection exhausts linked work before unlinked work by default: linked claimed-progress,
 linked viewing-progress, linked fresh, unlinked claimed-progress, unlinked viewing-progress, then
@@ -586,6 +608,12 @@ to `https://beacon.twitch.tv/track` or HTTPS `spade.twitch.tv`. Same-origin loop
 injection is constructor-only for MockWebServer tests.
 HTTP redirects are disabled. Captured integrity/version/session headers are added only to GraphQL;
 watch configuration and collectors never receive the full browser context.
+HLS uses an independently constructed HTTP client with no shared interceptors, authenticators,
+cookies or response cache. Media requests accept only HTTPS `ttvnw.net`/its subdomains on port 443,
+without URL credentials or fragments; redirects are disabled. OAuth, integrity, client and device
+headers never reach Usher/media hosts. Only scoped playback signature/value query parameters go to
+Usher. Signed URLs, playlists, segments and playback responses remain memory-only and never become
+public state or diagnostics. Tests can inject only the exact constructor-provided loopback origin.
 
 ## Web client
 

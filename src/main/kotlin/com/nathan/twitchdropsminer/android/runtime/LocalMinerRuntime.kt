@@ -1158,12 +1158,39 @@ class LocalMinerRuntime(
         completed.await()
     }
 
+    private val watchSessionLock = Any()
+    private var watchSessionOwner: Any? = null
+
     private suspend fun runMiningLoop(
         session: StoredTwitchSession,
         expectedSessionGeneration: Long,
         runGeneration: Long,
     ) {
+        val owner = Any()
+        synchronized(watchSessionLock) {
+            if (!isCurrentMiningRun(expectedSessionGeneration, runGeneration)) throw CancellationException("Mining run replaced")
+            twitchApiClient.resetWatchSession()
+            watchSessionOwner = owner
+        }
+        try {
+            mineCampaigns(session, expectedSessionGeneration, runGeneration)
+        } finally {
+            synchronized(watchSessionLock) {
+                if (watchSessionOwner === owner) {
+                    twitchApiClient.resetWatchSession()
+                    watchSessionOwner = null
+                }
+            }
+        }
+    }
+
+    private suspend fun mineCampaigns(
+        session: StoredTwitchSession,
+        expectedSessionGeneration: Long,
+        runGeneration: Long,
+    ) {
         var lastValidatedAt = validateMiningSession(session, expectedSessionGeneration, runGeneration)
+        val progressCadence = WatchProgressCadence()
 
         var inventoryFailures = 0
         var channelDiscoveryFailures = 0
@@ -1498,7 +1525,7 @@ class LocalMinerRuntime(
                         settingsChangedAt.isBefore(nextWatchAt)
                     ) {
                         nextWatchAt = settingsChangedAt.plusSeconds(
-                            latestSettings.watchIntervalSeconds.toLong(),
+                            twitchApiClient.watchPollIntervalSeconds ?: latestSettings.watchIntervalSeconds.toLong(),
                         )
                         unlinkedProgressProbe = currentCampaign.startUnlinkedProgressProbe(latestSettings, now())
                         linkedProgressProbe = currentCampaign.startLinkedProgressProbe(latestSettings, now())
@@ -1645,8 +1672,10 @@ class LocalMinerRuntime(
                     }
                 }
 
+                nextWatchAt = now().plusSeconds(twitchApiClient.watchPollIntervalSeconds ?: settings.watchIntervalSeconds.toLong())
                 val watchAttempt = sendWatch(session, currentChannel)
                 when (watchAttempt) {
+                    WatchAttemptResult.Superseded -> continue
                     WatchAttemptResult.Accepted -> {
                         consecutiveRejectedWatchEvents = 0
                         transientWatchFailures = 0
@@ -1692,6 +1721,8 @@ class LocalMinerRuntime(
                         continue
                     }
                 }
+                if (twitchApiClient.watchPollIntervalSeconds != null &&
+                    !progressCadence.takeIfDue(now(), settings.watchIntervalSeconds)) continue
                 val progressRefresh = updateProgress(
                     session = session,
                     campaign = currentCampaign,
@@ -1973,11 +2004,7 @@ class LocalMinerRuntime(
                     }
                 }
 
-                nextWatchAt = if (watchAgainImmediately) {
-                    now()
-                } else {
-                    now().plusSeconds(settings.watchIntervalSeconds.toLong())
-                }
+                if (watchAgainImmediately) nextWatchAt = now()
                 awaitActiveWakeup(
                     currentSettings = settings,
                     handledChannelControlRequestId = handledChannelControlRequestId,
@@ -2505,9 +2532,20 @@ class LocalMinerRuntime(
         if (channel.broadcastId == null) {
             return WatchAttemptResult.Rejected
         }
+        val context = currentCoroutineContext()
+        val requestId = channelControlRequests.value.id
+        val isCurrent = {
+            context.isActive && channelControlRequests.value.id == requestId &&
+                snapshot.value.currentChannel?.let { it.id == channel.id && it.broadcastId == channel.broadcastId } == true
+        }
         return try {
-            val accepted = twitchApiClient.sendWatchMinute(session, channel)
+            val accepted = if (twitchApiClient.watchPollIntervalSeconds == null) {
+                twitchApiClient.sendWatchMinute(session, channel)
+            } else {
+                twitchApiClient.pollWatchStream(session, channel, isCurrent)
+            }
             ensureCurrentOperation()
+            if (!isCurrent()) return WatchAttemptResult.Superseded
             if (accepted) {
                 appendDebug("Watch heartbeat accepted for ${channel.name}.")
                 WatchAttemptResult.Accepted
@@ -2520,6 +2558,7 @@ class LocalMinerRuntime(
             throw error
         } catch (error: Throwable) {
             ensureCurrentOperation()
+            if (!isCurrent()) return WatchAttemptResult.Superseded
             error.throwIfInvalidToken()
             val message = error.message ?: "Twitch watch request failed."
             appendActivity(RuntimePhase.Error, "Watch event failed", message)
@@ -3045,8 +3084,7 @@ private fun RuntimeSnapshot.matchesActiveWatch(
         currentChannel == channel &&
         activeCampaign == campaign &&
         activeDrop == drop &&
-        !channelSearchInProgress &&
-        error == null
+        !channelSearchInProgress
 
 internal fun Campaign.awaitingTvClaimEvidence(): Boolean = publicCatalog && drops.any {
     // Retained minutes come only from prior Twitch observations, never an estimate/catalog.
@@ -4091,6 +4129,7 @@ internal sealed interface ProgressObservation {
 }
 
 private sealed interface WatchAttemptResult {
+    data object Superseded : WatchAttemptResult
     data object Accepted : WatchAttemptResult
     data object Rejected : WatchAttemptResult
     data class Failed(val message: String) : WatchAttemptResult

@@ -9,6 +9,11 @@ at that commit. `browser/renewal.mjs` adapts their scoped-cookie validation, SDK
 correlation. Its Node/JVM
 transport and screenshot viewer are independent implementations, not upstream protocol compatibility.
 
+The root Kotlin playlist/segment watch transport follows the behavior and PlaybackAccessToken
+operation in rangermix/TwitchDropsMiner commit `bb832c223cb323275c36bc454db0103019a9e4b0`,
+particularly `src/models/channel.py`, `src/config/operations.py`, and `src/services/watch_service.py`.
+Its HTTP isolation, parsing, coroutine scheduling and regression fixtures are independently implemented.
+
 MIT License
 
 Copyright (c) 2024 DevilXD
