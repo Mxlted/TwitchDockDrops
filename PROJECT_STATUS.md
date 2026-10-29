@@ -3,6 +3,127 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## Container verification and browser lifecycle repair - 2026-10-29
+
+Started from clean `main` at the requested implementation commit
+`d315ccc01885d9d8b70ca4b4406fa12384af905d`. The installed tools and running engine were checked
+again; the earlier missing-engine limitation no longer applies. The separate read-only reference
+remains clean at `e946998e0952b9e3db131f499e5c90e326b1118d`; no Android checkout is present.
+No reference synchronization, dependency changes or remote deployment was performed. The user later
+authorized pushing the reviewed changes after successful verification.
+
+Demonstrated defects and fixes:
+
+- Interactive/retained/helper POSIX cleanup returned early when the launcher had exited, leaving
+  owned descendants alive. It now drains the owned process group, matching seed-browser cleanup.
+  The new descendant/listening-socket regression failed before the fix and passes afterward.
+- Actual hardened-container Chromium bootstrap exhausted the 256-task limit while interactive and
+  private-display browsers overlapped. Container-only `--disable-gpu` reduces software GPU thread
+  pressure. That alone was insufficient: startup also created unnecessary tabs, and a timed-out
+  startup PUT could create more. Both worker and seed startup now select the single owned blank page
+  through bounded, read-only target listing. Desktop rendering defaults remain unchanged.
+- The existing Playwright TV retry test selected an obsolete button label. Its selector now matches
+  **Request a new TV code**, retaining the assertion that only the TV endpoint is called.
+- No Kotlin production defect was demonstrated. Ten new JVM tests strengthen normal lead-time
+  scheduling, replay/nonadvancing/expired/changed-identity rejection, malformed restriction evidence,
+  single-flight and bounded/cancelled lookup work, bans during HLS/delivery, and expiry wakeups.
+  Existing identity, integrity, catalog, encryption, claim and generation checks remain intact.
+
+Verification performed against the final implementation:
+
+- Native macOS/ARM64: Temurin **21.0.13**, checksum-verified isolated **Gradle 9.5.1**, Node **26.13.0**.
+  Installed global Gradle 9.8.2 was not used or changed. Clean JVM tests/distribution and the final
+  `test installDist` rerun passed: **306 tests, 33 suites, zero failures/errors/skips**. Commands used
+  `--no-daemon -Pkotlin.compiler.execution.strategy=in-process -Pkotlin.incremental=false`.
+- Docker Desktop **4.97.0**, Engine **29.9.2**, Compose **5.6.1**, existing `desktop-linux` context.
+  Both app and browser images were built from final source for **Linux/arm64** and **Linux/amd64**.
+  AMD64 ran through emulation on this ARM64 host. Both app build-stage XML reports independently
+  confirm **306 JVM tests, 33 suites, zero failures/errors/skips**, with Gradle 9.5.1 / Temurin 21.0.11.
+  Runtime images use Temurin 21.0.12.1. Nonfatal native file-watcher warnings occurred under emulation;
+  builds completed successfully without changing Gradle or Docker configuration.
+- Full Node suite: **63 passed, zero skipped**, both natively and under browser-image **Node 22.23.4**.
+  Changed JavaScript syntax and whitespace checks passed. No package/lockfile version changes.
+- Existing Playwright suite: **24 passed** across desktop/mobile and dark/light in Chromium
+  153.0.8010.12. These are synthetic dashboard/accessibility and disposable settings-API checks.
+- Opt-in offline capture suite in actual **Chromium 156.0.8078.47 / Debian 12**: **4 passed, zero skipped**
+  on each architecture, using `DOCKDROPS_BROWSER_TEST=1` with networking disabled and the documented
+  non-root, read-only, no-new-privileges, dropped-capability, tmpfs, memory and PID settings.
+  Six lifecycle outcomes inside the suite exercise standard issuance, synthetic expired/near-expiry
+  recovery, acquisition failure, cancellation and a forced 200 ms parent deadline. These are not
+  a natural 150-second timeout or genuine cookie-expiry observation.
+- Actual private-display checks confirm ordinary headed Chromium, separate displays, UID 1000,
+  0700 profiles, 0600 Xauthority, and no leftover owned processes/groups or profiles. `xdpyinfo`
+  accepts the private authority and promptly rejects empty/wrong authorities. Login cookies remain
+  isolated during overlapping bootstrap. Fixed graph metadata and fresh response-cookie/proof
+  acceptance remain asserted. Negative cases must reach the intended fault and match its error.
+- Resource counters show **zero OOM/OOM-kill/group-kill and PID-denial events** in the final suites.
+  ARM64 memory peaked around 520 MB with no swap. AMD64 emulation reached approximately 1 GiB resident
+  accounting and 346 MB swap with reclaim; its pressure includes anonymous memory, not only cache.
+  Those samples are not native amd64 server capacity or endurance evidence. Limits were not increased.
+- Base and browser-merged Compose configurations validate with defaults and `.env.example`, without
+  reading a private `.env`. The test stack overrides every explicit container/network/volume name,
+  uses a new volume/key and loopback port 53880, and retains all hardening. Final app images passed
+  actual health checks with zero restart loops. A separate final-source stack completed three
+  interactive start/cancel cycles with no browser/profile survivors; it was removed with its empty
+  volume. Public Host/Origin and private worker Host/header/Origin rejection were checked on actual
+  containers. No browser control port or miner volume is exposed to the companion.
+
+Live-account evidence and limits:
+
+- The user entered credentials and verification directly into Twitch. No password/verification input
+  or frames were inspected or recorded. A read-only in-container probe returned only expiry metadata;
+  credentials, cookies, keys and session plaintext were excluded from diagnostics. Finish sign-in
+  succeeded, the matching account was accepted, **120 campaigns** loaded with complete inventory,
+  and the selected mode was
+  **retained Docker browser renewal**. Mining initially remained stopped. The user later authorized
+  a quick live mining check and asked to leave natural renewal to manual testing.
+- The signed-in browser was preserved while final images were rebuilt. Its retained-renewal path
+  is unchanged by the later startup-target reuse fix; that final startup change was verified in a
+  separate disposable stack and offline Chromium tests, not by silently replacing the live browser.
+- An abrupt app-only restart preserved the running retained browser, exact encrypted-session bytes,
+  account acceptance, complete 120-campaign inventory and stopped mining. The surviving companion
+  was later proven to be in the old network namespace, so this is **unexpired account restoration
+  only**, not successful renewal transport restoration or expired-cookie recovery.
+- The real natural-renewal deadline was **2026-10-29 02:26:16 America/New_York**. A bounded observer
+  sampled redacted app state, expiry metadata and encrypted-file hashes every 60 seconds while the
+  miner was stopped. At the user's request it was stopped before that deadline. **Natural renewal
+  was not observed**; no clock/timestamp manipulation or manual renewal trigger was used.
+- The authorized quick run entered Watching on `runahr` for the unlinked Enshrouded campaign,
+  found **18 alternative channels**, and manually switched to `salberry` without an app error.
+  There were no linked, earnable campaigns. Twitch returned `no_active_drop`; the observed reward
+  remained at **0 minutes**, and **0 claims** were made. This confirms startup/discovery/switching,
+  not credited earning or claim success. No eligibility was manufactured or uncertain claim replayed.
+- Explicit Stop cleared the selected channel. A subsequent app-only restart restored the account
+  and complete 121-campaign inventory with mining still stopped. This verifies durable Stop across
+  restart; Stop across live renewal remains a manual check (synthetic regressions passed).
+- A credential-free reproduction confirmed that direct app-container kill/start separates the app
+  and browser network namespaces and makes loopback browser control unreachable. A coordinated
+  `docker compose -f compose.yaml -f compose.browser.yaml restart app browser` restored a shared
+  namespace and interactive startup. Same-namespace graceful app shutdown removed its browser profile.
+  Operator/security/architecture guidance now distinguishes JVM-process restart from container restart;
+  no control port or permission was widened. A new JVM fixture confirms a restored retained lease is
+  revoked exactly once on shutdown, reset or replacement, while ordinary Stop retains it.
+- Live SDK-cookie selection/recovery, natural renewal, genuine expired-cookie downtime, credited
+  earning, eligible claims and a suitable existing account ban remain unverified. No bans or moderation
+  settings were manufactured. Native amd64 server capacity and the actual Proxmox/LXC deployment
+  remain external verification gaps.
+
+Handoff preparation:
+
+- The reviewed `docker-server/` bundle contains **101 tracked source/build/license files**, verified
+  by SHA-256, with both base and browser-merged Compose configurations validated inside the bundle.
+  It excludes credentials, private environment files, runtime data, profiles and generated build output.
+  Absolute path: `/Users/nathan/Desktop/Projects/Twitch/TwitchDockDrops/docker-server`.
+- Mining and the finite observer were stopped. Graceful app shutdown and browser cleanup were checked;
+  task containers and networks were removed. The authenticated volume
+  `dockdrops-verify-data-20261029` is preserved. Retained-browser mode requires reconnecting after the
+  browser is stopped. No existing deployment, user volume or global Docker setting was changed.
+
+Protocol/library checks used Context7 for Docker Compose, Node 22 and coroutine 1.9.0 behavior,
+[Twitch's current OAuth validation documentation](https://dev.twitch.tv/docs/authentication/validate-tokens/),
+[Chromium primary source](https://github.com/chromium/chromium/blob/main/gpu/config/gpu_switches.cc),
+and [Linux cgroup documentation](https://docs.kernel.org/admin-guide/cgroup-v2.html).
+
 ## Browser renewal and channel eligibility reliability - 2026-10-29
 
 The implementation started from clean `main` at `2f3a5d5407d6ce9c73d3891d215ae479f63dce71`.
@@ -751,7 +872,7 @@ Remaining live/manual verification:
   redirects protect credential transfers. The account state adds only `method` for UI presentation.
 - Image `dockdrops:local`, container `dockdrops`, and network `dockdrops` replace verbose generated
   names. Compose project/service identity and the existing `twitch-dock-drops-data` volume are retained.
-- Root Gradle `test installDist`: 165 tests passed, zero failures/errors/skips. Nine new JVM tests cover
+- Root Gradle `test installDist`: 165 tests passed, zero failures/errors/skips. Ten new JVM tests cover
   context validation, Drops verification, encryption/redaction, pairing limits, redirects, HTTP routes,
   account binding, and reset races. Two coroutine test declarations were corrected to return Unit so
   JUnit actually discovers them. Rejected HTTP requests now close connections with unread bodies.

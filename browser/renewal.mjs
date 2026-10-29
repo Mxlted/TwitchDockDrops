@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {randomBytes} from 'node:crypto';
-import {Cdp, browserPort} from '../src/main/resources/web/login-helper.mjs';
+import {Cdp, browserPort, initialPageTarget} from '../src/main/resources/web/login-helper.mjs';
 import {startSeedBrowser, stopSeedBrowser} from './seed-browser.mjs';
 
 export const SDK_URL = 'https://k.twitchcdn.net/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/p.js';
@@ -220,9 +220,10 @@ export async function runSeedBrowser(executable, browserArgs, seed, parentSignal
       if (child.exitCode !== null || child.signalCode !== null) throw Error('Browser launch failed');
       let target;
       try {
-        const response = await (dependencies.request || fetch)(`http://127.0.0.1:${port}/json/new?about:blank`,
-          {method:'PUT',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(500)])});
-        if (response.ok) target = await response.json();
+        // Reuse the explicitly launched blank page. Retried startup probes must not create tabs.
+        const response = await (dependencies.request || fetch)(`http://127.0.0.1:${port}/json/list`,
+          {redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(500)])});
+        if (response.ok) target = initialPageTarget(await response.json());
       } catch {}
       if (target) {
         cdp = await (dependencies.open || Cdp.open)(target.webSocketDebuggerUrl,port,signal,['Fetch.requestPaused','Page.loadEventFired','Network.requestServedFromCache']);

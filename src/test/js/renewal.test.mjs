@@ -10,6 +10,7 @@ import {once} from 'node:events';
 import {createConnection} from 'node:net';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {seedBrowserLaunch,stopSeedBrowser} from '../../../browser/seed-browser.mjs';
+import {stopBrowser,containerRenderingArgs} from '../../main/resources/web/login-helper.mjs';
 
 const now = Math.floor(Date.now()/1000);
 export const seed = () => ({version:1,captured_at:now-3600,expires_at:now-60,user_agent:'Chrome/test',
@@ -190,7 +191,10 @@ function ownedFixture(acquire) {
       if (process.platform !== 'win32') assert.equal((await stat(profile)).mode & 0o777,0o700);
       return {exitCode:null,signalCode:null};
     },
-    stop:async () => { state.stops++; }, request:async () => Response.json({webSocketDebuggerUrl:'ws://127.0.0.1:54321/devtools/page/fixture'}),
+    stop:async () => { state.stops++; }, request:async (url,options) => {
+      assert.equal(url,'http://127.0.0.1:54321/json/list'); assert.equal(options.method,undefined);
+      return Response.json([{type:'page',url:'about:blank',webSocketDebuggerUrl:'ws://127.0.0.1:54321/devtools/page/fixture'}]);
+    },
     open:async () => ({close:() => { state.closes++; }}), acquire,
   };
   return {state,dependencies};
@@ -247,11 +251,16 @@ test('container issuance owns an authenticated private display and a normal Chro
   assert.equal(launch.executable,'/usr/bin/xvfb-run');
   assert.deepEqual(launch.args.slice(0,6),['-a','-f','/tmp/owned-profile/Xauthority','-s','-screen 0 1280x800x24 -nolisten tcp','/usr/bin/chromium']);
   assert.ok(launch.args.includes('--window-size=1200,760'));
+  assert.deepEqual(containerRenderingArgs(true),['--disable-gpu']);
+  assert.deepEqual(containerRenderingArgs(false),[]);
+  assert.ok(launch.args.includes('--disable-gpu'));
   assert.ok(!launch.args.some(value => value.includes('--headless') || value === '-ac' || value.includes('expired-cookie')));
   assert.ok(seedBrowserLaunch('browser','profile',[],true,false).args.includes('--headless=new'));
+  assert.ok(!seedBrowserLaunch('browser','profile',[],true,false).args.includes('--disable-gpu'));
 });
 
-test('owned process-group cleanup reaches descendants after the launcher has exited', {skip:process.platform === 'win32'}, async () => {
+for (const [mode,stopOwnedBrowser] of [['seed',stopSeedBrowser],['interactive',stopBrowser]]) {
+test(`${mode} process-group cleanup reaches descendants after the launcher has exited`, {skip:process.platform === 'win32'}, async () => {
   const directory = await mkdtemp(join(tmpdir(),'dockdrops-process-test-'));
   const info = join(directory,'fixture.json');
   const descendant = `const fs = require('node:fs'); const net = require('node:net');
@@ -274,11 +283,12 @@ test('owned process-group cleanup reaches descendants after the launcher has exi
       try { port = JSON.parse(await readFile(info,'utf8')).port; } catch { await sleep(10); }
     }
     assert.ok(port); assert.equal(await connects(port),true);
-    await stopSeedBrowser(child);
+    await stopOwnedBrowser(child);
     for (let i = 0; i < 100 && await connects(port); i++) await sleep(10);
     assert.equal(await connects(port),false);
   } finally { await stopSeedBrowser(child); await rm(directory,{recursive:true,force:true}); }
 });
+}
 
 test('startup polling respects cancellation and removes its owned profile', async () => {
   const {state,dependencies} = ownedFixture(async () => assert.fail('unready browser must not acquire'));

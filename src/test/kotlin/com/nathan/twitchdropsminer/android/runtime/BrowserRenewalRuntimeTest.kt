@@ -48,10 +48,13 @@ class BrowserRenewalRuntimeTest {
         store: SecureSessionStore, api: TwitchApi,
         settings: SettingsRepository = SettingsRepository(directory),
         logs: LogRepository = LogRepository(directory),
+        clock: () -> Instant = Instant::now,
+        revoke: (suspend (String) -> Unit)? = null,
         renew: suspend (BrowserSessionContext, String) -> BrowserSessionContext,
     ) = LocalMinerRuntime(settings, store, logs, api, object : NetworkStatusProvider {
         override val isOnline = MutableStateFlow(true)
-    }, browserRenewal = renew, browserRenewalMinimumDelay = Duration.ofMillis(10))
+    }, clock = clock, browserRenewal = renew, browserLeaseRevoke = revoke,
+        browserRenewalMinimumDelay = Duration.ofMillis(10))
     private fun wireClient(server: MockWebServer) = TwitchApiClient(OkHttpClient(),
         gqlEndpoint = server.url("/gql").toString(), oauthBaseUrl = server.url("/").toString())
     private suspend fun awaitFailure(runtime: LocalMinerRuntime) = withTimeout(3000) {
@@ -85,6 +88,103 @@ class BrowserRenewalRuntimeTest {
             assertEquals("fresh-cookie", store().twitchSession()?.browserContext?.sdkCookie?.value)
             assertFalse(Files.readString(directory.resolve("session.enc")).contains("fresh-cookie"))
         } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `restored retained lease is revoked before renewal is due on shutdown reset or replacement`() = runBlocking {
+        val lease = "12345678-1234-1234-1234-123456789abc"
+        for (action in listOf("shutdown", "reset", "replace")) {
+            val retained = BrowserSessionContext.parse(JsonObject(context(true).toJson() - "sdk_cookie" +
+                ("browser_lease" to JsonPrimitive(lease))))
+            val store = store().also { it.saveTwitchSession(session(retained)) }
+            val original = Files.readAllBytes(directory.resolve("session.enc"))
+            val revoked = mutableListOf<String>()
+            val runtime = runtime(store, RenewalFixtureApi(), revoke = { revoked += it }) { _, _ ->
+                error("Renewal is not due in this fixture")
+            }
+            try {
+                runtime.bootstrap()
+                runtime.stopMiningAndJoin()
+                assertTrue(revoked.isEmpty(), "Ordinary Stop must retain the browser")
+                when (action) {
+                    "shutdown" -> runtime.stopMiningAndJoin(shutdown = true)
+                    "reset" -> runtime.resetSessionAndJoin()
+                    else -> runtime.startManagedBrowserAuthentication()
+                }
+                assertEquals(listOf(lease), revoked, action)
+                if (action == "reset") assertNull(store.twitchSession())
+                else assertContentEquals(original, Files.readAllBytes(directory.resolve("session.enc")), action)
+            } finally { runtime.stopMiningAndJoin(shutdown = true) }
+            assertEquals(listOf(lease), revoked, "A released lease must not be revoked twice")
+        }
+    }
+
+    @Test fun `normal renewal waits for the five minute lead while proof is still usable`() = runBlocking {
+        val time = Instant.now().epochSecond
+        val before = BrowserSessionContext.parse(JsonObject(context().toJson() + mapOf(
+            "captured_at" to JsonPrimitive(time - 1000),
+            "expires_at" to JsonPrimitive(time + 600),
+            "sdk_cookie" to buildJsonObject { put("value", "valid-cookie"); put("expires_at", time + 1800) },
+        )))
+        // This clock positions the existing scheduler one second before its lead deadline.
+        // It is synthetic scheduling evidence, not an unattended Twitch expiry observation.
+        val clock = { before.expiresAt.minusSeconds(301) }
+        val store = store().also { it.saveTwitchSession(session(before)) }
+        val issued = CompletableDeferred<Unit>()
+        val runtime = runtime(store, RenewalFixtureApi(), clock = clock) { previous, account ->
+            previous.requireFresh(clock())
+            assertEquals("12345", account)
+            issued.complete(Unit)
+            context(true)
+        }
+        try {
+            runtime.bootstrap()
+            assertNull(withTimeoutOrNull(250) { issued.await() })
+            withTimeout(3000) { issued.await() }
+            awaitSaved(store)
+            assertEquals("fresh-cookie", store().twitchSession()?.browserContext?.sdkCookie?.value)
+            assertFalse(runtime.snapshot.value.miningActive)
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `replayed nonadvancing expired or changed identity proof never reaches catalog or storage`() = runBlocking {
+        for (variation in listOf("replayed", "expiry", "capture", "expired", "oauth", "device")) {
+            val time = Instant.now().epochSecond
+            val before = BrowserSessionContext.parse(JsonObject(context().toJson() + mapOf(
+                "captured_at" to JsonPrimitive(time - 180),
+                "expires_at" to JsonPrimitive(time + 180),
+                "sdk_cookie" to buildJsonObject { put("value", "valid-cookie"); put("expires_at", time + 3600) },
+            )))
+            val raw = context(true).toJson()
+            val headers = raw.getValue("headers").jsonObject
+            val changed = when (variation) {
+                "replayed" -> JsonObject(raw + ("headers" to JsonObject(headers +
+                    ("client-integrity" to JsonPrimitive(before.headers.getValue("client-integrity"))))))
+                "expiry" -> JsonObject(raw + ("expires_at" to JsonPrimitive(before.expiresAt.epochSecond)))
+                "capture" -> JsonObject(raw + ("captured_at" to JsonPrimitive(before.capturedAt.epochSecond)))
+                "expired" -> JsonObject(raw + mapOf(
+                    "captured_at" to JsonPrimitive(time - 120), "expires_at" to JsonPrimitive(time - 30)))
+                "oauth" -> JsonObject(raw + ("headers" to JsonObject(headers +
+                    ("authorization" to JsonPrimitive("OAuth other-fixture-token")))))
+                else -> JsonObject(raw + ("headers" to JsonObject(headers +
+                    ("device-id" to JsonPrimitive("other-fixture-device")))))
+            }
+            val store = store().also { it.saveTwitchSession(session(before)) }
+            val original = Files.readAllBytes(directory.resolve("session.enc"))
+            val catalogCalls = AtomicInteger()
+            val api = object : TwitchApi by RenewalFixtureApi() {
+                override suspend fun validateBrowserContext(context: BrowserSessionContext): StoredTwitchSession {
+                    catalogCalls.incrementAndGet()
+                    return session(context)
+                }
+            }
+            val runtime = runtime(store, api) { _, _ -> BrowserSessionContext.parse(changed) }
+            try {
+                runtime.bootstrap(); awaitFailure(runtime)
+                assertEquals(0, catalogCalls.get(), variation)
+                assertContentEquals(original, Files.readAllBytes(directory.resolve("session.enc")), variation)
+                assertFalse(runtime.snapshot.value.miningActive)
+            } finally { runtime.stopMiningAndJoin(shutdown = true) }
+        }
     }
 
     @Test fun `authoritative OAuth 401 invalidates restored session before browser issuance`() = runBlocking {

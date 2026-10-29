@@ -113,6 +113,12 @@ Set `TZ` in `.env` to the timezone of your home connection; the example default 
 Use both Compose files for subsequent `up`, `build`, `logs`, and `down` commands for this deployment.
 The browser shares the app's network namespace, so recreate both services together after changing
 ports or network settings. It adds no published port and does not mount the miner's data volume.
+Restart both services together with
+`docker compose -f compose.yaml -f compose.browser.yaml restart app browser`.
+An app-only restart through `docker restart`, Docker Desktop, or an engine restart policy can leave
+the surviving browser in the old network namespace. The dashboard may still load
+campaigns while browser renewal/control is unreachable. Restart both services to restore connectivity;
+retained-browser sessions then require sign-in again. This also applies after an app-container crash.
 
 1. Open DockDrops, select **Connect Twitch → Open dashboard login → Start sign-in**.
 2. Sign in on Twitch in the displayed browser. Complete email or two-factor verification there.
@@ -133,6 +139,8 @@ and at most 256 processes. These are limits, not steady-state requirements. It u
 Optional SDK verification briefly runs a second browser with a separate temporary profile; both
 remain inside the same container limits. The retained-browser mode keeps one headed Chromium
 available between runtime-triggered renewals. It does not depend on a desktop helper or open dashboard.
+Both container browsers disable GPU acceleration so their overlapping software-rendering thread
+pools fit the existing process limit; no GPU device or additional permission is required.
 There is no Android emulator or remote desktop port. The login viewer relays screenshots, bounded
 text, pointer clicks, and navigation keys through the same-origin JVM API. It does not offer arbitrary
 browser commands, downloads, drag gestures, popup-based social sign-in, passkeys, or OS dialogs. Use the desktop fallback if a
@@ -147,7 +155,8 @@ Twitch challenge requires those interactions. Firefox is not supported.
 - **Docker browser renewal:** the signed-in browser stays inside Docker, and a private encrypted
   lease lets the runtime request fresh proof from it. Your PC and dashboard can be off. Its profile
   stays temporary: reconnect after the browser service restarts or an orderly app shutdown. An
-  unexpected app restart can reuse a browser that survived, but do not rely on that for maintenance.
+  unexpected JVM-process restart can reuse a browser only if their shared network namespace survives.
+  An app-container restart does not provide that guarantee; restart both services as described above.
 
 Both modes start renewal five minutes before proof expiry, retry temporary failures with backoff,
 and require matching account/Drops verification before saving. Expired SDK cookies trigger guarded
@@ -542,6 +551,12 @@ docker run --rm --init --network none --read-only \
 ```
 
 Keep `--init`: Xvfb's startup signalling requires it when launched this way in a container.
+
+With `DOCKDROPS_BROWSER_TEST=1`, all four tests must execute with zero skips. They cover retained
+capture, overlapping interactive/private-display bootstrap, seed rotation, and private-display
+ownership and cleanup after synthetic expiry, failure, cancellation and a forced short deadline.
+They use synthetic Twitch responses with networking disabled. These checks do not establish live
+Twitch acceptance, naturally scheduled renewal or recovery after a real cookie expires.
 
 The complete image build also runs the test and install-distribution tasks:
 

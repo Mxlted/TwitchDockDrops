@@ -154,6 +154,11 @@ polls only its own attempt ID. Each attempt creates and removes a temporary prof
 uses ordinary Chromium on a separate authenticated Xvfb display: `xvfb-run -a`, a 1280x800 screen,
 a 1200x760 browser window, and Xauthority inside the owner-only profile. It never shares the interactive
 login display. The owned process group is terminated on completion, failure, timeout or cancellation.
+Interactive and renewal browsers disable GPU acceleration inside the container so overlapping
+headed Chromium instances fit the existing process/thread limit. Desktop helpers keep their default
+rendering configuration. Cleanup drains the owned POSIX process group even if its launcher exits first.
+Startup selects the single owned `about:blank` page through read-only target listing; readiness
+retries never create additional tabs or renderer processes.
 Non-container issuance retains its existing browser-mode option. A blank
 Twitch-origin document loads the fixed Twitch SDK and issues `/integrity`; acceptance requires a
 matching uncached POST response, a different token, advancing proof expiry and an advancing SDK-cookie
@@ -181,8 +186,11 @@ and orderly JVM shutdown revoke that lease; Stop preserves it. Stale IDs/leases 
 browser. Viewer input/frames remain disabled after Finish. There is no worker renewal timer.
 
 The retained profile remains on tmpfs and is not exported. A browser-service restart or orderly JVM
-shutdown requires reconnecting in this mode. An unexpected JVM restart can reuse a surviving browser
-with the encrypted lease. Missing/dead browsers produce fixed reconnect guidance while preserving
+shutdown requires reconnecting in this mode. An unexpected JVM-process restart can reuse a surviving
+browser with the encrypted lease only while their shared network namespace remains intact. An
+app-container restart can leave the companion in an older namespace; restart both services together
+to restore loopback connectivity, then reconnect in retained-browser mode. Missing/dead browsers
+produce fixed reconnect guidance while preserving
 saved credentials; ordinary capture/transport failures retry with bounded backoff. This fallback
 removes the SDK-seed gate but does not establish live unattended Twitch acceptance.
 

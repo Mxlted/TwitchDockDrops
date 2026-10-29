@@ -96,6 +96,46 @@ class ChannelEligibilityRuntimeTest {
         } finally { runtime.stopMiningAndJoin(shutdown = true) }
     }
 
+    @Test fun `ban confirmed during rejected delivery does not delay eligibility after unban`() =
+        verifyBanDuringDelivery(throwFailure = false)
+
+    @Test fun `ban confirmed during failed delivery does not enter network backoff after unban`() =
+        verifyBanDuringDelivery(throwFailure = true)
+
+    private fun verifyBanDuringDelivery(throwFailure: Boolean) = runBlocking {
+        val api = EligibilityApi()
+        api.banned += 40L
+        api.banDuringDelivery = 41L
+        api.throwDeliveryFailure = throwFailure
+        val runtime = runtime(api)
+        try {
+            runtime.startMining()
+            withTimeout(3_000) { runtime.snapshot.first { it.currentChannel?.id == 42L && it.phase == RuntimePhase.Watching } }
+            assertEquals(1, api.watched.count { it == 41L })
+            api.banned.remove(41L)
+            api.banned += 42L
+            runtime.refreshInventory()
+            withTimeout(3_000) { runtime.snapshot.first { it.currentChannel?.id == 41L && it.phase == RuntimePhase.Watching } }
+            val log = Files.readString(directory.resolve("runtime.log"))
+            assertFalse(log.contains("Watch event failed"))
+            assertFalse(log.contains("Watch heartbeat rejected"))
+            assertFalse(log.contains("Channel watch events repeatedly rejected"))
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
+    @Test fun `temporary restriction expiry wakes idle discovery without a manual refresh`() = runBlocking {
+        val api = EligibilityApi()
+        api.banned.addAll(listOf(40L, 41L, 42L))
+        api.temporaryRestriction = 41L to Instant.now().plusMillis(750)
+        val runtime = runtime(api)
+        try {
+            runtime.startMining()
+            withTimeout(3_000) { runtime.snapshot.first { it.phase == RuntimePhase.Idle && it.currentChannel == null } }
+            withTimeout(3_000) { runtime.snapshot.first { it.currentChannel?.id == 41L && it.phase == RuntimePhase.Watching } }
+            assertFalse(api.watched.any { it == 40L || it == 42L })
+        } finally { runtime.stopMiningAndJoin(shutdown = true) }
+    }
+
     private fun runtime(api: EligibilityApi, settings: SettingsRepository = SettingsRepository(directory),
         channelStatusInterval: Duration = Duration.ofMinutes(3), promotionInterval: Duration = Duration.ofMinutes(2)): LocalMinerRuntime {
         val store = SecureSessionStore(directory, Base64.getEncoder().encodeToString(ByteArray(32) { 8 }))
@@ -112,13 +152,22 @@ private class EligibilityApi(private val promote: Boolean = false) : TwitchApi {
     val firstLookups = AtomicInteger()
     @Volatile var banOnCheck: Long? = null
     @Volatile var banDuringStatus: Long? = null
+    @Volatile var banDuringDelivery: Long? = null
+    @Volatile var throwDeliveryFailure = false
+    @Volatile var temporaryRestriction: Pair<Long, Instant>? = null
     @Volatile var firstAvailable = false
     @Volatile var boundAccount: String? = "12345"
     override fun bindChannelAccount(userId: String?) {
         if (boundAccount != userId) banned.clear()
         boundAccount = userId
     }
-    override fun isChannelAllowed(userId: String, channelId: Long) = userId == boundAccount && channelId !in banned
+    override fun isChannelAllowed(userId: String, channelId: Long): Boolean {
+        val temporary = temporaryRestriction
+        if (temporary?.first == channelId && !Instant.now().isBefore(temporary.second)) banned.remove(channelId)
+        return userId == boundAccount && channelId !in banned
+    }
+    override fun nextChannelRestrictionExpiry(userId: String): Instant? = temporaryRestriction?.second
+        ?.takeIf { userId == boundAccount && it.isAfter(Instant.now()) }
     override suspend fun checkChannelEligibility(session: StoredTwitchSession, channelId: Long): Boolean {
         if (banOnCheck == channelId) banned += channelId
         return isChannelAllowed(session.userId, channelId)
@@ -140,7 +189,16 @@ private class EligibilityApi(private val promote: Boolean = false) : TwitchApi {
         }
         return channel(id, expectedGame ?: "Second Game").copy(dropsEnabled = id !in banned)
     }
-    override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel): Boolean { watched += channel.id; return true }
+    override suspend fun sendWatchMinute(session: StoredTwitchSession, channel: Channel): Boolean {
+        watched += channel.id
+        if (banDuringDelivery == channel.id) {
+            banDuringDelivery = null
+            banned += channel.id
+            if (throwDeliveryFailure) throw IllegalStateException("Synthetic delivery failure after restriction")
+            return false
+        }
+        return true
+    }
     override suspend fun currentDrop(session: StoredTwitchSession, channelId: Long) = CurrentDropProgress(if (channelId == 40L && promote) "first-drop" else "second-drop", 1, channelId)
     override suspend fun requestDeviceCode(deviceId: String): DeviceAuthorization = error("Unused fixture")
     override suspend fun pollDeviceToken(deviceCode: String, deviceId: String): DeviceTokenPollResult = error("Unused fixture")

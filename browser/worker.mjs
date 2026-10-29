@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve, dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
-import {Cdp, BrowserCapture, browserPort, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
+import {Cdp, BrowserCapture, browserPort, startBrowser, stopBrowser, initialPageTarget} from '../src/main/resources/web/login-helper.mjs';
 import {issueSeed, readSdkCookie, validateSeed, SdkCookieUnavailable, seedFailureCode, RenewalOAuthInvalid} from './renewal.mjs';
 
 const LEASE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -102,19 +102,18 @@ export class BrowserWorker {
     s.child = await startBrowser(this.executable,s.profile,[...this.browserArgs,'--remote-debugging-address=127.0.0.1',`--remote-debugging-port=${s.port}`,
       '--disable-dev-shm-usage','--window-size=1100,850','--disable-extensions','about:blank']);
     const signal = AbortSignal.any([s.stop.signal,AbortSignal.timeout(480000)]);
-    let ready = false;
+    let target;
     for (let i = 0; i < 200; i++) {
       signal.throwIfAborted();
       if (s.child.exitCode !== null) throw Error('Browser launch failed');
       try {
-        const response = await fetch(`http://127.0.0.1:${s.port}/json/version`,{redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(500)])});
-        const version = await response.json();
-        if (response.ok && typeof version.webSocketDebuggerUrl === 'string') { ready = true; break; }
+        const response = await fetch(`http://127.0.0.1:${s.port}/json/list`,{redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(500)])});
+        if (response.ok) target = initialPageTarget(await response.json());
+        if (target) break;
       } catch {}
       await sleep(100,undefined,{signal});
     }
-    if (!ready) throw Error('Browser launch timed out');
-    const target = await (await fetch(`http://127.0.0.1:${s.port}/json/new?about:blank`,{method:'PUT',redirect:'error',signal})).json();
+    if (!target) throw Error('Browser launch timed out');
     // The eight-minute deadline covers interactive login only; Finish has its own bounds.
     s.cdp = await Cdp.open(target.webSocketDebuggerUrl,s.port,s.stop.signal);
     await s.cdp.command('Browser.setDownloadBehavior',{behavior:'deny'});

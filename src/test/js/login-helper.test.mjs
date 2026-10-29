@@ -1,6 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {CaptureObservation, BrowserCapture, dashboardUrl, BrowserCommandError, Cdp} from '../../main/resources/web/login-helper.mjs';
+import {CaptureObservation, BrowserCapture, dashboardUrl, BrowserCommandError, Cdp, initialPageTarget} from '../../main/resources/web/login-helper.mjs';
+
+test('startup selects only the one owned blank page without creating additional targets', () => {
+  const target = {type:'page',url:'about:blank',webSocketDebuggerUrl:'ws://127.0.0.1:1/devtools/page/fixture'};
+  assert.equal(initialPageTarget([target]),target);
+  assert.equal(initialPageTarget([]),null);
+  assert.equal(initialPageTarget([{...target,type:'worker'},{...target,url:'https://www.twitch.tv/'}]),null);
+  for (const targets of [{},[target,target],Array(33).fill({})]) assert.throws(() => initialPageTarget(targets));
+});
 
 test('helper only uploads to explicitly trusted dashboard origins', () => {
   for (const value of ['http://127.0.0.1:8080','http://192.168.1.2:8080','http://10.0.0.2:8080','https://drops.example.com']) assert.equal(dashboardUrl(value),value);

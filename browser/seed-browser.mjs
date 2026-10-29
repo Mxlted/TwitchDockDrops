@@ -1,11 +1,11 @@
 import {spawn} from 'node:child_process';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
-import {startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
+import {startBrowser, stopBrowser, containerRenderingArgs} from '../src/main/resources/web/login-helper.mjs';
 
 export function seedBrowserLaunch(executable, profile, args, headless, container = process.env.DOCKDROPS_CONTAINER_BROWSER === 'true') {
   const browser = ['--user-data-dir=' + profile,'--no-first-run','--no-default-browser-check',
-    '--disable-background-mode',...args];
+    '--disable-background-mode',...containerRenderingArgs(container),...args];
   if (container) return {executable:'/usr/bin/xvfb-run', args:['-a','-f',join(profile,'Xauthority'),
     '-s','-screen 0 1280x800x24 -nolisten tcp',executable,...browser,'--window-size=1200,760']};
   return {executable,args:[...browser,...(headless ? ['--headless=new'] : [])]};

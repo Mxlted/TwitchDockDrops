@@ -232,6 +232,14 @@ export async function browserPort() {
   return port;
 }
 
+export function initialPageTarget(targets) {
+  if (!Array.isArray(targets) || targets.length > 32) throw new HelperError('Unexpected browser startup state.');
+  const pages = targets.filter(target => target?.type === 'page' && target.url === 'about:blank' &&
+    typeof target.webSocketDebuggerUrl === 'string');
+  if (pages.length > 1) throw new HelperError('Unexpected browser startup state.');
+  return pages[0] || null;
+}
+
 async function browserExecutable(explicit) {
   const candidates = explicit ? [resolve(explicit)] : platform() === 'win32' ? [
     join(process.env.PROGRAMFILES || 'C:/Program Files', 'Google/Chrome/Application/chrome.exe'),
@@ -246,18 +254,29 @@ async function browserExecutable(explicit) {
 }
 
 export async function stopBrowser(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  if (!child) return;
   if (platform() === 'win32') {
+    if (child.exitCode !== null || child.signalCode !== null) return;
     const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {stdio:'ignore', windowsHide:true});
     await new Promise(resolve => { killer.once('exit',resolve); killer.once('error',resolve); });
-  } else { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }
-  await Promise.race([new Promise(resolve => child.once('exit',resolve)), sleep(3000)]);
+  } else {
+    // An exited launcher can leave Chromium descendants in its owned process group.
+    try { process.kill(-child.pid, 'SIGTERM'); } catch {}
+  }
+  if (child.exitCode === null && child.signalCode === null) {
+    await Promise.race([new Promise(resolve => child.once('exit',resolve)), sleep(3000)]);
+  }
   if (platform() !== 'win32') { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }
+}
+
+export function containerRenderingArgs(container = process.env.DOCKDROPS_CONTAINER_BROWSER === 'true') {
+  // Xvfb has no hardware GPU. Bound software GPU thread pressure while login and renewal overlap.
+  return container ? ['--disable-gpu'] : [];
 }
 
 export async function startBrowser(executable, profile, args) {
   const child = spawn(executable, ['--user-data-dir=' + profile, '--no-first-run', '--no-default-browser-check',
-    '--disable-background-mode', ...args], { stdio:'ignore', detached:platform() !== 'win32', windowsHide:true,
+    '--disable-background-mode', ...containerRenderingArgs(), ...args], { stdio:'ignore', detached:platform() !== 'win32', windowsHide:true,
     env: { ...process.env, XDG_CONFIG_HOME:join(profile,'config'), XDG_CACHE_HOME:join(profile,'cache') } });
   await new Promise((resolve, reject) => { child.once('spawn',resolve); child.once('error',() => reject(new HelperError('Cannot launch browser.'))); });
   return child;

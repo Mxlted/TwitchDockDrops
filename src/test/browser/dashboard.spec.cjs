@@ -76,7 +76,7 @@ test('replacement TV code keeps its identity without contacting OAuth', async ({
     return route.fulfill({json:{ok:true}});
   });
   await page.goto('/');
-  await page.getByRole('button', {name:'Request a new code'}).click();
+  await page.getByRole('button', {name:'Request a new TV code', exact:true}).click();
   await expect.poll(() => calls).toEqual(['/api/auth/tv/start']);
 });
 

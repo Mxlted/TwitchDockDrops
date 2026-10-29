@@ -208,6 +208,9 @@ The companion permits only an exact loopback Host, an internal request header, n
 no CORS, including on read routes. A page cannot issue these requests without a rejected preflight.
 Other processes in that namespace are trusted; these controls are not authentication against native
 code already running there.
+Restart both Compose services together. An app-container-only restart can leave the browser in an
+old namespace, where the app cannot deliver renewal or lease revocation. Recovery must restart the
+companion too; exposing its control port or granting extra network permissions is not a repair.
 
 Chromium alone uses `--no-sandbox` inside this isolated companion because the retained
 `no-new-privileges`/capability restrictions prevent its setuid sandbox from starting on common Docker
@@ -220,6 +223,10 @@ does not fit the deployment. Do not grant privileged mode or mount the miner vol
 The temporary profile is on a 512 MiB tmpfs and is removed on normal cancellation/exit; container removal
 also discards it. Memory, shared memory, and process counts are bounded. Downloads are denied, arbitrary
 CDP/navigation commands are not relayed, and credentials are not included in browser process arguments.
+Container browsers disable GPU acceleration to avoid exhausting the 256-process/thread limit when
+login and private-display renewal overlap. This keeps ordinary headed Chromium, X authentication,
+and all container limits and permissions intact. POSIX cleanup also terminates owned descendants
+when their launcher has already exited.
 After Finish sign-in, the same headed browser completes capture. If a scoped SDK cookie is available,
 a separate temporary browser tests independent issuance without closing the login browser
 first. Missing seed material or failed issuance falls back to retaining the authenticated browser

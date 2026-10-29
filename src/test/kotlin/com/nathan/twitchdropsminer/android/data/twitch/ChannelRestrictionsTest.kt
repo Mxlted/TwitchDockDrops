@@ -4,6 +4,9 @@ import com.nathan.twitchdropsminer.android.data.model.*
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
@@ -110,6 +113,137 @@ class ChannelRestrictionsTest {
             assertFalse(api.checkChannelEligibility(session(), 42))
             time = now.plusSeconds(300)
             assertTrue(api.isChannelAllowed("12345", 42))
+        }
+    }
+
+    @Test fun `malformed and unsupported successful responses neither invent nor erase restrictions`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            var time = now
+            val api = client(server) { time }
+            val invalidBodies = listOf(
+                "not-json",
+                "[]",
+                """{"errors":[{"message":"unsupported fixture query"}]}""",
+                """{"data":{"user":{"id":"42","self":{"banStatus":{"isPermanent":"false"}}}}}""",
+                response("null", "43").toString(),
+            )
+            for (body in invalidBodies) {
+                server.enqueue(MockResponse().setBody(body))
+                assertTrue(api.checkChannelEligibility(session(), 42))
+                time = time.plusSeconds(181)
+            }
+            server.enqueue(MockResponse().setBody(response("""{"isPermanent":false}""").toString()))
+            assertFalse(api.checkChannelEligibility(session(), 42))
+            for (body in invalidBodies) {
+                time = time.plusSeconds(181)
+                server.enqueue(MockResponse().setBody(body))
+                assertFalse(api.checkChannelEligibility(session(), 42))
+            }
+            assertEquals(11, server.requestCount)
+        }
+    }
+
+    @Test fun `concurrent checks for one channel share a single bounded request`() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val api = client(server)
+            server.enqueue(MockResponse().setBody(response("""{"isPermanent":true}""").toString()).setBodyDelay(200, TimeUnit.MILLISECONDS))
+            val first = async { api.checkChannelEligibility(session(), 42) }
+            withContext(Dispatchers.IO) { assertNotNull(server.takeRequest(2, TimeUnit.SECONDS)) }
+            coroutineScope { List(20) { async { api.checkChannelEligibility(session(), 42) } }.awaitAll() }
+            assertFalse(first.await())
+            assertFalse(api.checkChannelEligibility(session(), 42))
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test fun `directory restriction workers are bounded and cancellation cannot install late evidence`() = runBlocking {
+        MockWebServer().use { server ->
+            val started = CountDownLatch(4)
+            val release = CountDownLatch(1)
+            val checks = AtomicInteger()
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    val payload = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+                    return when (payload["operationName"]!!.jsonPrimitive.content) {
+                        "ChannelBanStatus" -> {
+                            checks.incrementAndGet()
+                            started.countDown()
+                            check(release.await(5, TimeUnit.SECONDS))
+                            val id = payload["variables"]!!.jsonObject["channelID"]!!.jsonPrimitive.content
+                            MockResponse().setBody(response("""{"isPermanent":true}""", id).toString())
+                        }
+                        "DirectoryPage_Game" -> {
+                            val edges = (42..61).joinToString(",") { id ->
+                                """{"node":{"id":"broadcast$id","viewersCount":100,"broadcaster":{"id":"$id","login":"channel$id","displayName":"Channel$id"}}}"""
+                            }
+                            MockResponse().setBody("""{"data":{"game":{"streams":{"edges":[$edges]}}}}""")
+                        }
+                        else -> MockResponse().setBody("""{"data":{"game":{"slug":"game"}}}""")
+                    }
+                }
+            }
+            server.start()
+            val api = client(server)
+            val discovery = async { api.fetchEligibleChannels(session(), Campaign("campaign", "Campaign", "Game")) }
+            try {
+                assertTrue(withContext(Dispatchers.IO) { started.await(3, TimeUnit.SECONDS) })
+                assertEquals(4, checks.get())
+                withTimeout(1_000) { discovery.cancelAndJoin() }
+            } finally {
+                release.countDown()
+                discovery.cancelAndJoin()
+            }
+            assertEquals(4, checks.get())
+            for (id in 42L..61L) assertTrue(api.isChannelAllowed("12345", id))
+        }
+    }
+
+    @Test fun `ban confirmed while an HLS playlist is in flight prevents media and telemetry delivery`() = runBlocking {
+        MockWebServer().use { server ->
+            val playlistStarted = CountDownLatch(1)
+            val releasePlaylist = CountDownLatch(1)
+            val requests = CopyOnWriteArrayList<Pair<String?, String?>>()
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    requests += request.method to request.requestUrl?.encodedPath
+                    return when {
+                        request.path == "/gql" -> {
+                            val payload = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+                            if (payload["operationName"]!!.jsonPrimitive.content == "ChannelBanStatus") {
+                                MockResponse().setBody(response("""{"isPermanent":true}""").toString())
+                            } else {
+                                MockResponse().setBody("""{"data":{"streamPlaybackAccessToken":{"value":"synthetic-value","signature":"synthetic-signature"}}}""")
+                            }
+                        }
+                        request.path!!.startsWith("/api/channel/hls/") ->
+                            MockResponse().setBody("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n/low.m3u8")
+                        request.path == "/low.m3u8" -> {
+                            playlistStarted.countDown()
+                            check(releasePlaylist.await(5, TimeUnit.SECONDS))
+                            MockResponse().setBody("#EXTM3U\n#EXTINF:2,\n/never-delivered.ts")
+                        }
+                        else -> MockResponse().setResponseCode(500)
+                    }
+                }
+            }
+            server.start()
+            val api = client(server)
+            val watch = async { api.pollWatchStream(session(), channel(42)) { true } }
+            try {
+                assertTrue(withContext(Dispatchers.IO) { playlistStarted.await(3, TimeUnit.SECONDS) })
+                assertFalse(api.checkChannelEligibility(session(), 42))
+                releasePlaylist.countDown()
+                assertFalse(withTimeout(2_000) { watch.await() })
+                repeat(3) { assertFalse(api.pollWatchStream(session(), channel(42)) { true }) }
+                assertEquals(4, requests.size)
+                assertFalse(requests.any { it.first == "HEAD" })
+                assertFalse(requests.any { it.second == "/channel42" })
+            } finally {
+                releasePlaylist.countDown()
+                watch.cancelAndJoin()
+            }
         }
     }
 
