@@ -7,7 +7,7 @@ import {join, resolve, dirname} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {Cdp, BrowserCapture, browserPort, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
-import {issueSeed, readSdkCookie, validateSeed, SdkCookieUnavailable, seedFailureCode} from './renewal.mjs';
+import {issueSeed, readSdkCookie, validateSeed, SdkCookieUnavailable, seedFailureCode, RenewalOAuthInvalid} from './renewal.mjs';
 
 const LEASE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function validateLeaseContext(context) {
@@ -47,14 +47,15 @@ export class BrowserWorker {
     const s = this.session;
     return s ? {id:s.id, state:s.state, sequence:s.sequence, error:s.error || '', ...(s.context ? {context:s.context} : {})} : {state:'idle',sequence:0};
   }
-  async renew(id, context) {
-    if (context?.browser_lease !== undefined) validateLeaseContext(context); else validateSeed(context);
+  async renew(id, context, userId) {
+    if (typeof userId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(userId)) throw Error('Invalid renewal identity');
+    if (context?.browser_lease !== undefined) validateLeaseContext(context); else validateSeed(context,Date.now()/1000,false,true);
     if (this.session && !this.session.renewal && !['ready','failed'].includes(this.session.state)) throw Error('Browser busy');
     await this.release(this.session?.id);
     const s = {id, renewal:true, state:'capturing', stop:new AbortController(), sequence:0, context:null};
     this.session = s;
     s.task = (async () => {
-      if (!context.browser_lease) return this.issue(this.executable,this.browserArgs,context,s.stop.signal);
+      if (!context.browser_lease) return this.issue(this.executable,this.browserArgs,context,s.stop.signal,false,userId);
       const retained = this.retained;
       if (!retained || retained.lease !== context.browser_lease || retained.capture.failure || retained.cdp?.closed || !sameIdentity(context,retained.boundContext)) {
         s.error = 'browser_missing'; throw Error('Browser unavailable');
@@ -64,9 +65,13 @@ export class BrowserWorker {
           captured.headers['client-integrity'] === context.headers['client-integrity']) throw Error('Browser context changed');
       return {...captured,browser_lease:retained.lease};
     })().then(result => {
-      s.stop.signal.throwIfAborted(); s.context = result; s.sequence = 1;
-    }).catch(() => {
-      if (!s.stop.signal.aborted) { s.error ||= 'renewal_failed'; s.state = 'failed'; }
+      s.stop.signal.throwIfAborted();
+      if (this.session !== s) return;
+      s.context = result; s.sequence = 1;
+    }).catch(error => {
+      if (!s.stop.signal.aborted && this.session === s) {
+        s.error ||= error instanceof RenewalOAuthInvalid ? 'oauth_invalid' : 'renewal_failed'; s.state = 'failed';
+      }
     });
   }
   async start(id) {
@@ -252,9 +257,9 @@ export function createWorkerServer(worker = new BrowserWorker(), port = 8091) {
       for await (const chunk of req) { size += chunk.length; if (size > (req.url === '/renew' ? 40*1024 : 4096)) throw Error('Too large'); chunks.push(chunk); }
       const body = JSON.parse(Buffer.concat(chunks).toString());
       if (typeof body.id !== 'string' || !/^[0-9a-f-]{36}$/.test(body.id)) throw Error('Invalid id');
-      if (req.url !== '/input' && Object.keys(body).some(k => !['id',...(req.url === '/accepted' ? ['sequence'] : []),...(req.url === '/renew' ? ['context'] : []),...(req.url === '/revoke' ? ['lease'] : [])].includes(k))) throw Error('Invalid fields');
+      if (req.url !== '/input' && Object.keys(body).some(k => !['id',...(req.url === '/accepted' ? ['sequence'] : []),...(req.url === '/renew' ? ['context','user_id'] : []),...(req.url === '/revoke' ? ['lease'] : [])].includes(k))) throw Error('Invalid fields');
       if (req.url === '/start') await worker.start(body.id);
-      if (req.url === '/renew') await worker.renew(body.id,body.context);
+      if (req.url === '/renew') await worker.renew(body.id,body.context,body.user_id);
       if (req.url === '/cancel') await worker.cancel(body.id);
       if (req.url === '/release') await worker.release(body.id);
       if (req.url === '/revoke') { if (!LEASE.test(body.lease)) throw Error('Invalid lease'); await worker.revoke(body.lease); }

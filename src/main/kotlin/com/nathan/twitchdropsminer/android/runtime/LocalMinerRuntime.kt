@@ -82,7 +82,7 @@ class LocalMinerRuntime(
     private val higherPriorityCheckInterval: Duration = HigherPriorityChannelCheckInterval,
     private val channelStatusCheckInterval: Duration = ChannelStatusCheckInterval,
     private val clock: () -> Instant = Instant::now,
-    private val browserRenewal: (suspend (BrowserSessionContext) -> BrowserSessionContext)? = null,
+    private val browserRenewal: (suspend (BrowserSessionContext, String) -> BrowserSessionContext)? = null,
     private val browserRenewalMinimumDelay: Duration = Duration.ofSeconds(10),
     private val twitchEvents: com.nathan.twitchdropsminer.android.data.twitch.TwitchEvents? = null,
     private val tvAuthenticationApi: TwitchApi? = null,
@@ -104,6 +104,8 @@ class LocalMinerRuntime(
     private var authJob: Job? = null
     private var inventoryRefreshJob: Job? = null
     private var browserRenewalJob: Job? = null
+    // Keep explicit Stop authoritative even when its durable write fails.
+    private var miningRequested = settingsRepository.settings.value.miningRequested
     private var browserLease: String? = null
     private var shuttingDown = false
     @Volatile private var sessionGeneration = 0L
@@ -142,6 +144,7 @@ class LocalMinerRuntime(
 
     suspend fun bootstrap() {
         val session = secureSessionStore.twitchSession()
+        twitchApiClient.bindChannelAccount(session?.userId)
         _snapshot.update {
             it.copy(
                 account = if (session == null) {
@@ -161,7 +164,7 @@ class LocalMinerRuntime(
         }
         if (session != null) {
             scheduleBrowserRenewal(session)
-            if (settingsRepository.settings.value.miningRequested) {
+            if (miningRequested) {
                 appendActivity(RuntimePhase.LoadingInventory, "Resuming mining after restart")
                 enqueueCoalesced(RuntimeCommand.StartMining())
             } else {
@@ -283,6 +286,7 @@ class LocalMinerRuntime(
     }
 
     private suspend fun installAuthenticatedSession(session: StoredTwitchSession) {
+        twitchApiClient.bindChannelAccount(session.userId)
         authJob = null
         _snapshot.update {
             it.copy(
@@ -317,7 +321,7 @@ class LocalMinerRuntime(
         }
         appendActivity(RuntimePhase.Idle, "Twitch session saved securely")
         scheduleBrowserRenewal(session)
-        if (settingsRepository.settings.value.miningRequested) {
+        if (miningRequested) {
             appendActivity(RuntimePhase.LoadingInventory, "Resuming mining after Twitch login")
             enqueueCoalesced(RuntimeCommand.StartMining())
         } else {
@@ -357,6 +361,7 @@ class LocalMinerRuntime(
         val runGeneration = miningRunGeneration
         val expectedSessionGeneration = sessionGeneration
         dropClaimHandler.clearAttempts()
+        twitchApiClient.bindChannelAccount(session.userId)
         failedChannelSkips.clear()
         lastLoggedExcludedCampaignIds = emptySet()
         waitingForNetwork = false
@@ -408,6 +413,7 @@ class LocalMinerRuntime(
     private suspend fun handleStopMining(command: RuntimeCommand.StopMining) {
         if (command.shutdown) {
             shuttingDown = true
+            twitchApiClient.bindChannelAccount(null)
             browserAdmission.clear()
             authRunGeneration++; sessionGeneration++; inventoryRefreshRunGeneration++
             browserRenewalJob?.cancelAndJoin(); browserRenewalJob = null
@@ -440,6 +446,7 @@ class LocalMinerRuntime(
     }
 
     private suspend fun persistMiningIntent(requested: Boolean) {
+        miningRequested = requested
         try {
             settingsRepository.update { it.copy(miningRequested = requested) }
         } catch (error: CancellationException) {
@@ -517,6 +524,8 @@ class LocalMinerRuntime(
     }
 
     private suspend fun handleResetSession(command: RuntimeCommand.ResetSession) {
+        twitchApiClient.bindChannelAccount(null)
+        miningRequested = false
         browserRenewalJob?.cancel(); browserRenewalJob = null
         browserAdmission.clear()
         sessionGeneration += 1L
@@ -912,22 +921,30 @@ class LocalMinerRuntime(
                 .coerceAtLeast(browserRenewalMinimumDelay.toMillis()))
             var retry = 15_000L
             while (isActive && generation == sessionGeneration && !shuttingDown) {
-                if (cookie != null && !cookie.expiresAt.isAfter(now())) {
-                    updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "Browser renewal seed expired. Reconnect Twitch; saved credentials were preserved.") }
-                    return@launch
-                }
                 try {
-                    val refreshed = renew(context)
+                    // OAuth identity must be proven before any owned browser bootstrap, including
+                    // restoration after the SDK cookie and integrity proof have both expired.
+                    val identity = withTimeoutOrNull(15_000) { twitchApiClient.validateSession(session) }
+                        ?: error("Browser renewal identity validation timed out.")
                     currentCoroutineContext().ensureActive()
+                    ensureCurrentOperation()
+                    require(identity.userId == session.userId && identity.clientId == context.headers["client-id"])
+                    val refreshed = withTimeoutOrNull(180_000) { renew(context, session.userId) }
+                        ?: error("Browser renewal timed out.")
+                    currentCoroutineContext().ensureActive()
+                    ensureCurrentOperation()
                     refreshed.requireFresh(now())
                     require((if (cookie != null) refreshed.sdkCookie?.expiresAt?.isAfter(cookie.expiresAt) == true
                         else refreshed.browserLease == context.browserLease && refreshed.sdkCookie == null) &&
                         refreshed.expiresAt > context.expiresAt &&
+                        refreshed.capturedAt > context.capturedAt &&
                         refreshed.headers["client-integrity"] != context.headers["client-integrity"] &&
+                        (cookie == null || refreshed.headers - "client-integrity" == context.headers - "client-integrity") &&
                         refreshed.accessToken == context.accessToken && refreshed.deviceId == context.deviceId)
                     val validated = withTimeoutOrNull(180_000) { twitchApiClient.validateBrowserContext(refreshed) }
                         ?: error("Browser renewal validation timed out.")
                     currentCoroutineContext().ensureActive()
+                    ensureCurrentOperation()
                     require(validated.userId == session.userId)
                     refreshed.requireFresh(now())
                     val completed = CompletableDeferred<Unit>()
@@ -947,7 +964,7 @@ class LocalMinerRuntime(
                     }
                     // No upstream bodies, seed values or browser diagnostics enter public state/logs.
                     updateSnapshot(_snapshot.value.phase, _snapshot.value.currentTask) { it.copy(error = "Automatic Twitch session renewal is temporarily unavailable; retrying. Saved credentials were preserved.") }
-                    delay(if (cookie == null) retry else minOf(retry, Duration.between(now(), cookie.expiresAt).toMillis().coerceAtLeast(1)))
+                    delay(retry)
                     retry = (retry * 2).coerceAtMost(300_000)
                 }
             }
@@ -1016,7 +1033,14 @@ class LocalMinerRuntime(
             return
         }
         // Storage failure leaves the current session and mining work intact; the issuer retries.
-        secureSessionStore.saveTwitchSession(command.session)
+        try {
+            command.session.browserContext?.requireFresh(now())
+            secureSessionStore.saveTwitchSession(command.session)
+        } catch (_: Throwable) {
+            command.completed.completeExceptionally(IllegalStateException(
+                "Renewed Twitch session could not be saved. Saved credentials were preserved."))
+            return
+        }
         cancelForBrowserAuthentication()
         browserAdmission.clear()
         installAuthenticatedSession(command.session)
@@ -1124,6 +1148,7 @@ class LocalMinerRuntime(
         if (
             !current.isRunning ||
             current.watchingChannel?.id == channelId ||
+            current.account.userId?.let { !twitchApiClient.isChannelAllowed(it, channelId) } == true ||
             current.channels.none { channel -> channel.id == channelId }
         ) {
             return
@@ -1285,13 +1310,13 @@ class LocalMinerRuntime(
                 }
                 appendActivity(RuntimePhase.Idle, selectedWork.activityTitle, selectedWork.detail)
                 val idleNow = now()
-                val idleDeadline = RuntimeTemporalSchedule.nextIdleDeadline(
+                val idleDeadline = channelEligibilityDeadline(session, RuntimeTemporalSchedule.nextIdleDeadline(
                     campaigns = campaignSnapshot.filterNot(settings::isCampaignExcluded),
                     now = idleNow,
                     regularDeadline = idleNow.plusMillis(selectedWork.retryDelayMillis(settings)),
                     inventoryRefreshAt = inventoryRefreshAt,
                     claimRetryAt = dropClaimHandler.nextRetryAt(),
-                )
+                ))
                 val idleWakeup = awaitIdleWakeup(
                     currentSettings = settings,
                     handledInventoryRefreshRequestId = handledInventoryRefreshRequestId,
@@ -1340,6 +1365,7 @@ class LocalMinerRuntime(
                 currentCoroutineContext().isActive &&
                 now().isBefore(refreshAt)
             ) {
+                if (!retainEligibleCurrentChannel(session, currentChannel, channels)) break
                 val completedHigherPriorityCheck = higherPriorityCheck?.takeIf { check -> check.isCompleted }
                 if (completedHigherPriorityCheck != null) {
                     higherPriorityCheck = null
@@ -1357,7 +1383,7 @@ class LocalMinerRuntime(
                             decision.mode == promotion.mode &&
                                 decision.candidates.any { candidate -> candidate.id == promotion.campaign.id }
                         }
-                    if (promotion != null && promotionStillHigher) {
+                    if (promotion != null && promotionStillHigher && twitchApiClient.isChannelAllowed(session.userId, promotion.channel.id)) {
                         val previousCampaign = currentCampaign
                         val previousChannel = currentChannel
                         currentCampaign = promotion.campaign
@@ -1455,27 +1481,9 @@ class LocalMinerRuntime(
                             search.detail,
                         )
                     } else {
-                        val selected = ChannelPickerSelection.findCompatibleChannel(
-                            channels = channels,
-                            channelId = requestedChannelId,
-                        )
+                        val selected = selectEligibleManualChannel(session, channels, requestedChannelId)
                         if (selected == null || selected.id == currentChannel.id) {
-                            updateSnapshot(
-                                RuntimePhase.Watching,
-                                "Selected channel unavailable; keeping ${currentChannel.name}",
-                            ) {
-                                it.copy(
-                                    channels = channels.markWatching(currentChannel.id),
-                                    currentChannel = currentChannel.copy(watching = true),
-                                    channelSearchInProgress = false,
-                                    error = null,
-                                )
-                            }
-                            appendActivity(
-                                RuntimePhase.Watching,
-                                "Channel selection ignored",
-                                "The selected streamer is no longer compatible or live; ${currentChannel.name} remains active.",
-                            )
+                            reportUnavailableManualChannel(session, currentChannel, channels)
                         } else {
                             val previousChannel = currentChannel
                             currentChannel = selected.copy(watching = true)
@@ -2057,6 +2065,37 @@ class LocalMinerRuntime(
         throw CancellationException("Mining stopped during Twitch session validation")
     }
 
+    private fun channelEligibilityDeadline(session: StoredTwitchSession, deadline: Instant): Instant =
+        RuntimeTemporalSchedule.earliest(deadline, twitchApiClient.nextChannelRestrictionExpiry(session.userId))
+
+    private suspend fun retainEligibleCurrentChannel(session: StoredTwitchSession, channel: Channel, channels: List<Channel>): Boolean {
+        if (twitchApiClient.isChannelAllowed(session.userId, channel.id)) return true
+        updateSnapshot(RuntimePhase.FindingChannel, "Selecting another eligible channel") {
+            it.copy(currentChannel = null, channels = channels.filter { candidate ->
+                twitchApiClient.isChannelAllowed(session.userId, candidate.id)
+            }.map { candidate -> candidate.copy(watching = false) })
+        }
+        return false
+    }
+
+    private suspend fun selectEligibleManualChannel(session: StoredTwitchSession, channels: List<Channel>, channelId: Long): Channel? {
+        val channel = ChannelPickerSelection.findCompatibleChannel(channels, channelId) ?: return null
+        val allowed = twitchApiClient.checkChannelEligibility(session, channel.id)
+        ensureCurrentOperation()
+        return channel.takeIf { allowed }
+    }
+
+    private suspend fun reportUnavailableManualChannel(session: StoredTwitchSession, currentChannel: Channel, channels: List<Channel>) {
+        updateSnapshot(RuntimePhase.Watching, "Selected channel unavailable; keeping ${currentChannel.name}") {
+            it.copy(
+                channels = channels.filter { channel -> twitchApiClient.isChannelAllowed(session.userId, channel.id) }.markWatching(currentChannel.id),
+                currentChannel = currentChannel.copy(watching = true), channelSearchInProgress = false, error = null,
+            )
+        }
+        appendActivity(RuntimePhase.Watching, "Channel selection ignored",
+            "The selected streamer is no longer compatible or live; ${currentChannel.name} remains active.")
+    }
+
     private suspend fun recheckCurrentChannel(
         session: StoredTwitchSession,
         currentChannel: Channel,
@@ -2066,6 +2105,9 @@ class LocalMinerRuntime(
         checkedAt: Instant,
         unlinkedProgressProbe: UnlinkedProgressProbe?,
     ): ChannelStatusApplication {
+        val accountEligible = twitchApiClient.checkChannelEligibility(session, currentChannel.id)
+        ensureCurrentOperation()
+        if (!accountEligible) return excludeRestrictedCurrentChannel(session, currentChannel, channels)
         val channelStatus = runCatchingCancellable {
             twitchApiClient.fetchCampaignChannel(
                 session,
@@ -2083,6 +2125,9 @@ class LocalMinerRuntime(
                     (error?.message ?: "channel lookup failed"),
             )
             return ChannelStatusApplication(currentChannel, channels)
+        }
+        if (!twitchApiClient.isChannelAllowed(session.userId, currentChannel.id)) {
+            return excludeRestrictedCurrentChannel(session, currentChannel, channels)
         }
         if (!refreshedChannel.online || !refreshedChannel.dropsEnabled) {
             failedChannelSkips[currentChannel.id] = checkedAt
@@ -2136,6 +2181,15 @@ class LocalMinerRuntime(
             )
         }
         return ChannelStatusApplication(updatedChannel, updatedChannels)
+    }
+
+    private suspend fun excludeRestrictedCurrentChannel(session: StoredTwitchSession, currentChannel: Channel, channels: List<Channel>): ChannelStatusApplication {
+        val eligibleChannels = channels.filter { twitchApiClient.isChannelAllowed(session.userId, it.id) }
+        updateSnapshot(RuntimePhase.FindingChannel, "Selecting another eligible channel") {
+            it.copy(channels = eligibleChannels.map { channel -> channel.copy(watching = false) }, currentChannel = null)
+        }
+        appendActivity(RuntimePhase.FindingChannel, "Channel unavailable for this account", "Selecting another eligible channel.")
+        return ChannelStatusApplication(currentChannel, eligibleChannels, reselect = true)
     }
 
     private suspend fun findCompatibleChannels(
@@ -2383,7 +2437,7 @@ class LocalMinerRuntime(
                 val channels = try {
                     twitchApiClient.fetchEligibleChannels(session, candidate).also {
                         ensureCurrentOperation()
-                    }
+                    }.filter { twitchApiClient.isChannelAllowed(session.userId, it.id) }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
@@ -2482,7 +2536,7 @@ class LocalMinerRuntime(
         return try {
             twitchApiClient.fetchEligibleChannels(session, campaign).also {
                 ensureCurrentOperation()
-            }
+            }.filter { twitchApiClient.isChannelAllowed(session.userId, it.id) }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
@@ -2529,13 +2583,14 @@ class LocalMinerRuntime(
         session: StoredTwitchSession,
         channel: Channel,
     ): WatchAttemptResult {
+        if (!twitchApiClient.isChannelAllowed(session.userId, channel.id)) return WatchAttemptResult.Superseded
         if (channel.broadcastId == null) {
             return WatchAttemptResult.Rejected
         }
         val context = currentCoroutineContext()
         val requestId = channelControlRequests.value.id
         val isCurrent = {
-            context.isActive && channelControlRequests.value.id == requestId &&
+            context.isActive && twitchApiClient.isChannelAllowed(session.userId, channel.id) && channelControlRequests.value.id == requestId &&
                 snapshot.value.currentChannel?.let { it.id == channel.id && it.broadcastId == channel.broadcastId } == true
         }
         return try {

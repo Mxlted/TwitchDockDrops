@@ -36,7 +36,7 @@ fun main() {
         twitchEvents = com.nathan.twitchdropsminer.android.data.twitch.TwitchEvents(httpClient),
         tvAuthenticationApi = TwitchApiClient(httpClient, deviceClientId = com.nathan.twitchdropsminer.android.data.twitch.TwitchTvClientId),
         networkStatusProvider = networkStatusProvider,
-        browserRenewal = browserRenewal?.let { client -> { context -> client.renew(context) } },
+        browserRenewal = browserRenewal?.let { client -> { context, userId -> client.renew(context, userId) } },
         browserLeaseRevoke = browserRenewal?.let { client -> { lease -> client.revoke(lease) } },
     )
 

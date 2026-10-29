@@ -126,7 +126,7 @@ The worker opens a headed Chromium browser under Xvfb. The UI relays JPEG frames
 click, text, scroll, and key commands. Capture starts before the login page so proof issued during
 sign-in is retained. Finish sign-in collects successful Drops evidence in that same browser and reads
 only the secure, HttpOnly `KP_UIDz-ssn` cookie for exact host `k.twitchcdn.net`, path `/`. If present,
-the worker attempts independent issuance in a temporary headless browser while preserving the login
+the worker attempts independent issuance in an owned temporary browser while preserving the login
 browser. If the cookie is absent or independent issuance fails, Finish uses the verified captured
 context and retains the authenticated headed browser inside Docker. Missing-cookie bootstrap is no
 longer a login prerequisite. The JVM still validates OAuth identity, Inventory and Campaigns before
@@ -142,17 +142,33 @@ have not yet matched. Optional independent SDK issuance has a 150-second deadlin
 Fixed browser-failure codes distinguish login timeout, capture and server acceptance timeout.
 Legacy SDK failure codes remain recognized by the JVM bridge, but SDK failures in the current worker
 use the retained-browser fallback. No raw diagnostics are forwarded.
-SDK renewal still requires a valid seed; retained-browser renewal requires its private browser lease.
+SDK renewal accepts a structurally valid saved seed, including an expired cookie after OAuth identity
+validation; retained-browser renewal requires its private browser lease.
 
 `BrowserSessionContext` optionally includes `sdk_cookie: {value, expires_at}` inside the existing
 encrypted session only (36 KiB maximum context). Older contexts remain readable. This is not a
 general cookie jar or persistent browser profile. `LocalMinerRuntime` schedules renewal five minutes
-before proof expiry, or shortly after startup for an expired proof with a fresh seed. The private
+before proof expiry, or shortly after startup for an expired proof with a saved seed. The private
 `BrowserRenewalClient` sends a bounded context to the companion's fixed loopback `/renew` route and
-polls only its own attempt ID. Each attempt creates and removes a temporary headless profile. A blank
+polls only its own attempt ID. Each attempt creates and removes a temporary profile. Container issuance
+uses ordinary Chromium on a separate authenticated Xvfb display: `xvfb-run -a`, a 1280x800 screen,
+a 1200x760 browser window, and Xauthority inside the owner-only profile. It never shares the interactive
+login display. The owned process group is terminated on completion, failure, timeout or cancellation.
+Non-container issuance retains its existing browser-mode option. A blank
 Twitch-origin document loads the fixed Twitch SDK and issues `/integrity`; acceptance requires a
 matching uncached POST response, a different token, advancing proof expiry and an advancing SDK-cookie
-expiry. OAuth/device headers stay bound to the saved context. No direct HTTP-only proof refresh is used.
+expiry. Issuance builds a separate allowlist: Authorization, Client-Id, Client-Session-Id,
+Client-Version, canonical X-Device-Id, and a new random 32-character Client-Request-Id for every
+request. SDK renewal retains the original GraphQL headers with only the proof replaced;
+request IDs are never saved. No direct HTTP-only proof refresh is used.
+
+Before issuance, the runtime validates the saved OAuth client/account with a 15-second deadline.
+The private request carries the expected account ID. For an expired or nearly expired SDK cookie,
+the worker independently validates that identity before creating fresh SDK state in an empty owned
+profile; it never installs the old cookie. Fresh uncached, correlated issuance and advancing proof/cookie
+expiry are mandatory. The worker exchange and JVM account/campaign verification each have a
+180-second outer deadline. Only an OAuth validation HTTP 401 enters invalid-session handling;
+network, malformed responses, mismatched identities and inconclusive catalog results preserve storage.
 
 As an alternative to `sdk_cookie`, the encrypted context may contain `browser_lease`, a random UUID
 identifying the one retained browser. These fields are mutually exclusive and absent from public
@@ -173,10 +189,12 @@ removes the SDK-seed gate but does not establish live unattended Twitch acceptan
 Renewal validates the same account and both Drops queries while the current miner continues. Only a
 successful, generation-checked atomic save replaces the context and restarts work with saved mining
 intent. Transient failures preserve the saved context and retry at 15 seconds, doubling to five minutes,
-until the saved SDK seed expires (or while the retained browser is available). Only authoritative
+independently of the saved SDK cookie expiry (or while the retained browser is available). Only authoritative
 token invalidity clears credentials. Reset,
 replacement login and shutdown cancel renewal and invalidate late results; Stop preserves renewal
-but prevents it from restarting mining. Shutdown joins renewal cleanup and preserves Start/Stop intent.
+but prevents it from restarting mining, even if saving Stop fails. An in-memory intent remains authoritative
+for the current process. Renewal storage errors use fixed diagnostics and leave the previous encrypted
+session intact. Shutdown joins renewal cleanup and preserves Start/Stop intent.
 
 Public browser endpoints explicitly serialize only a view ID, state/error, or JPEG image. The worker's
 private status can include captured context but is never proxied wholesale. Worker routes reject
@@ -185,8 +203,8 @@ bound bodies. The JVM only calls a fixed loopback address without redirects. It 
 CDP commands or URL navigation. View IDs reject stale input and frames after replacement. Interactive
 login is limited to eight minutes; captures and verification are time-bounded. Browser profiles stay
 on tmpfs; only the scoped SDK cookie or private retained-browser lease joins the encrypted context in
-the miner volume. Seed-based sessions can recover across restarts while the seed remains fresh;
-extended downtime, revoked OAuth or a Twitch challenge can still require login.
+the miner volume. Seed-based sessions can attempt recovery across restarts even after cookie expiry; revoked OAuth,
+inconclusive validation or a Twitch challenge can still require login.
 New helper login, reset, cancellation, and shutdown stop the companion session; runtime generations
 and lease revocation independently block late credential commits. A renewal request cannot replace an
 interactive login. Original encrypted credentials survive failed replacement and transient renewal.
@@ -259,6 +277,29 @@ progress for a different known campaign, the runtime follows that authoritative 
 permit it. If Twitch reports a drop absent from the current inventory, the same mining loop retains the
 watch and refreshes inventory immediately. Persistent unknown reports are limited to one automatic
 refresh every five minutes, avoiding both the normal 15-minute minimum wait and a rapid refresh loop.
+
+### Account channel restrictions
+
+Browser sessions check the authenticated `ChannelBanStatus` query during directory/allowlist discovery
+and live channel rechecks. Only an error-free response with the requested numeric channel ID and
+`self.banStatus` supplies evidence. A boolean `isPermanent` marks a ban whether true or false;
+false means temporary. A valid timezone-aware `expiresAt` ends a temporary restriction. Permanent
+bans ignore expiry; missing or invalid temporary expiry waits for an explicit null unban response.
+Missing, malformed, wrong-channel, unsupported and failed checks retain previous confirmed state.
+
+The account-owned memory cache holds at most 2,048 channels, uses a three-minute check cadence
+including failures, and retains active restrictions across same-account rediscovery and proof renewal.
+Saturation refuses additional admission rather than discarding a confirmed restriction. Lookup work
+uses the existing bounded worker pool, a ten-second check budget and five-second HTTP budget.
+Account replacement/reset/shutdown invalidate pending results; changing account clears this state.
+The cache is ephemeral and is checked again after process restart.
+
+Discovery, campaign allowlists, manual selection, promotion, current-channel rechecks and watch delivery
+all apply the same restriction gate. Expiry participates in idle discovery wakeups. HLS/telemetry use
+only the cached gate, including at request boundaries, without a ban query on each stream poll.
+This optional query has verified support only for browser identity; TV and legacy device identities
+skip it while retaining any restrictions confirmed for the same account. No broadcast failure, absent progress or unsupported query invents a ban.
+Game priorities, fallback ordering, exclusions, prerequisites, progress and claim handling are unchanged.
 
 ## Root-owned JVM core
 

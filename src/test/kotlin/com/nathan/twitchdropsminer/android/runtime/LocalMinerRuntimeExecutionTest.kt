@@ -9,6 +9,7 @@ import com.nathan.twitchdropsminer.android.data.model.Channel
 import com.nathan.twitchdropsminer.android.data.model.LoginState
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
 import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
+import com.nathan.twitchdropsminer.android.data.model.capabilities
 import com.nathan.twitchdropsminer.android.data.network.NetworkStatusProvider
 import com.nathan.twitchdropsminer.android.data.twitch.CurrentDropProgress
 import com.nathan.twitchdropsminer.android.data.twitch.CampaignInventory
@@ -495,7 +496,7 @@ class LocalMinerRuntimeExecutionTest {
         val api = object : TwitchApi by AuthenticationTwitchApi() {
             override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(browserContext=context)
         }
-        val runtime = runtime(store,api,browserRenewal={ retainedContext(true) },browserLeaseRevoke={ revoked.add(it) })
+        val runtime = runtime(store,api,browserRenewal={ _, _ -> retainedContext(true) },browserLeaseRevoke={ revoked.add(it) })
         try {
             runtime.bootstrap()
             withTimeout(3000) { while (store.twitchSession()?.browserContext?.headers?.get("client-integrity") != "new-proof") delay(10) }
@@ -512,7 +513,7 @@ class LocalMinerRuntimeExecutionTest {
         val store = sessionStore()
         store.saveTwitchSession(storedSession().copy(browserContext=retainedContext()))
         val attempts = AtomicInteger()
-        val runtime = runtime(store,AuthenticationTwitchApi(),browserRenewal={
+        val runtime = runtime(store,AuthenticationTwitchApi(),browserRenewal={ _, _ ->
             attempts.incrementAndGet()
             throw com.nathan.twitchdropsminer.android.data.model.BrowserLeaseUnavailableException()
         })
@@ -528,7 +529,7 @@ class LocalMinerRuntimeExecutionTest {
         val store = sessionStore()
         store.saveTwitchSession(storedSession().copy(browserContext=retainedContext()))
         val revoked = CopyOnWriteArrayList<String>()
-        val runtime = runtime(store,AuthenticationTwitchApi(),browserRenewal={
+        val runtime = runtime(store,AuthenticationTwitchApi(),browserRenewal={ _, _ ->
             BrowserSessionContext.parse(kotlinx.serialization.json.JsonObject(retainedContext(true).toJson() +
                 ("browser_lease" to kotlinx.serialization.json.JsonPrimitive("00000000-0000-0000-0000-000000000000"))))
         },browserLeaseRevoke={ revoked.add(it) })
@@ -545,7 +546,7 @@ class LocalMinerRuntimeExecutionTest {
     private fun renewableContext(renewed: Boolean = false): BrowserSessionContext {
         val time = Instant.now().epochSecond
         return BrowserSessionContext.parse(kotlinx.serialization.json.Json.parseToJsonElement("""{
-          "version":1,"captured_at":${time-3600},"expires_at":${if (renewed) time+3600 else time-1},
+          "version":1,"captured_at":${if (renewed) time else time-3600},"expires_at":${if (renewed) time+3600 else time-1},
           "user_agent":"Chrome/Test","headers":{"client-id":"kimne78kx3ncx6brgo4mv6wki5h1ko",
           "authorization":"OAuth test-token","client-integrity":"${if (renewed) "new-proof" else "old-proof"}","x-device-id":"device"},
           "sdk_cookie":{"value":"${if (renewed) "rotated-sdk" else "initial-sdk"}","expires_at":${if (renewed) time+86400 else time+3600}}}
@@ -558,7 +559,8 @@ class LocalMinerRuntimeExecutionTest {
         val api = object : TwitchApi by AuthenticationTwitchApi() {
             override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(browserContext = context)
         }
-        val runtime = runtime(store, api, browserRenewal = { context ->
+        val runtime = runtime(store, api, browserRenewal = { context, userId ->
+            assertEquals("12345", userId)
             assertEquals("initial-sdk", context.sdkCookie?.value)
             renewableContext(true)
         })
@@ -578,7 +580,7 @@ class LocalMinerRuntimeExecutionTest {
         val api = object : TwitchApi by AuthenticationTwitchApi() {
             override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(browserContext = context)
         }
-        val runtime = runtime(store, api, browserRenewal = {
+        val runtime = runtime(store, api, browserRenewal = { _, _ ->
             if (attempts.incrementAndGet() == 1) error("private-sdk-secret")
             renewableContext(true)
         })
@@ -598,7 +600,7 @@ class LocalMinerRuntimeExecutionTest {
         val api = object : TwitchApi by AuthenticationTwitchApi() {
             override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(userId="other-account",browserContext=context)
         }
-        val runtime = runtime(store, api, browserRenewal = { renewableContext(true) })
+        val runtime = runtime(store, api, browserRenewal = { _, _ -> renewableContext(true) })
         try {
             runtime.bootstrap()
             withTimeout(3000) { runtime.snapshot.first { it.error?.contains("renewal is temporarily") == true } }
@@ -616,7 +618,7 @@ class LocalMinerRuntimeExecutionTest {
         val api = object : TwitchApi by AuthenticationTwitchApi() {
             override suspend fun validateBrowserContext(context: BrowserSessionContext) = storedSession().copy(browserContext=context)
         }
-        val runtime = runtime(store,api,settings,browserRenewal={
+        val runtime = runtime(store,api,settings,browserRenewal={ _, _ ->
             started.complete(Unit); release.await(); renewableContext(true)
         })
         try {
@@ -636,7 +638,7 @@ class LocalMinerRuntimeExecutionTest {
             val store = sessionStore()
             store.saveTwitchSession(storedSession().copy(browserContext = renewableContext()))
             val started = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>(); val returned = CompletableDeferred<Unit>()
-            val runtime = runtime(store, AuthenticationTwitchApi(), browserRenewal = {
+            val runtime = runtime(store, AuthenticationTwitchApi(), browserRenewal = { _, _ ->
                 started.complete(Unit)
                 withContext(NonCancellable) { release.await() }
                 returned.complete(Unit)
@@ -731,7 +733,7 @@ class LocalMinerRuntimeExecutionTest {
         val released = AtomicBoolean()
         val initial = BrowserSessionContext.parse(kotlinx.serialization.json.JsonObject(retainedContext().toJson() +
             ("expires_at" to kotlinx.serialization.json.JsonPrimitive(Instant.now().plusSeconds(120).epochSecond))))
-        val runtime = runtime(store, api, browserRenewal={ renew.await(); retainedContext(true) },browserLeaseRevoke={
+        val runtime = runtime(store, api, browserRenewal={ _, _ -> renew.await(); retainedContext(true) },browserLeaseRevoke={
             assertEquals(initial.browserLease,it); cancelled.set(true)
         })
         val phase = AtomicReference("capturing")
@@ -1478,7 +1480,7 @@ class LocalMinerRuntimeExecutionTest {
         higherPriorityCheckInterval: Duration = Duration.ofMinutes(2),
         channelStatusCheckInterval: Duration = Duration.ofMinutes(3),
         clock: () -> Instant = Instant::now,
-        browserRenewal: (suspend (BrowserSessionContext) -> BrowserSessionContext)? = null,
+        browserRenewal: (suspend (BrowserSessionContext, String) -> BrowserSessionContext)? = null,
         browserLeaseRevoke: (suspend (String) -> Unit)? = null,
         tvAuthenticationApi: TwitchApi? = null,
     ) = LocalMinerRuntime(
@@ -1862,6 +1864,9 @@ private class AuthenticationTwitchApi(
 
     override suspend fun validateAccessToken(accessToken: String): ValidatedToken =
         ValidatedToken("stale-user", "client")
+
+    override suspend fun validateSession(session: StoredTwitchSession) =
+        ValidatedToken(session.userId, session.capabilities.oauthClientId)
 
     override suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign> = unused()
     override suspend fun fetchEligibleChannels(session: StoredTwitchSession, campaign: Campaign, limit: Int): List<Channel> = unused()

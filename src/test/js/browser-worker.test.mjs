@@ -78,15 +78,15 @@ test('runtime-triggered retained renewal survives transfer release and binds the
     assert.equal(previous,context.headers['client-integrity']);
     return {...context,expires_at:context.expires_at+600,headers:{...context.headers,'client-integrity':'renewed'}};
   };
-  await worker.renew('renew',context); await worker.session.task;
+  await worker.renew('renew',context,'123'); await worker.session.task;
   assert.equal(worker.status().context.headers['client-integrity'],'renewed');
   await worker.release('renew'); assert.equal(closes(),0);
-  await worker.renew('foreign',{...context,headers:{...context.headers,authorization:'OAuth other'}});
+  await worker.renew('foreign',{...context,headers:{...context.headers,authorization:'OAuth other'}},'123');
   await worker.session.task;
   assert.equal(worker.status().error,'browser_missing');
   await worker.release('foreign'); assert.equal(closes(),0);
   await worker.cancel(); assert.equal(closes(),1);
-  await worker.renew('restart',context); await worker.session.task;
+  await worker.renew('restart',context,'123'); await worker.session.task;
   assert.equal(worker.status().error,'browser_missing'); await worker.release('restart');
 });
 
@@ -94,7 +94,7 @@ test('cancelled retained renewal cannot publish late proof and stale releases ca
   const {worker,context,closes} = await retainedLogin();
   let resolveCapture;
   worker.retained.capture.wait = () => new Promise(resolve => { resolveCapture = resolve; });
-  await worker.renew('pending',context);
+  await worker.renew('pending',context,'123');
   const release = worker.release('pending');
   resolveCapture({...context,expires_at:context.expires_at+600}); await release;
   assert.equal(worker.status().context,undefined); assert.equal(closes(),0);
@@ -121,12 +121,12 @@ test('retained renewal rejects replayed proof and changed captured credentials',
   const {worker,context} = await retainedLogin();
   for (const headers of [context.headers,{...context.headers,authorization:'OAuth other','client-integrity':'fresh'}]) {
     worker.retained.capture.wait = async () => ({...context,expires_at:context.expires_at+600,headers});
-    await worker.renew('bad-proof',context); await worker.session.task;
+    await worker.renew('bad-proof',context,'123'); await worker.session.task;
     assert.equal(worker.status().error,'renewal_failed'); assert.equal(worker.status().context,undefined);
     await worker.release('bad-proof'); assert.ok(worker.retained);
   }
   worker.retained.capture.failure = Error('private-browser-error');
-  await worker.renew('dead-browser',context); await worker.session.task;
+  await worker.renew('dead-browser',context,'123'); await worker.session.task;
   assert.equal(worker.status().error,'browser_missing');
   assert.ok(!JSON.stringify(worker.status()).includes('private-browser-error'));
   await worker.cancel();

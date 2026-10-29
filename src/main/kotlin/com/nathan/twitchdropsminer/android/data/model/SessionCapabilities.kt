@@ -16,6 +16,7 @@ enum class SessionCapabilities(
     LegacyDevice("device", TwitchClientId, false, true, "reconnect");
 
     val requiresClaimEvidence: Boolean get() = this == AndroidTv
+    val channelBanQuery: Boolean get() = this == Browser
     companion object {
         fun from(session: StoredTwitchSession): SessionCapabilities = when {
             session.browserContext != null -> Browser.also { require(session.clientId == null) }

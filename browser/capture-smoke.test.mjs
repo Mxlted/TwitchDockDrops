@@ -136,7 +136,7 @@ test('regular-profile bootstrap accepts a response cookie and cleans up on succe
                 ...responseCookies,
                 {name:'Content-Type',value:type},{name:'Access-Control-Allow-Origin',value:'*'},
                 {name:'Access-Control-Allow-Methods',value:'POST,GET,OPTIONS'},
-                {name:'Access-Control-Allow-Headers',value:'authorization,client-id,x-device-id'},
+                {name:'Access-Control-Allow-Headers',value:'authorization,client-id,client-request-id,client-session-id,client-version,x-device-id'},
               ],body:Buffer.from(body).toString('base64')});
             }
           };
@@ -211,7 +211,7 @@ test('headless Chromium rotates a scoped SDK seed across two fresh profiles',
             await command('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[
               {name:'Content-Type',value:type},{name:'Access-Control-Allow-Origin',value:'*'},
               {name:'Access-Control-Allow-Methods',value:'POST,GET,OPTIONS'},
-              {name:'Access-Control-Allow-Headers',value:'authorization,client-id,x-device-id'},
+              {name:'Access-Control-Allow-Headers',value:'authorization,client-id,client-request-id,client-session-id,client-version,x-device-id'},
             ],body:Buffer.from(body).toString('base64')});
           }
         };

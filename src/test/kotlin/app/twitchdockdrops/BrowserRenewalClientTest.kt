@@ -3,7 +3,7 @@ package app.twitchdockdrops
 import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
 import java.time.Instant
 import kotlin.test.*
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import okhttp3.mockwebserver.*
 
@@ -31,7 +31,8 @@ class BrowserRenewalClientTest {
                         return MockResponse().setBody(when (request.path) {
                             "/renew" -> {
                                 id = body!!.getValue("id").jsonPrimitive.content
-                                assertEquals(context.toJson(),body["context"]); "{}"
+                                assertEquals(context.toJson(),body["context"])
+                                assertEquals("12345", body["user_id"]?.jsonPrimitive?.content); "{}"
                             }
                             "/status" -> buildJsonObject {
                                 put("id", if (replace) "different-session" else id)
@@ -44,8 +45,8 @@ class BrowserRenewalClientTest {
                 }
                 server.start()
                 BrowserRenewalClient(server.port).use { client ->
-                    if (replace) assertFailsWith<IllegalStateException> { client.renew(context) }
-                    else assertEquals(context.toJson(),client.renew(context).toJson())
+                    if (replace) assertFailsWith<IllegalStateException> { client.renew(context, "12345") }
+                    else assertEquals(context.toJson(),client.renew(context, "12345").toJson())
                 }
                 assertEquals(id,cancelled)
                 assertEquals(3,server.requestCount)
@@ -59,7 +60,7 @@ class BrowserRenewalClientTest {
             server.enqueue(MockResponse().setResponseCode(503).setBody("private-cookie-and-token"))
             server.enqueue(MockResponse().setBody("{}"))
             BrowserRenewalClient(server.port).use { client ->
-                val error = assertFailsWith<IllegalStateException> { client.renew(context()) }
+                val error = assertFailsWith<IllegalStateException> { client.renew(context(), "12345") }
                 assertEquals("Browser renewal temporarily unavailable.",error.message)
             }
             assertEquals("/release",server.takeRequest().let { server.takeRequest().path })
@@ -83,9 +84,65 @@ class BrowserRenewalClientTest {
             }
             server.start()
             BrowserRenewalClient(server.port).use { client ->
-                assertFailsWith<com.nathan.twitchdropsminer.android.data.model.BrowserLeaseUnavailableException> { client.renew(context()) }
+                assertFailsWith<com.nathan.twitchdropsminer.android.data.model.BrowserLeaseUnavailableException> { client.renew(context(), "12345") }
                 client.revoke("12345678-1234-1234-1234-123456789abc")
             }
+        }
+    }
+
+    @Test fun `only correlated OAuth invalid status marks the saved token invalid`() = runBlocking {
+        for (correlated in listOf(true, false)) MockWebServer().use { server ->
+            var id = ""; var released = ""
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    val body = if (request.method == "POST") Json.parseToJsonElement(request.body.readUtf8()).jsonObject else null
+                    return MockResponse().setBody(when (request.path) {
+                        "/renew" -> { id = body!!.getValue("id").jsonPrimitive.content; "{}" }
+                        "/status" -> buildJsonObject {
+                            put("id", if (correlated) id else "superseded-operation")
+                            put("state", "failed"); put("error", "oauth_invalid")
+                            put("detail", "private-cookie-and-token")
+                        }.toString()
+                        "/release" -> { released = body!!.getValue("id").jsonPrimitive.content; "{}" }
+                        else -> error("Unexpected route")
+                    })
+                }
+            }
+            server.start()
+            BrowserRenewalClient(server.port).use { client ->
+                val failure = assertFailsWith<IllegalStateException> { client.renew(context(), "12345") }
+                if (correlated) assertEquals(
+                    com.nathan.twitchdropsminer.android.data.twitch.TwitchApiErrorType.InvalidToken,
+                    (failure as com.nathan.twitchdropsminer.android.data.twitch.TwitchApiException).type)
+                else assertFalse(failure is com.nathan.twitchdropsminer.android.data.twitch.TwitchApiException)
+                assertFalse(failure.message.orEmpty().contains("private-cookie"))
+            }
+            assertEquals(id, released); assertEquals(3, server.requestCount)
+        }
+    }
+
+    @Test fun `cancelled polling releases only the owned operation before completing`() = runBlocking {
+        MockWebServer().use { server ->
+            val polling = CompletableDeferred<Unit>()
+            var id = ""; var released = ""
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    val body = if (request.method == "POST") Json.parseToJsonElement(request.body.readUtf8()).jsonObject else null
+                    return MockResponse().setBody(when (request.path) {
+                        "/renew" -> { id = body!!.getValue("id").jsonPrimitive.content; "{}" }
+                        "/status" -> { polling.complete(Unit); """{"id":"$id","state":"capturing"}""" }
+                        "/release" -> { released = body!!.getValue("id").jsonPrimitive.content; "{}" }
+                        else -> error("Unexpected route")
+                    })
+                }
+            }
+            server.start()
+            BrowserRenewalClient(server.port).use { client ->
+                val job = launch { client.renew(context(), "12345") }
+                withTimeout(3000) { polling.await(); job.cancelAndJoin() }
+                assertTrue(job.isCancelled)
+            }
+            assertEquals(id, released); assertEquals(3, server.requestCount)
         }
     }
 }

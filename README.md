@@ -91,7 +91,8 @@ Twitch Dock Drops refreshes your campaigns, chooses an eligible live channel, re
 recovers from stalled channels, and claims completed Drops. Your saved session is restored after a
 container restart, and the miner resumes automatically if it was running before the restart. New dashboard
 logins renew entirely inside Docker. When SDK seed verification succeeds, renewal can resume after
-server/browser restarts while the seed is valid. Otherwise the service retains its signed-in browser
+server/browser restarts. An expired SDK cookie can be replaced after Twitch confirms the saved account;
+new proof and campaign access must still pass verification. Otherwise the service retains its signed-in browser
 for renewal; your computer can be off, but reconnect after either Docker service restarts. Settings
 shows the active renewal mode. Reconnect once after upgrading to use this behavior.
 See [browser login](./OPERATIONS.md#browser-login) for setup and troubleshooting.
@@ -158,6 +159,9 @@ or open `/?preview=active` on your instance. Preview controls do not change the 
   a drop** preserves last confirmed progress without assuming earning. Completed drops can wait for
   Twitch claim eligibility. The separate Open Reward Campaigns view is not fetched by TV; use its
   Twitch link instead. Campaigns shows public catalog freshness and incomplete coverage.
+- Channels with a Twitch-confirmed permanent or temporary account ban are excluded from browser-session
+  discovery, manual selection, and watching. Temporary restrictions end at a verified expiry or after
+  Twitch confirms an unban. Experimental TV login cannot perform this browser-only check.
 - Twitch event subscriptions request faster inventory/channel checks while mining. Polling remains
   the fallback; the private event protocol still needs real-account verification.
 - Local activity logs can contain campaign and channel names; review them before sharing.

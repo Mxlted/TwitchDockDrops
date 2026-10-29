@@ -61,14 +61,21 @@ without `.env`; the supplied example changes host publication to `0.0.0.0` for e
   `KP_UIDz-ssn`, exact host `k.twitchcdn.net`, secure/HttpOnly, path `/`. Only its bounded value and expiry are accepted;
   callers cannot supply a host, URL, cookie name or cookie jar. It is credential material, never public
   state. This replaces dependence on a continuously running signed-in browser and permits renewal
-  after JVM/companion restart while the seed is fresh. The browser still receives no miner volume,
+  after JVM/companion restart, with expired-cookie recovery gated by saved OAuth identity validation.
+  The browser still receives no miner volume,
   encryption key or environment secrets; the JVM transfers only the renewal context over loopback.
 - Each SDK renewal uses an owned temporary profile, a fixed empty Twitch-origin document and the fixed
-  Twitch SDK URL. OAuth headers go only to Twitch's fixed integrity endpoint. Uncached network proof,
+  Twitch SDK URL. Issuance uses only Authorization, Client-Id, Client-Session-Id, Client-Version,
+  canonical X-Device-Id and a fresh random request ID. The smaller issuance set never replaces the
+  encrypted GraphQL context, and request IDs are not persisted. OAuth headers go only to Twitch's
+  fixed validation and integrity endpoints. Uncached network proof,
   token/expiry rotation, same-account OAuth validation and both Drops queries are required before
   atomic replacement. Transient failures retain the old encrypted seed; reset/replacement/shutdown
-  invalidate late work. The private `/renew` route has a 40 KiB body limit and the existing internal
-  Host/header/Origin boundary. Attempt IDs bind status and cleanup to the owned browser.
+  invalidate late work. Expired/near-expiry cookies are not installed: the worker validates the saved
+  client and expected account before bootstrapping fresh owned SDK state. Only validation HTTP 401
+  invalidates login; inconclusive network, integrity, identity, catalog or storage results preserve it.
+  The private `/renew` request includes a bounded account ID. Its route retains the 40 KiB body limit
+  and internal Host/header/Origin boundary. Attempt IDs bind status and cleanup to the owned browser.
 - Pairing uses a one-use 72-bit code, ten-minute deadline, and five-guess limit. The resulting 256-bit
   ticket stays only in helper/server memory and binds to the first accepted account. Successful renewal
   extends its lease by 24 hours; new pairing, reset, and server restart revoke it. A helper exit stops
@@ -157,6 +164,13 @@ Signed URLs/tokens and upstream bodies never enter logs, public state or durable
 401/403/404 refreshes only the signed playlist; only authoritative OAuth validation 401 expires the
 saved session. Expired browser proof still blocks authenticated watch work and preserves credentials.
 
+Channel restrictions use authenticated browser GraphQL only, with bounded reads, concurrency, cache
+size and timeouts. The parser accepts matching-channel evidence only; failures never create or clear
+a known ban. State is scoped to account identity and retained across same-account refreshes or replacement.
+Replacement invalidates pending checks; account change, reset and shutdown clear the owned state.
+Unsupported TV/device identities skip the query. No raw responses,
+request IDs, OAuth context or new account restriction data enter public diagnostics.
+
 ## Browser protections
 
 Public category search uses an anonymous query to the fixed `https://gql.twitch.tv/gql` endpoint.
@@ -207,7 +221,7 @@ The temporary profile is on a 512 MiB tmpfs and is removed on normal cancellatio
 also discards it. Memory, shared memory, and process counts are bounded. Downloads are denied, arbitrary
 CDP/navigation commands are not relayed, and credentials are not included in browser process arguments.
 After Finish sign-in, the same headed browser completes capture. If a scoped SDK cookie is available,
-a separate temporary headless browser tests independent issuance without closing the login browser
+a separate temporary browser tests independent issuance without closing the login browser
 first. Missing seed material or failed issuance falls back to retaining the authenticated browser
 inside the same isolated container. This avoids making SDK-cookie acquisition mandatory without
 granting privileges or weakening account/Drops verification. All accepted contexts still require JVM
@@ -221,7 +235,11 @@ from disposal: revocation requires the matching lease, and stale transfer IDs ca
 browser. Reset, replacement, authoritative expiry and orderly shutdown revoke it and remove the owned
 profile; Stop keeps renewal available. Browser restart requires login again in this mode. Transient
 capture failure preserves credentials and the browser for retry. SDK renewal still creates/removes
-an empty profile each time. Viewer/input routes are disabled outside interactive login. The network
+an empty profile each time. In the container, ordinary Chromium runs under its own `xvfb-run -a`
+display with X authentication, TCP disabled, and Xauthority inside the owner-only temporary profile.
+The inherited interactive DISPLAY/XAUTHORITY is removed. Cleanup terminates the owned process group
+and removes the profile after bounded issuance/cancellation; no additional capability or published
+port is required. Viewer/input routes are disabled outside interactive login. The network
 observer retains bounded evidence only, and fixed errors never expose raw browser diagnostics.
 The public viewer returns only fixed status fields and bounded JPEG frames with `no-store`; its
 mutation routes retain normal Host/Origin, JSON, and size checks. Passwords entered into this viewer

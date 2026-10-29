@@ -3,6 +3,75 @@
 This file is the handoff checklist for the Docker/web edition. Keep it current when behavior or scope
 changes.
 
+## Browser renewal and channel eligibility reliability - 2026-10-29
+
+The implementation started from clean `main` at `2f3a5d5407d6ce9c73d3891d215ae479f63dce71`.
+All Kotlin and JavaScript changes in this update are independently implemented. Existing licenses,
+notices, dashboard design, game ordering, exclusions, prerequisites, independent progress polling,
+Twitch-authoritative progress and durable claim reconciliation are preserved.
+
+- [x] Integrity issuance uses a separate header allowlist, canonical device header and a fresh random
+  request ID for each request. Original GraphQL metadata is retained; request IDs are never persisted.
+- [x] Saved OAuth client/account validation gates browser issuance. Expired/near-expiry SDK cookies
+  are omitted while the worker bootstraps fresh owned state after its own identity check. This also
+  applies when restoring after downtime. Fresh uncached correlated proof, matching account and usable
+  authenticated Inventory/Campaigns responses are required before atomic encrypted replacement.
+- [x] Inconclusive network, proof, identity, campaign and storage failures preserve the encrypted
+  session and retry with 15-second to five-minute backoff. Only authoritative OAuth validation 401
+  follows invalid-session handling. Renewal does not replay claims.
+- [x] Reset, replacement and shutdown block late installation. Stop remains authoritative even when
+  saving its intent fails. Retained-browser capture and interactive login remain supported.
+- [x] Container SDK issuance uses ordinary Chromium on a separate private authenticated Xvfb display.
+  Its browser/display process group, Xauthority and owner-only profile have bounded cleanup on success,
+  failure and cancellation. The image definition includes the new launcher; existing container hardening remains.
+- [x] Browser accounts exclude confirmed permanent and temporary channel bans throughout discovery,
+  campaign allowlists, manual selection, promotion, current-channel rechecks and watch delivery.
+  Verified temporary expiry and explicit unban restore eligibility. Failed, malformed or wrong-channel
+  checks preserve known restrictions. Same-account rediscovery keeps them; account changes clear them.
+- [x] Restriction checks use a bounded account cache and request pool, with a three-minute cadence
+  including failures. HLS polls only consult cached state. Experimental TV and legacy device identities
+  skip this unsupported browser query while still respecting any same-account confirmed restrictions.
+
+Verification actually performed:
+
+- Native macOS clean `test installDist` passed using checksum-verified temporary Gradle 9.5.1 and
+  Temurin JDK 21.0.13: **296 JVM tests across 33 suites, zero failures/errors/skips**. The final command
+  used `--no-daemon -Pkotlin.compiler.execution.strategy=in-process -Pkotlin.incremental=false clean
+  test installDist`; these invocation-only flags avoid compiler daemon/cache interference and do not
+  change repository build configuration. The generated distribution includes both launchers and ten JARs.
+- **61 Node tests passed**, zero failures/skips, on native Node 26.12.0. Syntax checks passed for
+  `browser/renewal.mjs`, `browser/worker.mjs`, `browser/seed-browser.mjs`, the updated capture-smoke
+  fixture, both changed Node test files and `src/main/resources/web/app.js`.
+- Focused fixtures cover issuance allowlists/request-ID uniqueness, preserved GraphQL context,
+  fresh correlated uncached proof, expired-cookie recovery, OAuth 401/inconclusive/mismatched identity,
+  failed catalog and storage, cancellation/late results, Stop intent, secret redaction, and browser/profile
+  cleanup. A local synthetic child-process test verifies process-group cleanup; no Chromium/Twitch
+  login or offline capture smoke was run.
+- Restriction fixtures cover permanent/temporary bans, verified expiry, explicit unban, malformed and
+  failed checks, rediscovery, account changes, bounded capacity/concurrency, cancellation, discovery/ACLs,
+  manual selection, promotion, current-channel exclusion and delivery. A ban arriving during a status
+  lookup cannot impose an unrelated channel-failure cooldown after unban.
+- Standalone Compose 5.6.1 validated both base and browser-merged configurations with defaults and
+  `.env.example`. No private `.env` was loaded. The affected-image build was attempted but could not
+  reach a Docker daemon (`/var/run/docker.sock` absent). **No image build or isolated container startup
+  passed in this update**; container Chromium/Xvfb and Node 22 packaging remain unverified on this host.
+- The ignored `docker-server/` folder contains **101 tracked source/build/license files**, each matched
+  to source by SHA-256. Both Compose configurations passed `config --quiet` from inside that folder.
+  It contains no private environment file, runtime data, credentials, profiles, Git metadata, dependencies
+  or generated build output. Upload its contents, preserve the server's existing `.env` and named volume,
+  then run `docker compose -f compose.yaml -f compose.browser.yaml up --build -d` in the server directory.
+- Working-tree and staged whitespace checks passed. The read-only reference stayed clean at
+  `e946998e0952b9e3db131f499e5c90e326b1118d`; no optional Android checkout was present. Nothing was
+  fetched, synchronized, pushed, published or deployed.
+
+All protocol and lifecycle results above are synthetic evidence, not live Twitch acceptance.
+
+User-owned live checks: initial dashboard sign-in and retained-browser fallback; unattended normal
+renewal; restoration after both proof and SDK-cookie expiry; Stop during renewal; eligible and banned
+channel discovery/manual switching/current-channel exclusion; Twitch-reported earning and claims.
+No real-account sign-in, credentials, unattended renewal, earning, claims or server deployment were used
+for this update. Docker image/startup verification requires an available Docker engine.
+
 ## Docker server copy handoff - 2026-10-08
 
 - Added the `AGENTS.md` workflow for refreshing a local, ignored `docker-server/` source bundle for
@@ -1175,8 +1244,9 @@ root build.
   integrity renewal, earning, and claims remain unverified.
   New dashboard logins use a verified encrypted SDK seed when available, or retain the authenticated
   Docker browser without requiring the PC. Retained-browser mode requires reconnecting after service
-  restart; temporary failures retry while its browser survives. SDK mode can recover across restarts
-  while its seed remains valid. Retained-browser login and one manually triggered renewal passed
+  restart; temporary failures retry while its browser survives. SDK mode can attempt recovery across restarts
+  after SDK-cookie expiry with validated saved OAuth identity and fresh proof/campaign acceptance.
+  Retained-browser login and one manually triggered renewal passed
   live verification on 2026-10-05; natural scheduling, atomic renewal replacement, repeated renewal,
   restart behavior and SDK mode still need live verification. Older dashboard logins need one
   reconnection after upgrade. Desktop-helper
@@ -1184,8 +1254,9 @@ root build.
   popup-based social sign-in in the dashboard viewer, and upstream-helper protocol compatibility are
   not implemented. Native browser checks were on Windows. Different browser/miner network
   routes or Twitch browser challenges can reject capture or server-side verification.
-- Linux/amd64 Docker image build/runtime and offline Chromium capture now pass on Docker Desktop.
-  The user's Debian/Proxmox LXC deployment and unattended real-account renewal are still unverified.
+- Earlier Linux/amd64 Docker image/runtime and offline Chromium capture checks remain historical
+  evidence. The current browser launcher needs affected-image and isolated-startup verification on a
+  Docker host. Debian/Proxmox LXC deployment and unattended real-account renewal remain unverified.
 - Reward-campaign visibility has fixture coverage and public Twitch client schema inspection, but
   has not been verified with an authenticated real-account reward listing. Twitch's private persisted
   query can change. These campaigns are view-only: reward progress, automatic earning/claiming, and

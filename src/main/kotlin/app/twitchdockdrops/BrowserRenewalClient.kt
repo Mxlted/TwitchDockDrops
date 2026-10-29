@@ -2,6 +2,8 @@ package app.twitchdockdrops
 
 import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
 import com.nathan.twitchdropsminer.android.data.model.BrowserLeaseUnavailableException
+import com.nathan.twitchdropsminer.android.data.twitch.TwitchApiException
+import com.nathan.twitchdropsminer.android.data.twitch.TwitchApiErrorType
 import java.time.Duration
 import java.util.UUID
 import kotlinx.coroutines.*
@@ -16,16 +18,19 @@ class BrowserRenewalClient(private val port: Int = 8091) : AutoCloseable {
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .callTimeout(Duration.ofSeconds(5)).build()
 
-    suspend fun renew(context: BrowserSessionContext): BrowserSessionContext = withContext(Dispatchers.IO) {
+    suspend fun renew(context: BrowserSessionContext, userId: String): BrowserSessionContext = withContext(Dispatchers.IO) {
+        require(userId.matches(Regex("[1-9][0-9]{0,19}"))) { "Invalid renewal account." }
         val id = UUID.randomUUID().toString()
         try {
             withTimeoutOrNull(180_000) {
                 currentCoroutineContext().ensureActive()
-                request("renew", buildJsonObject { put("id", id); put("context", context.toJson()) })
+                request("renew", buildJsonObject { put("id", id); put("context", context.toJson()); put("user_id", userId) })
                 while (true) {
                     currentCoroutineContext().ensureActive()
                     val response = request("status")
                     check(response["id"]?.jsonPrimitive?.content == id) { "Browser renewal was replaced." }
+                    if (response["error"]?.jsonPrimitive?.content == "oauth_invalid") throw TwitchApiException(
+                        TwitchApiErrorType.InvalidToken, "Twitch session expired. Reconnect Twitch.")
                     if (response["error"]?.jsonPrimitive?.content == "browser_missing") throw BrowserLeaseUnavailableException()
                     check(response["state"]?.jsonPrimitive?.content != "failed") { "Browser renewal temporarily unavailable." }
                     val captured = response["context"] as? JsonObject

@@ -4,7 +4,9 @@ import {mkdtemp, chmod, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as sleep} from 'node:timers/promises';
-import {Cdp, browserPort, startBrowser, stopBrowser} from '../src/main/resources/web/login-helper.mjs';
+import {randomBytes} from 'node:crypto';
+import {Cdp, browserPort} from '../src/main/resources/web/login-helper.mjs';
+import {startSeedBrowser, stopSeedBrowser} from './seed-browser.mjs';
 
 export const SDK_URL = 'https://k.twitchcdn.net/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/p.js';
 const PAGE = 'https://www.twitch.tv/';
@@ -12,7 +14,7 @@ const INTEGRITY = 'https://gql.twitch.tv/integrity';
 const COOKIE_URL = 'https://k.twitchcdn.net/';
 const HEADERS = new Set(['authorization','client-id','client-integrity','client-version','client-session-id','x-device-id','device-id','accept-language']);
 
-export function validateSeed(seed, now = Date.now()/1000, allowMissingCookie = false) {
+export function validateSeed(seed, now = Date.now()/1000, allowMissingCookie = false, allowExpiredCookie = false) {
   const cookie = seed?.sdk_cookie;
   if (!seed || seed.version !== 1 || Object.keys(seed).some(k => !['version','captured_at','expires_at','user_agent','headers','sdk_cookie'].includes(k)) ||
       JSON.stringify(seed).length > 36*1024 || typeof seed.user_agent !== 'string' || !/^[\x20-\x7e]{1,1024}$/.test(seed.user_agent) ||
@@ -24,8 +26,48 @@ export function validateSeed(seed, now = Date.now()/1000, allowMissingCookie = f
       !seed.headers['client-integrity'] || !(seed.headers['x-device-id'] || seed.headers['device-id']) ||
       (!(allowMissingCookie && cookie === undefined) && (!cookie || Object.keys(cookie).sort().join(',') !== 'expires_at,value' ||
       typeof cookie.value !== 'string' || !/^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]{1,8192}$/.test(cookie.value) ||
-      !Number.isInteger(cookie.expires_at) || cookie.expires_at <= now))) throw Error('Invalid renewal seed');
+      !Number.isInteger(cookie.expires_at) || cookie.expires_at <= (allowExpiredCookie ? 0 : now)))) throw Error('Invalid renewal seed');
   return seed;
+}
+
+export function issuanceHeaders(headers) {
+  const allowed = ['authorization','client-id','client-session-id','client-version'];
+  return {...Object.fromEntries(allowed.filter(key => headers[key]).map(key => [key,headers[key]])),
+    'x-device-id':headers['x-device-id'] || headers['device-id'], 'client-request-id':randomBytes(16).toString('hex')};
+}
+
+export class RenewalOAuthInvalid extends Error {
+  constructor() { super('Saved authorization is invalid'); }
+}
+
+// Recovery must establish the saved account before any SDK state is created or installed.
+export async function validateRecoveryIdentity(seed, userId, parentSignal, request = fetch) {
+  if (typeof userId !== 'string' || !/^[1-9][0-9]{0,19}$/.test(userId)) throw Error('Invalid renewal identity');
+  const signal = AbortSignal.any([parentSignal,AbortSignal.timeout(10000)]);
+  let response;
+  try {
+    signal.throwIfAborted();
+    response = await request('https://id.twitch.tv/oauth2/validate', {redirect:'error',
+      headers:{Authorization:seed.headers.authorization},signal});
+    signal.throwIfAborted();
+    if (response.status === 401) throw new RenewalOAuthInvalid();
+    if (response.status !== 200 || !response.body) throw Error('Renewal identity unavailable');
+    const chunks = []; let size = 0;
+    for await (const chunk of response.body) {
+      signal.throwIfAborted(); size += chunk.length;
+      if (size > 16384) throw Error('Renewal identity unavailable');
+      chunks.push(chunk);
+    }
+    const account = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (account?.client_id !== seed.headers['client-id'] || account?.user_id !== userId ||
+        typeof account.login !== 'string' || !/^[a-zA-Z0-9_]{1,25}$/.test(account.login) ||
+        !Number.isInteger(account.expires_in) || account.expires_in <= 0) throw Error('Renewal identity unavailable');
+    signal.throwIfAborted();
+  } catch (error) {
+    parentSignal.throwIfAborted();
+    if (error instanceof RenewalOAuthInvalid) throw error;
+    throw Error('Renewal identity unavailable');
+  } finally { await response?.body?.cancel().catch(() => {}); }
 }
 
 const SEED_FAILURES = new Set(['sdk_timeout','sdk_script','sdk_fetch','sdk_rejected','sdk_cookie','sdk_proof']);
@@ -74,6 +116,8 @@ const ISSUE = `async function(headers, sdk) {
 export async function acquireSeed(cdp, seed, signal, initial = false) {
   // Only initial bootstrap may begin without a cookie; every returned seed requires one.
   validateSeed(seed, Date.now()/1000, initial);
+  signal.throwIfAborted();
+  const headers = issuanceHeaders(seed.headers);
   let loaded = false, proof = null, failure = null;
   const posts = new Set(), responses = new Map(), cached = new Set();
   const collect = (async () => {
@@ -87,14 +131,17 @@ export async function acquireSeed(cdp, seed, signal, initial = false) {
           responseHeaders:[{name:'Content-Type',value:'text/html; charset=utf-8'}],
           body:Buffer.from('<!doctype html><html><body></body></html>').toString('base64')});
       } else if (method === 'Page.loadEventFired') loaded = true;
-      else if (method === 'Network.requestWillBeSent' && p.request.url === INTEGRITY && p.request.method === 'POST') posts.add(id);
+      else if (method === 'Network.requestWillBeSent' && p.request.url === INTEGRITY && p.request.method === 'POST') {
+        const observed = Object.fromEntries(Object.entries(p.request.headers || {}).map(([key,value]) => [key.toLowerCase(),value]));
+        if (Object.entries(headers).every(([key,value]) => observed[key] === value)) posts.add(id);
+      }
       else if (method === 'Network.requestServedFromCache') cached.add(id);
       else if (method === 'Network.responseReceived' && posts.has(id)) responses.set(id,p.response);
       else if (method === 'Network.loadingFailed' && posts.has(id)) throw new SeedFailure('sdk_fetch');
       else if (method === 'Network.loadingFinished' && posts.has(id)) {
         const response = responses.get(id);
         if (response?.url !== INTEGRITY || response.status !== 200) throw new SeedFailure('sdk_rejected');
-        if (response.fromDiskCache || response.fromServiceWorker || cached.has(id)) throw new SeedFailure('sdk_proof');
+        if (response.fromDiskCache || response.fromServiceWorker || response.fromPrefetchCache || cached.has(id)) throw new SeedFailure('sdk_proof');
         proof = await cdp.body(id);
       }
       if (posts.size + responses.size + cached.size > 256) throw Error('SDK capture limit');
@@ -119,7 +166,6 @@ export async function acquireSeed(cdp, seed, signal, initial = false) {
     await waitFor(() => loaded);
     const userAgent = (await cdp.command('Runtime.evaluate',{expression:'navigator.userAgent',returnByValue:true})).result.value;
     const global = await cdp.command('Runtime.evaluate',{expression:'globalThis'});
-    const headers = {...seed.headers}; delete headers['client-integrity'];
     const result = await cdp.command('Runtime.callFunctionOn',{objectId:global.result.objectId,functionDeclaration:ISSUE,
       arguments:[{value:headers},{value:SDK_URL}],awaitPromise:true,returnByValue:true},110000);
     const data = result.result?.value?.data;
@@ -133,7 +179,7 @@ export async function acquireSeed(cdp, seed, signal, initial = false) {
     const cookie = await readSdkCookie(cdp);
     if (cookie.expires_at <= Math.max(expiry,initial ? 0 : seed.sdk_cookie.expires_at)) throw new SeedFailure('sdk_cookie');
     return validateSeed({version:1,captured_at:now,expires_at:expiry,user_agent:userAgent,
-      headers:{...headers,'client-integrity':data.token},sdk_cookie:cookie});
+      headers:{...seed.headers,'client-integrity':data.token},sdk_cookie:cookie});
   } finally {
     // This protocol belongs to this one acquisition, including the event collector.
     cdp.close(); await collect;
@@ -147,33 +193,39 @@ export async function bootstrapSeed(executable, browserArgs, captured, parentSig
   return runSeedBrowser(executable,browserArgs,captured,parentSignal,true,false,acquire);
 }
 
-export async function issueSeed(executable, browserArgs, seed, parentSignal, initial = false) {
-  validateSeed(seed);
-  return runSeedBrowser(executable,browserArgs,seed,parentSignal,initial,true,acquireSeed);
+export async function issueSeed(executable, browserArgs, seed, parentSignal, initial = false, userId = null, dependencies = {}) {
+  validateSeed(seed,Date.now()/1000,false,true);
+  if (seed.sdk_cookie.expires_at <= Date.now()/1000 + 150) {
+    await (dependencies.validateIdentity || validateRecoveryIdentity)(seed,userId,parentSignal);
+    parentSignal.throwIfAborted();
+    const {sdk_cookie, ...captured} = seed;
+    return runSeedBrowser(executable,browserArgs,captured,parentSignal,true,true,dependencies.acquire || acquireSeed,dependencies);
+  }
+  return runSeedBrowser(executable,browserArgs,seed,parentSignal,initial,true,dependencies.acquire || acquireSeed,dependencies);
 }
 
-async function runSeedBrowser(executable, browserArgs, seed, parentSignal, initial, headless, acquire) {
+export async function runSeedBrowser(executable, browserArgs, seed, parentSignal, initial, headless, acquire, dependencies = {}) {
   const signal = AbortSignal.any([parentSignal,AbortSignal.timeout(150000)]);
   signal.throwIfAborted();
   const profile = await mkdtemp(join(tmpdir(),'dockdrops-renew-'));
   let child, cdp;
   try {
     await chmod(profile,0o700);
-    const port = await browserPort(); signal.throwIfAborted();
-    child = await startBrowser(executable,profile,[...browserArgs,...(headless ? ['--headless=new'] : []),
+    const port = await (dependencies.port || browserPort)(); signal.throwIfAborted();
+    child = await (dependencies.start || startSeedBrowser)(executable,profile,[...browserArgs,
       '--remote-debugging-address=127.0.0.1',`--remote-debugging-port=${port}`,'--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled','about:blank']);
+      '--disable-blink-features=AutomationControlled','about:blank'],headless);
     for (let n = 0; n < 200; n++) {
       signal.throwIfAborted();
-      if (child.exitCode !== null) throw Error('Browser launch failed');
+      if (child.exitCode !== null || child.signalCode !== null) throw Error('Browser launch failed');
       let target;
       try {
-        const response = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,
+        const response = await (dependencies.request || fetch)(`http://127.0.0.1:${port}/json/new?about:blank`,
           {method:'PUT',redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(500)])});
         if (response.ok) target = await response.json();
       } catch {}
       if (target) {
-        cdp = await Cdp.open(target.webSocketDebuggerUrl,port,signal,['Fetch.requestPaused','Page.loadEventFired','Network.requestServedFromCache']);
+        cdp = await (dependencies.open || Cdp.open)(target.webSocketDebuggerUrl,port,signal,['Fetch.requestPaused','Page.loadEventFired','Network.requestServedFromCache']);
         const result = await acquire(cdp,seed,signal,initial);
         signal.throwIfAborted();
         return validateSeed(result);
@@ -182,8 +234,13 @@ async function runSeedBrowser(executable, browserArgs, seed, parentSignal, initi
     }
     throw Error('Browser launch timed out');
   } finally {
-    cdp?.close(); await stopBrowser(child);
-    // Exactly the owned mkdtemp profile; never reuse a user or interactive profile.
-    await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200});
+    try { cdp?.close(); }
+    finally {
+      try { await (dependencies.stop || stopSeedBrowser)(child); }
+      finally {
+        // Exactly the owned mkdtemp profile; never reuse a user or interactive profile.
+        await rm(profile,{recursive:true,force:true,maxRetries:5,retryDelay:200});
+      }
+    }
   }
 }

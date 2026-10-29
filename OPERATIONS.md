@@ -142,18 +142,26 @@ Twitch challenge requires those interactions. Firefox is not supported.
 
 - **Restart-capable Docker renewal:** the independently verified SDK cookie is encrypted with the
   session, the interactive browser closes, and disposable browsers issue replacements. Keep the data
-  volume/key; restarts can recover while the seed remains valid.
+  volume/key; restarts can attempt recovery even after the SDK cookie expires. Twitch must confirm the
+  saved account before fresh browser state is created, and new proof/campaign access must pass verification.
 - **Docker browser renewal:** the signed-in browser stays inside Docker, and a private encrypted
   lease lets the runtime request fresh proof from it. Your PC and dashboard can be off. Its profile
   stays temporary: reconnect after the browser service restarts or an orderly app shutdown. An
   unexpected app restart can reuse a browser that survived, but do not rely on that for maintenance.
 
 Both modes start renewal five minutes before proof expiry, retry temporary failures with backoff,
-and require matching account/Drops verification before saving. SDK expiry, revoked OAuth or a Twitch
+and require matching account/Drops verification before saving. Expired SDK cookies trigger guarded
+recovery with bounded retries; revoked OAuth or a Twitch
 challenge can still require sign-in. A missing retained browser reports reconnect guidance and keeps
 saved credentials. Neither mode guarantees indefinite login. Cancel stops interactive login without
 deleting the saved credential; **Reset Twitch Session** signs out and closes the retained browser.
-Stop mining keeps renewal available. Desktop-helper sessions retain their existing behavior.
+Stop mining keeps renewal available without restarting mining when renewal succeeds. Desktop-helper
+sessions retain their existing behavior.
+
+Container SDK issuance uses ordinary Chromium on a separate private virtual display. The image already
+includes Xvfb and X authentication; no host display, new port or additional container permission is
+needed. The interactive login browser and retained-browser fallback remain available. Keep both
+services built from the same source bundle because their private renewal request includes the account ID.
 
 If startup fails, check `docker compose -f compose.yaml -f compose.browser.yaml logs browser` and
 confirm the browser service is running. Health remains a check of the JVM's local readiness, independent
@@ -383,6 +391,14 @@ The unattended scheduler wakes for campaign/drop starts and ends, settings chang
 inventory deadlines, heartbeat deadlines, and claim retries. A sustained confirmed progress stall
 renews watch configuration and then tries another channel or campaign. Progress endpoint failures are
 not treated as proof of a stall.
+
+Browser sessions exclude channels with Twitch-confirmed permanent or temporary account bans from
+automatic discovery, campaign allowlists, manual selection and watching. Known restrictions survive
+same-account rediscovery; a verified temporary expiry or explicit Twitch unban restores eligibility.
+Failed checks retain known restrictions. Checks are cached for three minutes and never run on every
+stream poll. This state is temporary and checked again after process restart. Experimental TV and
+legacy device login skip new browser ban queries but honor any restrictions already confirmed for the
+same account.
 
 The miner polls stream playlists about every ten seconds and sends HEAD requests for newly listed
 segments. It reads metadata and response headers without downloading or playing stream video/audio.

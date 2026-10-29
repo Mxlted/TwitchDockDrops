@@ -8,6 +8,7 @@ import com.nathan.twitchdropsminer.android.data.model.RewardCampaign
 import com.nathan.twitchdropsminer.android.data.model.StoredTwitchSession
 import com.nathan.twitchdropsminer.android.data.model.BrowserSessionContext
 import com.nathan.twitchdropsminer.android.data.model.TwitchWebClientId
+import com.nathan.twitchdropsminer.android.data.model.capabilities
 import com.nathan.twitchdropsminer.android.data.model.inEarningOrder
 import java.io.IOException
 import java.time.Instant
@@ -25,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -168,6 +170,11 @@ interface TwitchApi {
     suspend fun fetchCampaigns(session: StoredTwitchSession): List<Campaign>
     suspend fun fetchCampaignInventory(session: StoredTwitchSession): CampaignInventory =
         CampaignInventory(fetchCampaigns(session))
+    fun bindChannelAccount(userId: String?) = Unit
+    fun isChannelAllowed(userId: String, channelId: Long): Boolean = true
+    fun nextChannelRestrictionExpiry(userId: String): Instant? = null
+    suspend fun checkChannelEligibility(session: StoredTwitchSession, channelId: Long): Boolean =
+        isChannelAllowed(session.userId, channelId)
     suspend fun fetchEligibleChannels(
         session: StoredTwitchSession,
         campaign: Campaign,
@@ -193,7 +200,9 @@ interface TwitchApi {
             return channel.copy(dropsEnabled = false)
         }
         // Only Twitch's explicit participant ACL permits cross-category earning.
-        return if (campaign.permitsCrossCategoryChannel(channel)) {
+        return if (!isChannelAllowed(session.userId, channel.id)) {
+            channel.copy(dropsEnabled = false)
+        } else if (campaign.permitsCrossCategoryChannel(channel)) {
             channel.copy(dropsEnabled = channel.online)
         } else {
             channel
@@ -221,6 +230,7 @@ class TwitchApiClient(
     private val deviceClientId: String = TwitchClientId,
     private val publicCatalogClient: PublicCatalogClient = PublicCatalogClient(),
     private val watchMonotonicNanos: () -> Long = System::nanoTime,
+    private val channelRestrictionTime: () -> Instant = Instant::now,
 ) : TwitchApi {
     init { require(deviceClientId in setOf(TwitchClientId, TwitchTvClientId)) }
     private val okHttpClient = okHttpClient.newBuilder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).build()
@@ -242,8 +252,44 @@ class TwitchApiClient(
     private val oauthUrl = requireServiceUrl(oauthBaseUrl, setOf("id.twitch.tv"))
     private val localTestOrigin = webBaseUrl.takeIf { it.host.isLoopbackHost() }
     private val hlsWatch = HlsWatchTransport(::playbackAccess, localTestOrigin)
+    private val channelRestrictions = ChannelRestrictions()
     private var lastTelemetryAt: Long? = null
     override val watchPollIntervalSeconds: Long = 10
+
+    override fun bindChannelAccount(userId: String?) = channelRestrictions.bind(userId)
+
+    override fun isChannelAllowed(userId: String, channelId: Long): Boolean =
+        channelRestrictions.allowed(userId, channelId, channelRestrictionTime())
+
+    override fun nextChannelRestrictionExpiry(userId: String): Instant? =
+        channelRestrictions.nextExpiry(userId, channelRestrictionTime())
+
+    override suspend fun checkChannelEligibility(session: StoredTwitchSession, channelId: Long): Boolean {
+        // The optional raw browser query has no verified TV or legacy-client capability.
+        if (!session.capabilities.channelBanQuery) return isChannelAllowed(session.userId, channelId)
+        val ticket = channelRestrictions.begin(session.userId, channelId, channelRestrictionTime())
+            ?: return isChannelAllowed(session.userId, channelId)
+        var result: ChannelRestrictionResult = ChannelRestrictionResult.Unknown
+        try {
+            result = withTimeoutOrNull(10_000) {
+                parseChannelRestriction(gql(session, buildJsonObject {
+                    put("operationName", "ChannelBanStatus")
+                    put("query", "query ChannelBanStatus(\$channelID: ID!) { user(id: \$channelID) { id self { banStatus { isPermanent expiresAt } } } }")
+                    putJsonObject("variables") { put("channelID", channelId.toString()) }
+                }, watchRequest = true), channelId)
+            } ?: ChannelRestrictionResult.Unknown
+            currentCoroutineContext().ensureActive()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: TwitchApiException) {
+            if (error.type == TwitchApiErrorType.InvalidToken) throw error
+        } catch (_: Exception) {
+            // Optional checks never infer a ban from a transport or protocol failure.
+        } finally {
+            channelRestrictions.complete(ticket, if (currentCoroutineContext().isActive) result else ChannelRestrictionResult.Unknown)
+        }
+        return isChannelAllowed(session.userId, channelId)
+    }
 
     override fun resetWatchSession() {
         hlsWatch.reset()
@@ -257,15 +303,17 @@ class TwitchApiClient(
         channel: Channel,
         isCurrent: () -> Boolean,
     ): Boolean {
+        if (!isChannelAllowed(session.userId, channel.id)) return false
         lastWatchRejectionStatus = null
         requireFreshBrowserContext(session)
-        if (!hlsWatch.poll(session, channel, isCurrent) || !isCurrent()) return false
+        val eligible = { isCurrent() && isChannelAllowed(session.userId, channel.id) }
+        if (!hlsWatch.poll(session, channel, eligible) || !eligible()) return false
         val tick = watchMonotonicNanos()
         if (lastTelemetryAt?.let { tick - it >= 59_000_000_000L } != false) {
             lastTelemetryAt = tick
             // Auxiliary telemetry cannot mask an HLS failure or hold up the next playlist poll.
             try {
-                withTimeoutOrNull(5_000) { sendWatchTelemetry(session, channel, isCurrent) }
+                withTimeoutOrNull(5_000) { sendWatchTelemetry(session, channel, eligible) }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
@@ -273,7 +321,7 @@ class TwitchApiClient(
             }
         }
         currentCoroutineContext().ensureActive()
-        return isCurrent()
+        return eligible()
     }
 
     private suspend fun playbackAccess(session: StoredTwitchSession, channel: Channel): PlaybackAccess? {
@@ -631,7 +679,7 @@ class TwitchApiClient(
         if (allowedChannels.isNotEmpty()) {
             // Campaign ACL membership is the strongest eligibility signal Twitch exposes here.
             // Page the live checks so large allow-lists remain bounded while later entries are reachable.
-            for (page in allowedChannels.chunked(limit.coerceAtLeast(1))) {
+            for (page in allowedChannels.chunked(limit.coerceIn(1, MaxAclChannelChecks))) {
                 val attempts = page.mapConcurrent(MaxConcurrentTwitchLookups) { channel ->
                     runCatchingCancellable {
                         fetchCampaignChannel(session, channel.login, campaign)
@@ -660,7 +708,7 @@ class TwitchApiClient(
             session,
             TwitchOperation.GameDirectory.request(
                 buildJsonObject {
-                    put("limit", limit)
+                    put("limit", limit.coerceIn(1, MaxAclChannelChecks))
                     put("slug", slug)
                     put("imageWidth", 50)
                     put("includeCostreaming", false)
@@ -680,12 +728,15 @@ class TwitchApiClient(
         )
 
         val streams = directoryResponse.path("data", "game", "streams")["edges"].asArray()
-        return streams.mapNotNull { edge ->
+        val channels = streams.take(MaxAclChannelChecks).mapNotNull { edge ->
             edge.path("node").asObjectOrNull()?.toDirectoryChannel(
                 gameName = campaign.gameName,
                 dropsEnabled = true,
             )
-        }.filter { it.online && it.dropsEnabled }
+        }.filter { it.online && it.dropsEnabled }.distinctBy { it.id }
+        return channels.mapConcurrent(MaxConcurrentTwitchLookups) { channel ->
+            channel.takeIf { checkChannelEligibility(session, channel.id) }
+        }.filterNotNull()
     }
 
     override suspend fun fetchChannel(
@@ -717,7 +768,7 @@ class TwitchApiClient(
         }
         val matchesExpectedGame = expectedGame.isNullOrBlank() ||
             actualGameName?.equals(expectedGame, ignoreCase = true) == true
-        return Channel(
+        val channel = Channel(
             id = user["id"].asLong(0L),
             name = user["displayName"].asString(login),
             game = actualGameName,
@@ -730,6 +781,7 @@ class TwitchApiClient(
             title = settings?.get("title").asStringOrNull(),
             login = user["login"].asString(login),
         )
+        return if (checkChannelEligibility(session, channel.id)) channel else channel.copy(dropsEnabled = false)
     }
 
     override suspend fun sendWatchMinute(
@@ -742,7 +794,7 @@ class TwitchApiClient(
         channel: Channel,
         isCurrent: () -> Boolean,
     ): Boolean = withContext(Dispatchers.IO) {
-        if (!isCurrent()) return@withContext false
+        if (!isCurrent() || !isChannelAllowed(session.userId, channel.id)) return@withContext false
         lastWatchRejectionStatus = null
         val broadcastId = channel.broadcastId?.takeIf { it.isNotBlank() }
             ?: return@withContext false
@@ -759,7 +811,7 @@ class TwitchApiClient(
         )
         var retriedWithFreshConfiguration = false
         while (true) {
-            if (!isCurrent()) return@withContext false
+            if (!isCurrent() || !isChannelAllowed(session.userId, channel.id)) return@withContext false
             if (postWatchEvent(session, spadeUrl, encodedPayload)) {
                 return@withContext true
             }
